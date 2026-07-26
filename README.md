@@ -1,2 +1,2 @@
 # Cryptare
-File encryption CLI tool
+File encryption CLI tool.
