@@ -15,3 +15,18 @@ limitations under the License.
 */
 
 package main
+
+import (
+    "log"
+    
+    "github.com/jabbott-iii/Cryptare/internal"
+)
+
+func main() {
+
+    // sqlite db creation / use
+	db, err := internal.NewDatabase("munus.db")
+	if err != nil {
+		log.Fatalf("failed to initialize database: %v", err)
+	}
+}    
