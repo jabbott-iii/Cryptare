@@ -15,3 +15,48 @@ limitations under the License.
 */
 
 package internal
+
+import (
+
+)
+
+type Database struct {
+    conn *gorm.DB
+}
+
+type Actions interface {
+    GetFile()
+    EncryptFile()
+    DecryptFile()
+    ExportFileKey()
+    ImportFileKey()
+}
+
+// ---------------------------------------- MODELS ----------------------------------------- //
+type ItemModel struct {
+    ID        uint      `gorm:"primaryKey"`
+    FileName  string    `gorm:"size:255;not null"`
+    Encrypted bool      `gorm:"default:false;not null"`
+    CreatedAt time.Time `gorm:"autoCreateTime"`
+    UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+// --------------------------------- Database Functionality -------------------------------- //
+
+// NewDatabase opens (or creates) the sqlite file and runs migrations.
+func NewDatabase(path string) (*Database, error) {
+	if path == "" {
+		path = "cryptare.db"
+	}
+
+	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	// Persistence structs
+	if err := conn.AutoMigrate(&ItemModel{}); err != nil {
+		return nil, fmt.Errorf("auto-migrate schema: %w", err)
+	}
+
+	return &Database{conn: conn}, nil
+}
