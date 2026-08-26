@@ -17,16 +17,22 @@ limitations under the License.
 package main
 
 import (
-    "log"
-    
-    "github.com/jabbott-iii/Cryptare/internal"
+	"log"
+	"os"
+
+	"github.com/jabbott-iii/Cryptare/internal"
 )
 
 func main() {
 
-    // sqlite db creation / use
-	db, err := internal.NewDatabase("munus.db")
+	// sqlite db creation / use
+	db, err := internal.NewDatabase(databasePathFromEnv())
 	if err != nil {
 		log.Fatalf("failed to initialize database: %v", err)
 	}
-}    
+
+	rootCmd := internal.NewRootCmd(db)
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}

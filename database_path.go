@@ -14,4 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package main
+
+import "os"
+
+const (
+	databasePathEnv     = "CRYPTARE_DB_PATH"
+	defaultDatabasePath = "cryptare.db"
+)
+
+func databasePathFromEnv() string {
+	if path := os.Getenv(databasePathEnv); path != "" {
+		return path
+	}
+	return defaultDatabasePath
+}
