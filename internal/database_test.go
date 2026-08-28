@@ -23,6 +23,8 @@ import (
 	"time"
 )
 
+// TestNewDatabase tests the NewDatabase function to ensure it creates a new database and returns a valid connection.
+// It verifies that the database file is created and that the connection is not nil.
 func TestNewDatabase(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -46,6 +48,8 @@ func TestNewDatabase(t *testing.T) {
 	}
 }
 
+// TestNewDatabaseDefaultPath tests the NewDatabase function when no path is provided.
+// It ensures that the database is created at the default location.
 func TestNewDatabaseDefaultPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	cwd, _ := os.Getwd()
@@ -62,6 +66,8 @@ func TestNewDatabaseDefaultPath(t *testing.T) {
 	}
 }
 
+// TestSaveKey tests the SaveKey function to ensure that a key can be saved to the database.
+// It verifies that no error is returned when saving a valid key.
 func TestSaveKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -82,6 +88,8 @@ func TestSaveKey(t *testing.T) {
 	}
 }
 
+// TestListKeys tests the ListKeys function to ensure it returns all saved keys.
+// It verifies that the initial list is empty and that added keys are correctly listed.
 func TestListKeys(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -121,6 +129,8 @@ func TestListKeys(t *testing.T) {
 	}
 }
 
+// TestGetKey tests the GetKey function to ensure it retrieves a key by its ID.
+// It verifies that the retrieved key matches the saved key.
 func TestGetKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -156,6 +166,8 @@ func TestGetKey(t *testing.T) {
 	}
 }
 
+// TestGetKeyNotFound tests the GetKey function when the requested key does not exist.
+// It ensures that an error is returned for a nonexistent key.
 func TestGetKeyNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -169,6 +181,8 @@ func TestGetKeyNotFound(t *testing.T) {
 	}
 }
 
+// TestDeleteKey tests the DeleteKey function to ensure it removes a key from the database.
+// It verifies that the key exists before deletion and that it cannot be retrieved afterward.
 func TestDeleteKey(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -206,6 +220,8 @@ func TestDeleteKey(t *testing.T) {
 	}
 }
 
+// TestKeyModelUniqueConstraint tests the unique constraint on the KeyModel's KeyID field.
+// It ensures that attempting to save a key with a duplicate KeyID either fails or updates the existing key, depending on the database behavior.
 func TestKeyModelUniqueConstraint(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))

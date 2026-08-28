@@ -22,6 +22,8 @@ import (
 	"testing"
 )
 
+// TestDeriveKey tests the deriveKey function for various scenarios including basic derivation, empty password, and unicode password.
+// It verifies that the derived key has the expected length and is deterministic for the same inputs.
 func TestDeriveKey(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -67,6 +69,8 @@ func TestDeriveKey(t *testing.T) {
 	}
 }
 
+// TestEncryptDecryptFile tests the EncryptFile and DecryptFile functions by encrypting and decrypting a file with various passwords and output paths.
+// It ensures that the encrypted file differs from the original and that decryption restores the original content accurately.
 func TestEncryptDecryptFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -132,6 +136,8 @@ func TestEncryptDecryptFile(t *testing.T) {
 	}
 }
 
+// TestDecryptWithWrongPassword tests that attempting to decrypt a file with an incorrect password fails as expected.
+// It ensures that the decryption process returns an error and does not produce the original content.
 func TestDecryptWithWrongPassword(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -153,6 +159,8 @@ func TestDecryptWithWrongPassword(t *testing.T) {
 	}
 }
 
+// TestGenerateKey tests the GenerateKey function to ensure it produces keys of the expected length and that consecutive calls produce different keys.
+// It verifies that the generated keys have the correct length and that multiple calls produce unique keys.
 func TestGenerateKey(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -232,6 +240,8 @@ func TestEncryptDecryptKeyBlob(t *testing.T) {
 	}
 }
 
+// TestDecryptKeyBlobWithWrongPassword tests that attempting to decrypt an encrypted key blob with an incorrect password fails as expected.
+// It ensures that the decryption process returns an error and does not produce the original key.
 func TestDecryptKeyBlobWithWrongPassword(t *testing.T) {
 	rawKey := []byte{1, 2, 3, 4, 5}
 	masterPass := "correctpass"
@@ -247,6 +257,8 @@ func TestDecryptKeyBlobWithWrongPassword(t *testing.T) {
 	}
 }
 
+// TestEncryptDecryptKeyBlobRandomness tests that encrypting the same key blob multiple times with the same password produces different encrypted outputs.
+// This ensures that the encryption process uses random IVs and salts to enhance security.
 func TestEncryptDecryptKeyBlobRandomness(t *testing.T) {
 	rawKey := []byte{1, 2, 3}
 	masterPass := "pass"
@@ -267,6 +279,8 @@ func TestEncryptDecryptKeyBlobRandomness(t *testing.T) {
 	}
 }
 
+// TestNewKeyID tests the newKeyID function to ensure it generates unique IDs of the expected length.
+// It verifies that consecutive calls produce different IDs and that the length of the generated ID matches the expected value.
 func TestNewKeyID(t *testing.T) {
 	id1, err := newKeyID()
 	if err != nil {

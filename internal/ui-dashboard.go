@@ -28,11 +28,11 @@ import (
 //--------------------------------------------------styles---------------------------------------------------------------------------------------//
 
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	itemStyle   = lipgloss.NewStyle().PaddingLeft(2)
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	itemStyle     = lipgloss.NewStyle().PaddingLeft(2)
 	selectedStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("212")).Bold(true)
-	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
 //--------------------------------------------------messages-------------------------------------------------------------------------------------//
@@ -143,32 +143,39 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m DashboardModel) View() string {
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render("✦ Cryptare") + "\n\n")
+	sb.WriteString(titleStyle.Render("✦ Cryptare"))
+	sb.WriteString("\n\n")
 
 	switch m.screen {
 	case screenMain:
 		sb.WriteString("  Main Menu\n\n")
 		for i, item := range mainMenuItems {
 			if i == m.cursor {
-				sb.WriteString(selectedStyle.Render("▶ "+item) + "\n")
+				sb.WriteString(selectedStyle.Render("▶ " + item))
+				sb.WriteString("\n")
 			} else {
-				sb.WriteString(itemStyle.Render("  "+item) + "\n")
+				sb.WriteString(itemStyle.Render("  " + item))
+				sb.WriteString("\n")
 			}
 		}
 
 	case screenKeys:
 		sb.WriteString("  Stored Keys  (press Esc to go back)\n\n")
 		if len(m.keys) == 0 {
-			sb.WriteString(itemStyle.Render("No keys stored. Use `cryptare keys generate` to create one.") + "\n")
+			sb.WriteString(itemStyle.Render("No keys stored. Use `cryptare keys generate` to create one."))
+			sb.WriteString("\n")
 		} else {
-			sb.WriteString(itemStyle.Render(fmt.Sprintf("%-20s  %-12s  %s", "KEY ID", "ALGORITHM", "CREATED")) + "\n")
+			sb.WriteString(itemStyle.Render(fmt.Sprintf("%-20s  %-12s  %s", "KEY ID", "ALGORITHM", "CREATED")))
+			sb.WriteString("\n")
 			for i, k := range m.keys {
 				created := time.Unix(k.CreatedAt_, 0).Format("2006-01-02 15:04")
 				line := fmt.Sprintf("%-20s  %-12s  %s", k.KeyID, k.Algorithm, created)
 				if i == m.cursor {
-					sb.WriteString(selectedStyle.Render("▶ "+line) + "\n")
+					sb.WriteString(selectedStyle.Render("▶ " + line))
+					sb.WriteString("\n")
 				} else {
-					sb.WriteString(itemStyle.Render("  "+line) + "\n")
+					sb.WriteString(itemStyle.Render("  " + line))
+					sb.WriteString("\n")
 				}
 			}
 		}
@@ -177,13 +184,16 @@ func (m DashboardModel) View() string {
 	sb.WriteString("\n")
 	if m.status != "" {
 		if m.isError {
-			sb.WriteString(errorStyle.Render("✗ "+m.status) + "\n")
+			sb.WriteString(errorStyle.Render("✗ " + m.status))
+			sb.WriteString("\n")
 		} else {
-			sb.WriteString(statusStyle.Render("• "+m.status) + "\n")
+			sb.WriteString(statusStyle.Render("• " + m.status))
+			sb.WriteString("\n")
 		}
 	}
 
-	sb.WriteString(statusStyle.Render("\n↑/↓ navigate • enter select • q quit") + "\n")
+	sb.WriteString(statusStyle.Render("\n↑/↓ navigate • enter select • q quit"))
+	sb.WriteString("\n")
 	return sb.String()
 }
 

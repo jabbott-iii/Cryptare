@@ -23,6 +23,8 @@ import (
 	"testing"
 )
 
+// TestCompressFile tests the CompressFile function by compressing a file with various compression levels and output paths.
+// It ensures that the compressed file is created and that its size is smaller than the original for repetitive content.
 func TestCompressFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -88,6 +90,8 @@ func TestCompressFile(t *testing.T) {
 	}
 }
 
+// TestCompressDecompressFile tests the CompressFile and DecompressFile functions by compressing and then decompressing a file.
+// It ensures that the decompressed content matches the original content.
 func TestCompressDecompressFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -143,6 +147,8 @@ func TestCompressDecompressFile(t *testing.T) {
 	}
 }
 
+// TestDecompressFileWithDefaultOutput tests the DecompressFile function when the output path is not specified.
+// It ensures that the decompressed file is created with the default output path derived from the compressed file name.
 func TestDecompressFileWithDefaultOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -173,6 +179,8 @@ func TestDecompressFileWithDefaultOutput(t *testing.T) {
 	}
 }
 
+// TestDecompressFileWithoutGzExtension tests the DecompressFile function when the compressed file does not have a .gz extension.
+// It ensures that the decompressed file is created with a .dec suffix appended to the original file name.
 func TestDecompressFileWithoutGzExtension(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -203,6 +211,8 @@ func TestDecompressFileWithoutGzExtension(t *testing.T) {
 	}
 }
 
+// TestCompressFileInvalidLevel tests the CompressFile function with an invalid compression level.
+// It ensures that the function defaults to DefaultCompression when an invalid level is provided.
 func TestCompressFileInvalidLevel(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -222,6 +232,8 @@ func TestCompressFileInvalidLevel(t *testing.T) {
 	}
 }
 
+// TestDecompressInvalidFile tests the DecompressFile function with an invalid gzip file.
+// It ensures that the function returns an error when attempting to decompress a non-gzip file.
 func TestDecompressInvalidFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	fakeGzFile := filepath.Join(tmpDir, "fake.gz")

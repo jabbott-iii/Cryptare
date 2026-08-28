@@ -24,6 +24,8 @@ import (
 	"time"
 )
 
+// TestNewRootCmd tests the NewRootCmd function to ensure it returns a valid root command.
+// It verifies that the command is not nil and has the expected use string.
 func TestNewRootCmd(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -37,10 +39,12 @@ func TestNewRootCmd(t *testing.T) {
 	}
 
 	if cmd.Use != "cryptare" {
-		t.Errorf("Root command Use = %q, want "cryptare"", cmd.Use)
+		t.Errorf("Root command Use = %q, want cryptare", cmd.Use)
 	}
 }
 
+// TestDeriveDecryptOutput tests the deriveDecryptOutput function to ensure it correctly derives the output file name for decryption.
+// It covers cases with .enc extension, no extension, and other extensions.
 func TestDeriveDecryptOutput(t *testing.T) {
 	tests := []struct {
 		name string
@@ -74,6 +78,8 @@ func TestDeriveDecryptOutput(t *testing.T) {
 	}
 }
 
+// TestDeriveDecompressOutput tests the deriveDecompressOutput function to ensure it correctly derives the output file name for decompression.
+// It covers cases with .gz extension, no extension, and other extensions.
 func TestDeriveDecompressOutput(t *testing.T) {
 	tests := []struct {
 		name string
@@ -107,6 +113,8 @@ func TestDeriveDecompressOutput(t *testing.T) {
 	}
 }
 
+// TestEncryptCmdWithPassword tests the encrypt command with a provided password.
+// It ensures that the command successfully creates an encrypted file.
 func TestEncryptCmdWithPassword(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -136,6 +144,8 @@ func TestEncryptCmdWithPassword(t *testing.T) {
 	}
 }
 
+// TestEncryptDecryptCmdRoundTrip tests the full round-trip of encrypting and then decrypting a file.
+// It verifies that the decrypted content matches the original content.
 func TestEncryptDecryptCmdRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -180,6 +190,8 @@ func TestEncryptDecryptCmdRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCompressDecompressCmdRoundTrip tests the full round-trip of compressing and then decompressing a file.
+// It verifies that the decompressed content matches the original content.
 func TestCompressDecompressCmdRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")
@@ -222,6 +234,8 @@ func TestCompressDecompressCmdRoundTrip(t *testing.T) {
 	}
 }
 
+// TestKeysListCmd tests the "keys list" command to ensure it correctly lists all keys in the database.
+// It verifies that the output contains the expected key IDs.
 func TestKeysListCmd(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
