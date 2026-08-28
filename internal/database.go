@@ -42,10 +42,7 @@ func NewDatabase(path string) (*Database, error) {
 	}
 
 	if err := conn.AutoMigrate(
-		&FeatureCategory{},
-		&Feature{},
-		&ScanJob{},
-		&ScanResult{},
+		&KeyModel{},
 	); err != nil {
 		return nil, fmt.Errorf("auto-migrate schema: %w", err)
 	}
@@ -59,3 +56,42 @@ func (d *Database) Conn() *gorm.DB {
 }
 
 //-----------------------------------------------------------models and types------------------------------------------------------------------------------------------------//
+
+// KeyModel persists an encryption key (always stored encrypted) together with its metadata.
+type KeyModel struct {
+	gorm.Model
+	KeyID         string `gorm:"uniqueIndex;not null"`
+	Algorithm     string `gorm:"not null"`
+	EncryptedBlob string `gorm:"not null"` // base64-encoded AES-256-GCM ciphertext
+	CreatedAt_    int64  `gorm:"column:created_epoch"`
+}
+
+//-----------------------------------------------------------database operations--------------------------------------------------------------------------------------------//
+
+// SaveKey persists a key record.
+func (d *Database) SaveKey(k *KeyModel) error {
+	return d.conn.Save(k).Error
+}
+
+// ListKeys returns all stored key records.
+func (d *Database) ListKeys() ([]KeyModel, error) {
+	var keys []KeyModel
+	if err := d.conn.Find(&keys).Error; err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+// GetKey returns a key record by its KeyID.
+func (d *Database) GetKey(keyID string) (*KeyModel, error) {
+	var k KeyModel
+	if err := d.conn.Where("key_id = ?", keyID).First(&k).Error; err != nil {
+		return nil, err
+	}
+	return &k, nil
+}
+
+// DeleteKey removes a key record by its KeyID.
+func (d *Database) DeleteKey(keyID string) error {
+	return d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{}).Error
+}
