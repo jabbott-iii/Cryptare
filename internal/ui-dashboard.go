@@ -25,16 +25,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-//--------------------------------------------------styles---------------------------------------------------------------------------------------//
-
-var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
-	itemStyle     = lipgloss.NewStyle().PaddingLeft(2)
-	selectedStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("212")).Bold(true)
-	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-)
-
 //--------------------------------------------------messages-------------------------------------------------------------------------------------//
 
 type keysLoadedMsg struct{ keys []KeyModel }
@@ -67,7 +57,6 @@ var mainMenuItems = []string{
 	"Compress a file",
 	"Decompress a file",
 	"Manage keys",
-	"Quit",
 }
 
 // NewDashboardModel creates the initial dashboard model.
@@ -103,12 +92,12 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
-		case "up", "k":
+		case "up", "shift+tab":
 			if m.cursor > 0 {
 				m.cursor--
 			}
 
-		case "down", "j":
+		case "down", "tab":
 			if m.screen == screenMain && m.cursor < len(mainMenuItems)-1 {
 				m.cursor++
 			} else if m.screen == screenKeys && m.cursor < len(m.keys)-1 {
@@ -141,14 +130,34 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m DashboardModel) View() string {
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#f88e02")).
+		Bold(true).
+		MarginBottom(1)
+
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#9333EA")).
+		Bold(true).
+		PaddingBottom(1)
+
+	itemStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#f88e02")).
+		PaddingBottom(1)
+
+	errorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#f10c0c")).
+		MarginTop(1)
+
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#f88e02"))
+
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render("✦ Cryptare"))
+	sb.WriteString(titleStyle.Render("🔒 Cryptare"))
 	sb.WriteString("\n\n")
 
 	switch m.screen {
 	case screenMain:
-		sb.WriteString("  Main Menu\n\n")
 		for i, item := range mainMenuItems {
 			if i == m.cursor {
 				sb.WriteString(selectedStyle.Render("▶ " + item))
@@ -160,9 +169,9 @@ func (m DashboardModel) View() string {
 		}
 
 	case screenKeys:
-		sb.WriteString("  Stored Keys  (press Esc to go back)\n\n")
+		sb.WriteString(statusStyle.Render("  Stored Keys  (press Esc to go back)\n\n"))
 		if len(m.keys) == 0 {
-			sb.WriteString(itemStyle.Render("No keys stored. Use `cryptare keys generate` to create one."))
+			sb.WriteString(statusStyle.Render("No keys stored. Use `cryptare keys generate` to create one."))
 			sb.WriteString("\n")
 		} else {
 			sb.WriteString(itemStyle.Render(fmt.Sprintf("%-20s  %-12s  %s", "KEY ID", "ALGORITHM", "CREATED")))
@@ -192,7 +201,7 @@ func (m DashboardModel) View() string {
 		}
 	}
 
-	sb.WriteString(statusStyle.Render("\n↑/↓ navigate • enter select • q quit"))
+	sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
 	sb.WriteString("\n")
 	return sb.String()
 }

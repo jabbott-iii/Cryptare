@@ -68,6 +68,13 @@ type KeyModel struct {
 
 //-----------------------------------------------------------database operations--------------------------------------------------------------------------------------------//
 
+type Storage interface {
+	SaveKey(k *KeyModel) error
+	ListKeys() ([]KeyModel, error)
+	GetKey(keyID string) (*KeyModel, error)
+	DeleteKey(keyID string) error
+}
+
 // SaveKey persists a key record.
 func (d *Database) SaveKey(k *KeyModel) error {
 	return d.conn.Save(k).Error
