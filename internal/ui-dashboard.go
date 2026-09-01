@@ -17,18 +17,21 @@ limitations under the License.
 package internal
 
 import (
-	"fmt"
-	"strings"
-	"time"
-
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 //--------------------------------------------------messages-------------------------------------------------------------------------------------//
 
 type keysLoadedMsg struct{ keys []KeyModel }
 type errMsg struct{ err error }
+
+// actionResultMsg carries the outcome of running a background file/key
+// operation triggered from a form screen. See logic-tui.go.
+type actionResultMsg struct {
+	message string
+	err     error
+	reload  bool // true if the stored key list should be reloaded
+}
 
 //--------------------------------------------------model----------------------------------------------------------------------------------------//
 
@@ -37,7 +40,29 @@ type dashboardScreen int
 const (
 	screenMain dashboardScreen = iota
 	screenKeys
+	screenForm
 )
+
+// actionKind identifies which file/key operation a form screen submits.
+type actionKind int
+
+const (
+	actionNone actionKind = iota
+	actionEncrypt
+	actionDecrypt
+	actionCompress
+	actionDecompress
+	actionKeysGenerate
+	actionKeysExport
+	actionKeysImport
+)
+
+// formField is a single editable text field rendered on the form screen.
+type formField struct {
+	label    string
+	value    []rune
+	password bool
+}
 
 // DashboardModel is the root TUI model.
 type DashboardModel struct {
@@ -47,8 +72,15 @@ type DashboardModel struct {
 	keys    []KeyModel
 	status  string
 	isError bool
+	busy    bool
 	width   int
 	height  int
+
+	// form state, used when screen == screenForm
+	action     actionKind
+	fields     []formField
+	fieldIdx   int
+	formOrigin dashboardScreen
 }
 
 var mainMenuItems = []string{
@@ -57,6 +89,12 @@ var mainMenuItems = []string{
 	"Compress a file",
 	"Decompress a file",
 	"Manage keys",
+}
+
+var keysMenuItems = []string{
+	"Generate a new key",
+	"Export a key",
+	"Import a key",
 }
 
 // NewDashboardModel creates the initial dashboard model.
@@ -68,142 +106,6 @@ func NewDashboardModel(db *Database) DashboardModel {
 
 func (m DashboardModel) Init() tea.Cmd {
 	return loadKeysCmd(m.db)
-}
-
-func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		return m, nil
-
-	case keysLoadedMsg:
-		m.keys = msg.keys
-		return m, nil
-
-	case errMsg:
-		m.status = msg.err.Error()
-		m.isError = true
-		return m, nil
-
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-
-		case "up", "shift+tab":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-
-		case "down", "tab":
-			if m.screen == screenMain && m.cursor < len(mainMenuItems)-1 {
-				m.cursor++
-			} else if m.screen == screenKeys && m.cursor < len(m.keys)-1 {
-				m.cursor++
-			}
-
-		case "enter":
-			if m.screen == screenMain {
-				switch m.cursor {
-				case 4: // Manage keys
-					m.screen = screenKeys
-					m.cursor = 0
-				case 5: // Quit
-					return m, tea.Quit
-				default:
-					m.status = "Use the CLI for file operations (see --help)"
-					m.isError = false
-				}
-			}
-
-		case "esc", "b":
-			if m.screen != screenMain {
-				m.screen = screenMain
-				m.cursor = 0
-			}
-		}
-	}
-
-	return m, nil
-}
-
-func (m DashboardModel) View() string {
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f88e02")).
-		Bold(true).
-		MarginBottom(1)
-
-	selectedStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#9333EA")).
-		Bold(true).
-		PaddingBottom(1)
-
-	itemStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f88e02")).
-		PaddingBottom(1)
-
-	errorStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f10c0c")).
-		MarginTop(1)
-
-	statusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#f88e02"))
-
-	var sb strings.Builder
-
-	sb.WriteString(titleStyle.Render("🔒 Cryptare"))
-	sb.WriteString("\n\n")
-
-	switch m.screen {
-	case screenMain:
-		for i, item := range mainMenuItems {
-			if i == m.cursor {
-				sb.WriteString(selectedStyle.Render("▶ " + item))
-				sb.WriteString("\n")
-			} else {
-				sb.WriteString(itemStyle.Render("  " + item))
-				sb.WriteString("\n")
-			}
-		}
-
-	case screenKeys:
-		sb.WriteString(statusStyle.Render("  Stored Keys  (press Esc to go back)\n\n"))
-		if len(m.keys) == 0 {
-			sb.WriteString(statusStyle.Render("No keys stored. Use `cryptare keys generate` to create one."))
-			sb.WriteString("\n")
-		} else {
-			sb.WriteString(itemStyle.Render(fmt.Sprintf("%-20s  %-12s  %s", "KEY ID", "ALGORITHM", "CREATED")))
-			sb.WriteString("\n")
-			for i, k := range m.keys {
-				created := time.Unix(k.CreatedAt_, 0).Format("2006-01-02 15:04")
-				line := fmt.Sprintf("%-20s  %-12s  %s", k.KeyID, k.Algorithm, created)
-				if i == m.cursor {
-					sb.WriteString(selectedStyle.Render("▶ " + line))
-					sb.WriteString("\n")
-				} else {
-					sb.WriteString(itemStyle.Render("  " + line))
-					sb.WriteString("\n")
-				}
-			}
-		}
-	}
-
-	sb.WriteString("\n")
-	if m.status != "" {
-		if m.isError {
-			sb.WriteString(errorStyle.Render("✗ " + m.status))
-			sb.WriteString("\n")
-		} else {
-			sb.WriteString(statusStyle.Render("• " + m.status))
-			sb.WriteString("\n")
-		}
-	}
-
-	sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
-	sb.WriteString("\n")
-	return sb.String()
 }
 
 //--------------------------------------------------commands-------------------------------------------------------------------------------------//
