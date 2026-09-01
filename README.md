@@ -1,5 +1,3 @@
-<img width="812" height="542" alt="cryptare" src="https://github.com/user-attachments/assets/placeholder-cryptare" />
-
 ## Features:
 
 - **File Encryption & Decryption**
