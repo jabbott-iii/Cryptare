@@ -341,7 +341,7 @@ func (m DashboardModel) View() string {
 		}
 
 	case screenForm:
-		sb.WriteString(statusStyle.Render(actionTitle(m.action) + "  (Tab/Enter: next field • Shift+Tab: prev • Esc: cancel)\n\n"))
+		sb.WriteString(statusStyle.Render(actionTitle(m.action) + "\n\n"))
 		for i, f := range m.fields {
 			display := string(f.value)
 			if f.password {
@@ -370,7 +370,11 @@ func (m DashboardModel) View() string {
 		}
 	}
 
-	sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+	if m.screen == screenForm {
+		sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
+	} else {
+		sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+	}
 	sb.WriteString("\n")
 	return sb.String()
 }
