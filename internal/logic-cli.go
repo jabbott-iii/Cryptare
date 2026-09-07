@@ -368,4 +368,3 @@ func deriveDecompressOutput(src string) string {
 	}
 	return src + ".dec"
 }
-

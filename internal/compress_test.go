@@ -37,9 +37,9 @@ func TestCompressFile(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		dstPath  string
-		level    int
+		name    string
+		dstPath string
+		level   int
 	}{
 		{
 			name:    "compress with default output",
@@ -102,8 +102,8 @@ func TestCompressDecompressFile(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		level   int
+		name  string
+		level int
 	}{
 		{
 			name:  "default compression level",

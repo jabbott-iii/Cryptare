@@ -196,9 +196,9 @@ func TestGenerateKey(t *testing.T) {
 
 func TestEncryptDecryptKeyBlob(t *testing.T) {
 	tests := []struct {
-		name         string
-		rawKey       []byte
-		masterPass   string
+		name       string
+		rawKey     []byte
+		masterPass string
 	}{
 		{
 			name:       "basic key encryption",
