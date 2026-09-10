@@ -147,6 +147,62 @@ func TestCompressDecompressFile(t *testing.T) {
 	}
 }
 
+// TestCompressDirectoryRoundTrip tests directory compression by writing a
+// tar.gz archive and extracting it into a destination directory.
+func TestCompressDirectoryRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "source")
+	nestedDir := filepath.Join(srcDir, "nested")
+	emptyDir := filepath.Join(srcDir, "empty")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("Failed to create nested directory: %v", err)
+	}
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("root data"), 0o644); err != nil {
+		t.Fatalf("Failed to write root file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "child.txt"), []byte("nested data"), 0o644); err != nil {
+		t.Fatalf("Failed to write nested file: %v", err)
+	}
+
+	archive := srcDir + tarGzExt
+	if err := CompressFile(srcDir, "", -1); err != nil {
+		t.Fatalf("CompressFile failed: %v", err)
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("Expected archive not found: %v", err)
+	}
+
+	outDir := filepath.Join(tmpDir, "restored")
+	if err := DecompressFile(archive, outDir); err != nil {
+		t.Fatalf("DecompressFile failed: %v", err)
+	}
+
+	rootData, err := os.ReadFile(filepath.Join(outDir, "root.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored root file: %v", err)
+	}
+	if string(rootData) != "root data" {
+		t.Fatalf("Root file mismatch: got %q", string(rootData))
+	}
+
+	nestedData, err := os.ReadFile(filepath.Join(outDir, "nested", "child.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored nested file: %v", err)
+	}
+	if string(nestedData) != "nested data" {
+		t.Fatalf("Nested file mismatch: got %q", string(nestedData))
+	}
+
+	if info, err := os.Stat(filepath.Join(outDir, "empty")); err != nil {
+		t.Fatalf("Expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("Restored empty path is not a directory")
+	}
+}
+
 // TestDecompressFileWithDefaultOutput tests the DecompressFile function when the output path is not specified.
 // It ensures that the decompressed file is created with the default output path derived from the compressed file name.
 func TestDecompressFileWithDefaultOutput(t *testing.T) {
@@ -176,6 +232,39 @@ func TestDecompressFileWithDefaultOutput(t *testing.T) {
 
 	if string(decData) != string(originalContent) {
 		t.Errorf("Content mismatch: got %q, want %q", string(decData), string(originalContent))
+	}
+}
+
+// TestDecompressTarGzWithDefaultOutput tests that tar.gz archives restore to a
+// directory path derived from the archive name when no destination is given.
+func TestDecompressTarGzWithDefaultOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("Failed to create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "file.txt"), []byte("bundle data"), 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+
+	archive := srcDir + tarGzExt
+	if err := CompressFile(srcDir, "", -1); err != nil {
+		t.Fatalf("CompressFile failed: %v", err)
+	}
+	if err := os.RemoveAll(srcDir); err != nil {
+		t.Fatalf("Failed to remove source directory before restore: %v", err)
+	}
+
+	if err := DecompressFile(archive, ""); err != nil {
+		t.Fatalf("DecompressFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(srcDir, "file.txt"))
+	if err != nil {
+		t.Fatalf("Expected restored file not found: %v", err)
+	}
+	if string(data) != "bundle data" {
+		t.Fatalf("Content mismatch: got %q", string(data))
 	}
 }
 

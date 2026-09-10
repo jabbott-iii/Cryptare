@@ -54,7 +54,7 @@ var (
 //--------------------------------------------------field labels---------------------------------------------------------------------------------//
 
 const (
-	labelFilePath = "File path"
+	labelFilePath = "File or directory path"
 	labelOutput   = "Output path (optional)"
 	labelPassword = "Password"
 	labelLevel    = "Compression level 1-9 (optional)"
@@ -109,9 +109,9 @@ func actionTitle(action actionKind) string {
 	case actionDecrypt:
 		return "Decrypt a file"
 	case actionCompress:
-		return "Compress a file"
+		return "Compress a file or directory"
 	case actionDecompress:
-		return "Decompress a file"
+		return "Decompress a file or archive"
 	case actionKeysGenerate:
 		return "Generate a new key"
 	case actionKeysExport:
@@ -434,7 +434,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			}
 			dst := output
 			if dst == "" {
-				dst = file + gzExt
+				dst = deriveCompressOutput(file)
 			}
 			return actionResultMsg{message: fmt.Sprintf("Compressed: %s → %s", file, dst)}
 		}
