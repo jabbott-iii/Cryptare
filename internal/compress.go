@@ -222,6 +222,7 @@ func writeTarGz(w io.Writer, root string) error {
 
 func extractTarGz(r io.Reader, dst string) error {
 	cleanDst := filepath.Clean(dst)
+	cleanDstWithSep := cleanDst + string(os.PathSeparator)
 	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
@@ -237,22 +238,14 @@ func extractTarGz(r io.Reader, dst string) error {
 		}
 
 		archivePath := filepath.Clean(filepath.FromSlash(header.Name))
-		if filepath.IsAbs(archivePath) {
-			return fmt.Errorf("extract archive: invalid absolute path %q", header.Name)
-		}
-		if archivePath == "." || archivePath == "" {
+		target := filepath.Join(cleanDst, archivePath)
+		if target == cleanDst {
 			continue
 		}
-		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
+		if !strings.HasPrefix(target, cleanDstWithSep) {
 			return fmt.Errorf("extract archive: invalid path %q", header.Name)
 		}
-
-		target := filepath.Join(cleanDst, archivePath)
-		relTarget, err := filepath.Rel(cleanDst, target)
-		if err != nil {
-			return fmt.Errorf("resolve output path: %w", err)
-		}
-		if relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) {
+		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("extract archive: invalid path %q", header.Name)
 		}
 
