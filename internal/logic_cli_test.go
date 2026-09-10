@@ -101,6 +101,16 @@ func TestDeriveDecompressOutput(t *testing.T) {
 			src:  "file.compressed",
 			want: "file.compressed.dec",
 		},
+		{
+			name: "with .tar.gz extension",
+			src:  "folder.tar.gz",
+			want: "folder",
+		},
+		{
+			name: "with .tgz extension",
+			src:  "folder.tgz",
+			want: "folder",
+		},
 	}
 
 	for _, tt := range tests {
@@ -108,6 +118,45 @@ func TestDeriveDecompressOutput(t *testing.T) {
 			got := deriveDecompressOutput(tt.src)
 			if got != tt.want {
 				t.Errorf("deriveDecompressOutput(%q) = %q, want %q", tt.src, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeriveCompressOutput tests the deriveCompressOutput helper for files and directories.
+func TestDeriveCompressOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "file.txt")
+	if err := os.WriteFile(filePath, []byte("data"), 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	dirPath := filepath.Join(tmpDir, "folder")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "file path",
+			src:  filePath,
+			want: filePath + gzExt,
+		},
+		{
+			name: "directory path",
+			src:  dirPath,
+			want: dirPath + tarGzExt,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deriveCompressOutput(tt.src); got != tt.want {
+				t.Errorf("deriveCompressOutput(%q) = %q, want %q", tt.src, got, tt.want)
 			}
 		})
 	}
@@ -231,6 +280,53 @@ func TestCompressDecompressCmdRoundTrip(t *testing.T) {
 
 	if string(decData) != string(originalContent) {
 		t.Errorf("Content mismatch: got %q, want %q", string(decData), string(originalContent))
+	}
+}
+
+// TestCompressDecompressDirectoryCmdRoundTrip tests the CLI round-trip for a
+// compressed directory archive using default input and output paths.
+func TestCompressDecompressDirectoryCmdRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "folder")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create source directories: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "file.txt"), []byte("directory data"), 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"compress", srcDir})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Compress failed: %v", err)
+	}
+
+	archive := srcDir + tarGzExt
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("Archive not created: %v", err)
+	}
+
+	if err := os.RemoveAll(srcDir); err != nil {
+		t.Fatalf("Failed to remove source directory: %v", err)
+	}
+
+	rootCmd = NewRootCmd(db)
+	rootCmd.SetArgs([]string{"decompress", archive})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Decompress failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(srcDir, "nested", "file.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+	if string(data) != "directory data" {
+		t.Fatalf("Content mismatch: got %q", string(data))
 	}
 }
 

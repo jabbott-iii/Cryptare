@@ -127,8 +127,8 @@ func newCompressCmd() *cobra.Command {
 	var level int
 
 	cmd := &cobra.Command{
-		Use:   "compress [file]",
-		Short: "Compress a file with gzip",
+		Use:   "compress [path]",
+		Short: "Compress a file or directory with gzip",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -137,14 +137,14 @@ func newCompressCmd() *cobra.Command {
 			}
 			dst := output
 			if dst == "" {
-				dst = src + gzExt
+				dst = deriveCompressOutput(src)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst)
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <file>.gz)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output path (default: <file>.gz or <dir>.tar.gz)")
 	cmd.Flags().IntVarP(&level, "level", "l", -1, "compression level 1-9 (default: -1 = default)")
 	return cmd
 }
@@ -155,8 +155,8 @@ func newDecompressCmd() *cobra.Command {
 	var output string
 
 	cmd := &cobra.Command{
-		Use:   "decompress [file]",
-		Short: "Decompress a gzip file",
+		Use:   "decompress [archive]",
+		Short: "Decompress a gzip file or extract a tar.gz archive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -172,7 +172,7 @@ func newDecompressCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output path")
 	return cmd
 }
 
@@ -362,9 +362,14 @@ func deriveDecryptOutput(src string) string {
 	return src + ".dec"
 }
 
-func deriveDecompressOutput(src string) string {
-	if len(src) > len(gzExt) && src[len(src)-len(gzExt):] == gzExt {
-		return src[:len(src)-len(gzExt)]
+func deriveCompressOutput(src string) string {
+	info, err := os.Stat(src)
+	if err == nil {
+		return defaultCompressOutput(src, info.IsDir())
 	}
-	return src + ".dec"
+	return src + gzExt
+}
+
+func deriveDecompressOutput(src string) string {
+	return defaultDecompressOutput(src)
 }
