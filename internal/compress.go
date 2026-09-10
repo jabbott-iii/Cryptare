@@ -236,9 +236,24 @@ func extractTarGz(r io.Reader, dst string) error {
 			return fmt.Errorf("read tar header: %w", err)
 		}
 
-		target, err := secureArchivePath(cleanDst, header.Name)
+		archivePath := filepath.Clean(filepath.FromSlash(header.Name))
+		if filepath.IsAbs(archivePath) {
+			return fmt.Errorf("extract archive: invalid absolute path %q", header.Name)
+		}
+		if archivePath == "." || archivePath == "" {
+			continue
+		}
+		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("extract archive: invalid path %q", header.Name)
+		}
+
+		target := filepath.Join(cleanDst, archivePath)
+		relTarget, err := filepath.Rel(cleanDst, target)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolve output path: %w", err)
+		}
+		if relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("extract archive: invalid path %q", header.Name)
 		}
 
 		switch header.Typeflag {
@@ -265,24 +280,4 @@ func extractTarGz(r io.Reader, dst string) error {
 			return fmt.Errorf("extract archive: unsupported entry type %q", header.Name)
 		}
 	}
-}
-
-func secureArchivePath(root, name string) (string, error) {
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("extract archive: invalid absolute path %q", name)
-	}
-
-	cleanName := filepath.Clean(name)
-	if cleanName == "." || cleanName == "" {
-		return root, nil
-	}
-	if cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("extract archive: invalid path %q", name)
-	}
-
-	target := filepath.Join(root, cleanName)
-	if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("extract archive: invalid path %q", name)
-	}
-	return target, nil
 }
