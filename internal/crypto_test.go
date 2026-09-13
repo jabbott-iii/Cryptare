@@ -188,6 +188,11 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	if string(nestedData) != "nested data" {
 		t.Fatalf("Nested file mismatch: got %q", string(nestedData))
 	}
+	if info, err := os.Stat(filepath.Join(restoreDir, "nested", "child.txt")); err != nil {
+		t.Fatalf("Failed to stat restored nested file: %v", err)
+	} else if info.Mode().Perm() != 0o640 {
+		t.Fatalf("Nested file mode mismatch: got %o, want %o", info.Mode().Perm(), 0o640)
+	}
 
 	if info, err := os.Stat(filepath.Join(restoreDir, "empty")); err != nil {
 		t.Fatalf("Expected empty directory not restored: %v", err)

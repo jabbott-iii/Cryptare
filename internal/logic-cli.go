@@ -63,7 +63,7 @@ func newEncryptCmd() *cobra.Command {
 			src := args[0]
 			if password == "" {
 				var err error
-				password, err = readPassword("Enter password: ")
+				password, err = readPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
 				}
@@ -100,7 +100,7 @@ func newDecryptCmd() *cobra.Command {
 			src := args[0]
 			if password == "" {
 				var err error
-				password, err = readPassword("Enter password: ")
+				password, err = readPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
 				}
@@ -241,7 +241,7 @@ func newKeysGenerateCmd(db *Database) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if password == "" {
 				var err error
-				password, err = readPassword("Enter master password to protect key: ")
+				password, err = readPassword(cmd, "Enter master password to protect key: ")
 				if err != nil {
 					return err
 				}
@@ -300,7 +300,7 @@ func newKeysExportCmd(db *Database) *cobra.Command {
 			}
 
 			if password == "" {
-				password, err = readPassword("Enter master password: ")
+				password, err = readPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
 				}
@@ -337,7 +337,7 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 
 			if password == "" {
 				var err error
-				password, err = readPassword("Enter master password: ")
+				password, err = readPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
 				}
@@ -365,13 +365,13 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 
 //-----------------------------------------helpers------------------------------------------------------//
 
-// readPassword reads a password from stdin (no echo when possible).
-func readPassword(prompt string) (string, error) {
-	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
+// readPassword reads a password from the command's configured streams.
+func readPassword(cmd *cobra.Command, prompt string) (string, error) {
+	if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
 		return "", fmt.Errorf("write password prompt: %w", err)
 	}
 	var pwd string
-	if _, err := fmt.Fscan(os.Stdin, &pwd); err != nil {
+	if _, err := fmt.Fscan(cmd.InOrStdin(), &pwd); err != nil {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return pwd, nil
