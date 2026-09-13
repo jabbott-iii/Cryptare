@@ -85,8 +85,8 @@ type DashboardModel struct {
 }
 
 var mainMenuItems = []string{
-	"Encrypt a file",
-	"Decrypt a file",
+	"Encrypt a file or directory",
+	"Decrypt a file or directory",
 	"Compress a file or directory",
 	"Decompress a file or archive",
 	"Manage keys",
