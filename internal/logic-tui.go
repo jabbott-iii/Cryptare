@@ -25,7 +25,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"gorm.io/gorm"
 )
 
 //--------------------------------------------------styles---------------------------------------------------------------------------------------//
@@ -533,18 +532,10 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				return actionResultMsg{err: errors.New(`confirmation required: type "DELETE" to delete the key`)}
 			}
 
-			km, err := db.GetKey(keyID)
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
+			if err := db.DeleteKey(keyID); err != nil {
+				if errors.Is(err, ErrKeyNotFound) {
 					return actionResultMsg{err: fmt.Errorf("key %q not found", keyID)}
 				}
-				return actionResultMsg{err: fmt.Errorf("load key %q: %w", keyID, err)}
-			}
-
-			blob := []byte(km.EncryptedBlob)
-			defer zeroBytes(blob)
-
-			if err := db.DeleteKey(keyID); err != nil {
 				return actionResultMsg{err: fmt.Errorf("delete key: %w", err)}
 			}
 

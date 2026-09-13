@@ -24,6 +24,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var ErrKeyNotFound = errors.New("key not found")
+
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
 // Database owns the gorm connection for internal data access.
@@ -104,7 +106,7 @@ func (d *Database) DeleteKey(keyID string) error {
 	var k KeyModel
 	if err := d.conn.Where("key_id = ?", keyID).First(&k).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return gorm.ErrRecordNotFound
+			return ErrKeyNotFound
 		}
 		return err
 	}

@@ -27,7 +27,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
-	"gorm.io/gorm"
 )
 
 //-----------------------------------------core---------------------------------------------------------//
@@ -390,7 +389,7 @@ func newKeysDeleteCmd(db *Database) *cobra.Command {
 			}
 
 			if err := db.DeleteKey(keyID); err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
+				if errors.Is(err, ErrKeyNotFound) {
 					return fmt.Errorf("key %q not found", keyID)
 				}
 				return fmt.Errorf("delete key: %w", err)
