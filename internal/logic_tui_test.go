@@ -19,7 +19,9 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -322,5 +324,94 @@ func TestDashboardFormBackspace(t *testing.T) {
 
 	if got := m.fieldValue(labelFilePath); got != "ab" {
 		t.Fatalf("fieldValue = %q, want %q", got, "ab")
+	}
+}
+
+func TestDashboardKeysDelete(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "tui-delete",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	m := NewDashboardModel(db)
+	m.startForm(actionKeysDelete, screenKeys)
+	m = typeString(m, km.KeyID)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to confirmation field
+	m = next.(DashboardModel)
+	m = typeString(m, "DELETE")
+
+	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
+	if cmd == nil {
+		t.Fatal("expected a command for keys delete submission")
+	}
+	msg := cmd()
+	result, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("delete key failed: %v", result.err)
+	}
+	if !result.reload {
+		t.Fatal("expected reload=true after deleting a key")
+	}
+
+	if _, err := db.GetKey(km.KeyID); err == nil {
+		t.Fatal("expected key to be deleted")
+	}
+}
+
+func TestDashboardKeysDeleteRequiresConfirmationPhrase(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "tui-delete-confirmation",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	m := NewDashboardModel(db)
+	m.startForm(actionKeysDelete, screenKeys)
+	m = typeString(m, km.KeyID)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, "no")
+
+	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a command for keys delete submission")
+	}
+	msg := cmd()
+	result, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err == nil {
+		t.Fatal("expected confirmation error")
+	}
+	if !strings.Contains(result.err.Error(), "type \"DELETE\"") {
+		t.Fatalf("unexpected error: %v", result.err)
+	}
+	if _, err := db.GetKey(km.KeyID); err != nil {
+		t.Fatalf("expected key to remain after failed confirmation, got: %v", err)
 	}
 }

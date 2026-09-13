@@ -17,11 +17,15 @@ limitations under the License.
 package internal
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+var ErrKeyNotFound = errors.New("key not found")
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
@@ -100,5 +104,34 @@ func (d *Database) GetKey(keyID string) (*KeyModel, error) {
 
 // DeleteKey removes a key record by its KeyID.
 func (d *Database) DeleteKey(keyID string) error {
-	return d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{}).Error
+	sqlDB, err := d.conn.DB()
+	if err != nil {
+		return err
+	}
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return err
+	}
+
+	var blob []byte
+	if err := tx.QueryRow("DELETE FROM key_models WHERE key_id = ? RETURNING encrypted_blob", keyID).Scan(&blob); err != nil {
+		_ = tx.Rollback()
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrKeyNotFound
+		}
+		return err
+	}
+	defer zeroBytes(blob)
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return nil
+}
+
+func zeroBytes(buf []byte) {
+	for i := range buf {
+		buf[i] = 0
+	}
 }

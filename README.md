@@ -20,6 +20,7 @@
   - List stored keys
   - Export keys to encrypted files
   - Import keys from encrypted files
+  - Delete stored keys with confirmation safeguards
 
 - **Interactive TUI**
   - Terminal user interface for file and key management
@@ -87,12 +88,19 @@ Examples:
 - cryptare keys generate — generate and store a new random encryption key
 - cryptare keys export [key-id] — export an encrypted key to a file
 - cryptare keys import [file] — import an encrypted key from a file
+- cryptare keys delete [key-id] — delete a stored encryption key (irreversible)
+- cryptare keys delete [key-id] --yes — delete non-interactively (automation)
+- cryptare keys delete [key-id] --force — delete non-interactively (automation)
 
 Examples:
 - cryptare keys list
 - cryptare keys generate --password "master password"
 - cryptare keys export key-123 --output key-123.ckey
 - cryptare keys import ./key-123.ckey
+- cryptare keys delete key-123
+- cryptare keys delete key-123 --yes
+
+⚠️ Key deletion is permanent. Once deleted, the stored key cannot be recovered.
 
 ### Interactive TUI
 

@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -59,6 +60,7 @@ const (
 	labelPassword = "Password"
 	labelLevel    = "Compression level 1-9 (optional)"
 	labelKeyID    = "Key ID"
+	labelConfirm  = "Type DELETE to confirm"
 )
 
 //--------------------------------------------------form field sets------------------------------------------------------------------------------//
@@ -97,6 +99,11 @@ func fieldsFor(action actionKind) []formField {
 			{label: labelFilePath},
 			{label: labelPassword, password: true},
 		}
+	case actionKeysDelete:
+		return []formField{
+			{label: labelKeyID},
+			{label: labelConfirm},
+		}
 	default:
 		return nil
 	}
@@ -118,6 +125,8 @@ func actionTitle(action actionKind) string {
 		return "Export a key"
 	case actionKeysImport:
 		return "Import a key"
+	case actionKeysDelete:
+		return "Delete a key"
 	default:
 		return ""
 	}
@@ -212,6 +221,8 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.startForm(actionKeysExport, screenKeys)
 				case 2:
 					m.startForm(actionKeysImport, screenKeys)
+				case 3:
+					m.startForm(actionKeysDelete, screenKeys)
 				}
 			}
 
@@ -393,6 +404,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 	password := m.fieldValue(labelPassword)
 	keyID := m.fieldValue(labelKeyID)
 	levelStr := m.fieldValue(labelLevel)
+	confirm := m.fieldValue(labelConfirm)
 
 	switch action {
 	case actionEncrypt:
@@ -512,6 +524,22 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			}
 
 			return actionResultMsg{message: fmt.Sprintf("Imported key: %s", km.KeyID), reload: true}
+		}
+
+	case actionKeysDelete:
+		return func() tea.Msg {
+			if strings.TrimSpace(confirm) != "DELETE" {
+				return actionResultMsg{err: errors.New(`confirmation required: type "DELETE" to delete the key`)}
+			}
+
+			if err := db.DeleteKey(keyID); err != nil {
+				if errors.Is(err, ErrKeyNotFound) {
+					return actionResultMsg{err: fmt.Errorf("key %q not found", keyID)}
+				}
+				return actionResultMsg{err: fmt.Errorf("delete key: %w", err)}
+			}
+
+			return actionResultMsg{message: fmt.Sprintf("Deleted key: %s", keyID), reload: true}
 		}
 	}
 
