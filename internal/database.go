@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -103,18 +104,20 @@ func (d *Database) GetKey(keyID string) (*KeyModel, error) {
 
 // DeleteKey removes a key record by its KeyID.
 func (d *Database) DeleteKey(keyID string) error {
-	var k KeyModel
-	if err := d.conn.Where("key_id = ?", keyID).First(&k).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	var blob []byte
+	if err := d.conn.Model(&KeyModel{}).
+		Select("encrypted_blob").
+		Where("key_id = ?", keyID).
+		Row().
+		Scan(&blob); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrKeyNotFound
 		}
 		return err
 	}
-
-	blob := []byte(k.EncryptedBlob)
 	defer zeroBytes(blob)
 
-	return d.conn.Delete(&k).Error
+	return d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{}).Error
 }
 
 func zeroBytes(buf []byte) {
