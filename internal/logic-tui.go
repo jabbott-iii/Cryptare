@@ -307,8 +307,6 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		panic("unhandled default case")
 	}
-
-	return m, nil
 }
 
 //--------------------------------------------------bubbletea view-------------------------------------------------------------------------------//
@@ -548,6 +546,4 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 	default:
 		panic("unhandled default case")
 	}
-
-	return nil
 }
