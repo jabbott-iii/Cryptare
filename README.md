@@ -2,7 +2,9 @@
 
 - **File Encryption & Decryption**
   - Encrypt files with AES-256-GCM
+  - Encrypt directories into a single encrypted archive
   - Decrypt previously encrypted files
+  - Decrypt encrypted directory archives back into their original tree
   - Optional custom output paths
   - Password-based protection for secure workflows
 
@@ -27,32 +29,34 @@
 
 Cryptare is organized into focused command groups:
 
-- cryptare encrypt — encrypt a file
-- cryptare decrypt — decrypt a file
+- cryptare encrypt — encrypt a file or directory
+- cryptare decrypt — decrypt a file or encrypted directory archive
 - cryptare compress — compress a file or directory
 - cryptare decompress — decompress a gzip file or tar.gz archive
 - cryptare keys — manage encryption keys
 
 ### encrypt
 
-- cryptare encrypt [file] — encrypt a file with AES-256-GCM
-- cryptare encrypt [file] --output [path] — write to a custom output file
-- cryptare encrypt [file] --password [value] — provide the encryption password non-interactively
+- cryptare encrypt [path] — encrypt a file with AES-256-GCM or package a directory into a single encrypted archive
+- cryptare encrypt [path] --output [path] — write to a custom output file
+- cryptare encrypt [path] --password [value] — provide the encryption password non-interactively
 
 Examples:
 - cryptare encrypt ./secret.txt
 - cryptare encrypt ./secret.txt --output ./secret.txt.enc
+- cryptare encrypt ./project-dir --output ./project-dir-backup.enc
 - cryptare encrypt ./secret.txt --password "correct horse battery staple"
 
 ### decrypt
 
-- cryptare decrypt [file] — decrypt an AES-256-GCM encrypted file
-- cryptare decrypt [file] --output [path] — write to a custom output file
-- cryptare decrypt [file] --password [value] — provide the decryption password non-interactively
+- cryptare decrypt [path] — decrypt an AES-256-GCM encrypted file or restore an encrypted directory archive
+- cryptare decrypt [path] --output [path] — write to a custom output file or restore into a target directory
+- cryptare decrypt [path] --password [value] — provide the decryption password non-interactively
 
 Examples:
 - cryptare decrypt ./secret.txt.enc
 - cryptare decrypt ./secret.txt.enc --output ./secret.txt
+- cryptare decrypt ./project-dir-backup.enc --output ./restored-project-dir
 - cryptare decrypt ./secret.txt.enc --password "correct horse battery staple"
 
 ### compress

@@ -38,7 +38,7 @@ const (
 
 // CompressFile compresses src with gzip at the given level (1–9), writing to dst.
 // If src is a directory, it is archived as tar.gz.
-func CompressFile(src, dst string, level int) error {
+func CompressFile(src, dst string, level int) (err error) {
 	if level < gzip.BestSpeed || level > gzip.BestCompression {
 		level = gzip.DefaultCompression
 	}
@@ -56,16 +56,17 @@ func CompressFile(src, dst string, level int) error {
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
-	defer out.Close()
+	defer closeWithError(&err, out, "close output file")
 
 	gz, err := gzip.NewWriterLevel(out, level)
 	if err != nil {
 		return fmt.Errorf("create gzip writer: %w", err)
 	}
+	defer closeWithError(&err, gz, "finalise gzip")
 
 	if info.IsDir() {
 		gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
-		if err := writeTarGz(gz, src); err != nil {
+		if _, err := writeTarGz(gz, src); err != nil {
 			return err
 		}
 	} else {
@@ -73,7 +74,7 @@ func CompressFile(src, dst string, level int) error {
 		if err != nil {
 			return fmt.Errorf("open source file: %w", err)
 		}
-		defer in.Close()
+		defer closeWithError(&err, in, "close source file")
 
 		gz.Name = filepath.Base(src)
 
@@ -81,27 +82,23 @@ func CompressFile(src, dst string, level int) error {
 			return fmt.Errorf("compress data: %w", err)
 		}
 	}
-
-	if err := gz.Close(); err != nil {
-		return fmt.Errorf("finalise gzip: %w", err)
-	}
 	return nil
 }
 
 // DecompressFile decompresses a gzip file at src, writing to dst.
 // Tar-based gzip archives are extracted into a directory.
-func DecompressFile(src, dst string) error {
+func DecompressFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
-	defer in.Close()
+	defer closeWithError(&err, in, "close source file")
 
 	gz, err := gzip.NewReader(in)
 	if err != nil {
 		return fmt.Errorf("create gzip reader: %w", err)
 	}
-	defer gz.Close()
+	defer closeWithError(&err, gz, "close gzip reader")
 
 	if dst == "" {
 		dst = defaultDecompressOutput(src)
@@ -118,7 +115,7 @@ func DecompressFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
-	defer out.Close()
+	defer closeWithError(&err, out, "close output file")
 
 	if _, err := io.Copy(out, gz); err != nil {
 		return fmt.Errorf("decompress data: %w", err)
@@ -152,8 +149,9 @@ func isTarGzArchive(src, gzipName string) bool {
 		strings.HasSuffix(gzipName, ".tar")
 }
 
-func writeTarGz(w io.Writer, root string) error {
+func writeTarGz(w io.Writer, root string) (int, error) {
 	tw := tar.NewWriter(w)
+	entries := 0
 
 	root = filepath.Clean(root)
 	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -163,6 +161,7 @@ func writeTarGz(w io.Writer, root string) error {
 		if path == root {
 			return nil
 		}
+		entries++
 
 		info, err := d.Info()
 		if err != nil {
@@ -204,7 +203,10 @@ func writeTarGz(w io.Writer, root string) error {
 		}
 
 		if _, err := io.Copy(tw, file); err != nil {
-			file.Close()
+			closeErr := file.Close()
+			if closeErr != nil {
+				return errors.Join(fmt.Errorf("write tar contents: %w", err), fmt.Errorf("close source file: %w", closeErr))
+			}
 			return fmt.Errorf("write tar contents: %w", err)
 		}
 		if err := file.Close(); err != nil {
@@ -212,12 +214,16 @@ func writeTarGz(w io.Writer, root string) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		closeErr := tw.Close()
+		if closeErr != nil {
+			return entries, errors.Join(err, fmt.Errorf("finalise tar archive: %w", closeErr))
+		}
+		return entries, err
 	}
 	if err := tw.Close(); err != nil {
-		return fmt.Errorf("finalise tar archive: %w", err)
+		return entries, fmt.Errorf("finalise tar archive: %w", err)
 	}
-	return nil
+	return entries, nil
 }
 
 func extractTarGz(r io.Reader, dst string) error {
@@ -254,7 +260,7 @@ func extractTarGz(r io.Reader, dst string) error {
 			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
 				return fmt.Errorf("create directory: %w", err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return fmt.Errorf("create parent directory: %w", err)
 			}
@@ -263,7 +269,10 @@ func extractTarGz(r io.Reader, dst string) error {
 				return fmt.Errorf("create output file: %w", err)
 			}
 			if _, err := io.Copy(file, tr); err != nil {
-				file.Close()
+				closeErr := file.Close()
+				if closeErr != nil {
+					return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeErr))
+				}
 				return fmt.Errorf("extract file contents: %w", err)
 			}
 			if err := file.Close(); err != nil {
@@ -272,5 +281,14 @@ func extractTarGz(r io.Reader, dst string) error {
 		default:
 			return fmt.Errorf("extract archive: unsupported entry type %q", header.Name)
 		}
+	}
+}
+
+func closeWithError(target *error, closer io.Closer, message string) {
+	if closer == nil {
+		return
+	}
+	if err := closer.Close(); err != nil && *target == nil {
+		*target = fmt.Errorf("%s: %w", message, err)
 	}
 }

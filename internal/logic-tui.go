@@ -105,9 +105,9 @@ func fieldsFor(action actionKind) []formField {
 func actionTitle(action actionKind) string {
 	switch action {
 	case actionEncrypt:
-		return "Encrypt a file"
+		return "Encrypt a file or directory"
 	case actionDecrypt:
-		return "Decrypt a file"
+		return "Decrypt a file or directory archive"
 	case actionCompress:
 		return "Compress a file or directory"
 	case actionDecompress:

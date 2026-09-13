@@ -19,6 +19,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,176 @@ func TestEncryptDecryptFile(t *testing.T) {
 				t.Errorf("Decrypted content mismatch: got %q, want %q", string(decData), string(originalContent))
 			}
 		})
+	}
+}
+
+// TestEncryptDecryptDirectory verifies directory encryption produces one
+// encrypted artifact and decrypts back into the original directory structure.
+func TestEncryptDecryptDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create nested directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("root data"), 0o644); err != nil {
+		t.Fatalf("Failed to write root file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "child.txt"), []byte("nested data"), 0o640); err != nil {
+		t.Fatalf("Failed to write nested file: %v", err)
+	}
+
+	encFile := srcDir + encExt
+	if err := EncryptFile(srcDir, "", "testpassword"); err != nil {
+		t.Fatalf("EncryptFile failed: %v", err)
+	}
+
+	info, err := os.Stat(encFile)
+	if err != nil {
+		t.Fatalf("Encrypted artifact not found: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal("Encrypted artifact should be a single file")
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restored")
+	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	rootData, err := os.ReadFile(filepath.Join(restoreDir, "root.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored root file: %v", err)
+	}
+	if string(rootData) != "root data" {
+		t.Fatalf("Root file mismatch: got %q", string(rootData))
+	}
+
+	nestedData, err := os.ReadFile(filepath.Join(restoreDir, "nested", "child.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored nested file: %v", err)
+	}
+	if string(nestedData) != "nested data" {
+		t.Fatalf("Nested file mismatch: got %q", string(nestedData))
+	}
+	if info, err := os.Stat(filepath.Join(restoreDir, "nested", "child.txt")); err != nil {
+		t.Fatalf("Failed to stat restored nested file: %v", err)
+	} else if info.Mode().Perm() != 0o640 {
+		t.Fatalf("Nested file mode mismatch: got %o, want %o", info.Mode().Perm(), 0o640)
+	}
+
+	if info, err := os.Stat(filepath.Join(restoreDir, "empty")); err != nil {
+		t.Fatalf("Expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("Restored empty path is not a directory")
+	}
+}
+
+// TestEncryptDecryptEmptyDirectory ensures an empty directory can be restored from a single encrypted artifact.
+func TestEncryptDecryptEmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyDir := filepath.Join(tmpDir, "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+
+	encFile := emptyDir + encExt
+	if err := EncryptFile(emptyDir, "", "testpassword"); err != nil {
+		t.Fatalf("EncryptFile failed: %v", err)
+	}
+	if _, err := os.Stat(encFile); err != nil {
+		t.Fatalf("Encrypted artifact not found: %v", err)
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restored-empty")
+	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	if info, err := os.Stat(restoreDir); err != nil {
+		t.Fatalf("Restored directory not found: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("Restored empty path is not a directory")
+	}
+}
+
+// TestEncryptDirectoryWithSymlink ensures nested symlinks are rejected.
+func TestEncryptDirectoryWithSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("Failed to create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+
+	linkPath := filepath.Join(srcDir, "linked.txt")
+	if err := os.Symlink(filepath.Join(srcDir, "root.txt"), linkPath); err != nil {
+		t.Skipf("Symlinks are unavailable in this environment: %v", err)
+	}
+
+	err := EncryptFile(srcDir, "", "testpassword")
+	if err == nil {
+		t.Fatal("EncryptFile should fail when the directory contains a symlink")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("Expected symlink error, got %v", err)
+	}
+}
+
+// TestEncryptSymlinkedDirectoryPath ensures symlinked source directories are rejected.
+func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	targetDir := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("Failed to create target directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("Failed to write target file: %v", err)
+	}
+
+	linkDir := filepath.Join(tmpDir, "linked-target")
+	if err := os.Symlink(targetDir, linkDir); err != nil {
+		t.Skipf("Symlinks are unavailable in this environment: %v", err)
+	}
+
+	err := EncryptFile(linkDir, "", "testpassword")
+	if err == nil {
+		t.Fatal("EncryptFile should fail when the source directory path is a symlink")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("Expected symlink error, got %v", err)
+	}
+}
+
+// TestDecryptLegacyEncryptedFile verifies backward compatibility with legacy file ciphertext layout.
+func TestDecryptLegacyEncryptedFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalContent := []byte("legacy encrypted file data")
+
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	legacyCiphertext, err := encryptBytes(originalContent, "testpassword")
+	if err != nil {
+		t.Fatalf("encryptBytes failed: %v", err)
+	}
+	if err := os.WriteFile(encFile, legacyCiphertext, 0o600); err != nil {
+		t.Fatalf("Failed to write legacy ciphertext: %v", err)
+	}
+
+	decFile := filepath.Join(tmpDir, "legacy.txt.dec")
+	if err := DecryptFile(encFile, decFile, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	decData, err := os.ReadFile(decFile)
+	if err != nil {
+		t.Fatalf("Failed to read decrypted file: %v", err)
+	}
+	if string(decData) != string(originalContent) {
+		t.Fatalf("Decrypted content mismatch: got %q, want %q", string(decData), string(originalContent))
 	}
 }
 
