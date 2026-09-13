@@ -102,9 +102,10 @@ func DecryptFile(src, dst, password string) error {
 
 	if bytes.HasPrefix(data, []byte(directoryArtifactMagicV1)) {
 		archive, err := decryptBytesWithAAD(data[len(directoryArtifactMagicV1):], password, []byte(directoryArtifactMagicV1))
-		if err == nil {
-			return restoreDirectoryArchive(archive, dst)
+		if err != nil {
+			return err
 		}
+		return restoreDirectoryArchive(archive, dst)
 	}
 
 	plaintext, err := decryptBytes(data, password)
