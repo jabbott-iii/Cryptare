@@ -37,7 +37,7 @@ type Database struct {
 // NewDatabase opens (or creates) the sqlite file and runs schema migrations.
 func NewDatabase(path string) (*Database, error) {
 	if path == "" {
-		path = "rete.db"
+		path = "cryptare.db"
 	}
 
 	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{})

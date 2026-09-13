@@ -19,6 +19,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -190,7 +191,7 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(restoreDir, "nested", "child.txt")); err != nil {
 		t.Fatalf("Failed to stat restored nested file: %v", err)
-	} else if info.Mode().Perm() != 0o640 {
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("Nested file mode mismatch: got %o, want %o", info.Mode().Perm(), 0o640)
 	}
 

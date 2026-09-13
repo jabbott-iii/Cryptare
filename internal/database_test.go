@@ -23,6 +23,42 @@ import (
 	"time"
 )
 
+// newTestDatabase creates a test database with proper cleanup.
+// It uses in-memory SQLite by default to avoid file-locking issues on Windows.
+// If useFile is true, it creates a temp file-based database instead.
+func newTestDatabase(t *testing.T, useFile bool) *Database {
+	t.Helper()
+
+	var path string
+	if useFile {
+		tmpDir := t.TempDir()
+		path = filepath.Join(tmpDir, "test.db")
+	} else {
+		// Use in-memory database for most tests
+		path = ":memory:"
+	}
+
+	db, err := NewDatabase(path)
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	// Ensure database connection is closed after test
+	t.Cleanup(func() {
+		if db != nil && db.Conn() != nil {
+			sqlDB, err := db.Conn().DB()
+			if err == nil {
+				err := sqlDB.Close()
+				if err != nil {
+					return
+				}
+			}
+		}
+	})
+
+	return db
+}
+
 // TestNewDatabase tests the NewDatabase function to ensure it creates a new database and returns a valid connection.
 // It verifies that the database file is created and that the connection is not nil.
 func TestNewDatabase(t *testing.T) {
@@ -33,6 +69,18 @@ func TestNewDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDatabase failed: %v", err)
 	}
+
+	defer func() {
+		if db != nil && db.Conn() != nil {
+			sqlDB, err := db.Conn().DB()
+			if err == nil {
+				err := sqlDB.Close()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	if db.Conn() == nil {
 		t.Error("Database connection is nil")
@@ -65,6 +113,18 @@ func TestNewDatabaseDefaultPath(t *testing.T) {
 		t.Fatalf("NewDatabase failed: %v", err)
 	}
 
+	defer func() {
+		if db != nil && db.Conn() != nil {
+			sqlDB, err := db.Conn().DB()
+			if err == nil {
+				err := sqlDB.Close()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+
 	if db == nil {
 		t.Error("NewDatabase returned nil")
 	}
@@ -73,11 +133,7 @@ func TestNewDatabaseDefaultPath(t *testing.T) {
 // TestSaveKey tests the SaveKey function to ensure that a key can be saved to the database.
 // It verifies that no error is returned when saving a valid key.
 func TestSaveKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "test-key-1",
@@ -86,7 +142,7 @@ func TestSaveKey(t *testing.T) {
 		CreatedAt_:    time.Now().Unix(),
 	}
 
-	err = db.SaveKey(km)
+	err := db.SaveKey(km)
 	if err != nil {
 		t.Fatalf("SaveKey failed: %v", err)
 	}
@@ -95,11 +151,7 @@ func TestSaveKey(t *testing.T) {
 // TestListKeys tests the ListKeys function to ensure it returns all saved keys.
 // It verifies that the initial list is empty and that added keys are correctly listed.
 func TestListKeys(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	// Initially, no keys
 	keys, err := db.ListKeys()
@@ -136,11 +188,7 @@ func TestListKeys(t *testing.T) {
 // TestGetKey tests the GetKey function to ensure it retrieves a key by its ID.
 // It verifies that the retrieved key matches the saved key.
 func TestGetKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	keyID := "test-key-1"
 	km := &KeyModel{
@@ -173,13 +221,9 @@ func TestGetKey(t *testing.T) {
 // TestGetKeyNotFound tests the GetKey function when the requested key does not exist.
 // It ensures that an error is returned for a nonexistent key.
 func TestGetKeyNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
-	_, err = db.GetKey("nonexistent")
+	_, err := db.GetKey("nonexistent")
 	if err == nil {
 		t.Error("GetKey should fail for nonexistent key")
 	}
@@ -188,11 +232,7 @@ func TestGetKeyNotFound(t *testing.T) {
 // TestDeleteKey tests the DeleteKey function to ensure it removes a key from the database.
 // It verifies that the key exists before deletion and that it cannot be retrieved afterward.
 func TestDeleteKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	keyID := "test-key-to-delete"
 	km := &KeyModel{
@@ -207,7 +247,7 @@ func TestDeleteKey(t *testing.T) {
 	}
 
 	// Verify key exists
-	_, err = db.GetKey(keyID)
+	_, err := db.GetKey(keyID)
 	if err != nil {
 		t.Fatalf("GetKey failed before delete: %v", err)
 	}
@@ -227,11 +267,7 @@ func TestDeleteKey(t *testing.T) {
 // TestKeyModelUniqueConstraint tests the unique constraint on the KeyModel's KeyID field.
 // It ensures that attempting to save a key with a duplicate KeyID either fails or updates the existing key, depending on the database behavior.
 func TestKeyModelUniqueConstraint(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	keyID := "unique-key"
 	km1 := &KeyModel{
