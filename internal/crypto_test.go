@@ -201,20 +201,31 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 }
 
-// TestEncryptEmptyDirectory ensures directory encryption rejects empty folders.
-func TestEncryptEmptyDirectory(t *testing.T) {
+// TestEncryptDecryptEmptyDirectory ensures an empty directory can be restored from a single encrypted artifact.
+func TestEncryptDecryptEmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	emptyDir := filepath.Join(tmpDir, "empty")
 	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
 		t.Fatalf("Failed to create empty directory: %v", err)
 	}
 
-	err := EncryptFile(emptyDir, "", "testpassword")
-	if err == nil {
-		t.Fatal("EncryptFile should fail for an empty directory")
+	encFile := emptyDir + encExt
+	if err := EncryptFile(emptyDir, "", "testpassword"); err != nil {
+		t.Fatalf("EncryptFile failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "empty") {
-		t.Fatalf("Expected empty directory error, got %v", err)
+	if _, err := os.Stat(encFile); err != nil {
+		t.Fatalf("Encrypted artifact not found: %v", err)
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restored-empty")
+	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	if info, err := os.Stat(restoreDir); err != nil {
+		t.Fatalf("Restored directory not found: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("Restored empty path is not a directory")
 	}
 }
 

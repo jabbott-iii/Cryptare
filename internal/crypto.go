@@ -251,12 +251,9 @@ func createDirectoryArchiveTempFile(src string) (archivePath string, cleanup fun
 	defer closeWithError(&err, gz, "finalise gzip")
 	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
 
-	entries, err := writeTarGz(gz, src)
+	_, err = writeTarGz(gz, src)
 	if err != nil {
 		return "", nil, err
-	}
-	if entries == 0 {
-		return "", nil, errors.New("encrypt directory: source directory is empty")
 	}
 
 	return archivePath, archiveCleanup, nil

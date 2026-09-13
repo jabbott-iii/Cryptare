@@ -163,6 +163,9 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
 		t.Fatalf("create source directory: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("create empty source directory: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(srcDir, "nested", "file.txt"), []byte("secret tui directory data"), 0o644); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
@@ -231,6 +234,11 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	}
 	if string(data) != "secret tui directory data" {
 		t.Fatalf("content mismatch: got %q", string(data))
+	}
+	if info, err := os.Stat(filepath.Join(restoreDir, "empty")); err != nil {
+		t.Fatalf("expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("restored empty path is not a directory")
 	}
 }
 
