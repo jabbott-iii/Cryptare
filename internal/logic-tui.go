@@ -528,7 +528,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 
 	case actionKeysDelete:
 		return func() tea.Msg {
-			if !strings.EqualFold(strings.TrimSpace(confirm), "delete") {
+			if strings.TrimSpace(confirm) != "DELETE" {
 				return actionResultMsg{err: errors.New(`confirmation required: type "DELETE" to delete the key`)}
 			}
 
