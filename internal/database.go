@@ -117,7 +117,14 @@ func (d *Database) DeleteKey(keyID string) error {
 	}
 	defer zeroBytes(blob)
 
-	return d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{}).Error
+	result := d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrKeyNotFound
+	}
+	return nil
 }
 
 func zeroBytes(buf []byte) {
