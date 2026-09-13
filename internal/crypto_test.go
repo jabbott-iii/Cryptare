@@ -236,6 +236,30 @@ func TestEncryptDirectoryWithSymlink(t *testing.T) {
 	}
 }
 
+func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	targetDir := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("Failed to create target directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("Failed to write target file: %v", err)
+	}
+
+	linkDir := filepath.Join(tmpDir, "linked-target")
+	if err := os.Symlink(targetDir, linkDir); err != nil {
+		t.Skipf("Symlinks are unavailable in this environment: %v", err)
+	}
+
+	err := EncryptFile(linkDir, "", "testpassword")
+	if err == nil {
+		t.Fatal("EncryptFile should fail when the source directory path is a symlink")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("Expected symlink error, got %v", err)
+	}
+}
+
 // TestDecryptWithWrongPassword tests that attempting to decrypt a file with an incorrect password fails as expected.
 // It ensures that the decryption process returns an error and does not produce the original content.
 func TestDecryptWithWrongPassword(t *testing.T) {

@@ -145,7 +145,7 @@ func encryptBytesWithAAD(plaintext []byte, password string, aad []byte) ([]byte,
 		return nil, fmt.Errorf("create GCM: %w", err)
 	}
 
-	ciphertext := gcm.Seal(plaintext[:0], iv, plaintext, aad)
+	ciphertext := gcm.Seal(nil, iv, plaintext, aad)
 
 	// Layout: [salt (16)] [iv (12)] [ciphertext]
 	out := make([]byte, 0, saltLen+ivLen+len(ciphertext))
