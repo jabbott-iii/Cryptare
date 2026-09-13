@@ -64,19 +64,7 @@ func EncryptFile(src, dst, password string) error {
 	}
 
 	if info.IsDir() {
-		plaintext, err := archiveDirectoryForEncryption(src)
-		if err != nil {
-			return err
-		}
-		ciphertext, err := encryptBytes(plaintext, password)
-		if err != nil {
-			return err
-		}
-		payload := append([]byte(directoryArtifactMagicV1), ciphertext...)
-		if err := os.WriteFile(dst, payload, 0o600); err != nil {
-			return fmt.Errorf("write output file: %w", err)
-		}
-		return nil
+		return encryptDirectory(src, dst, password)
 	}
 
 	plaintext, err := os.ReadFile(src)
@@ -113,11 +101,10 @@ func DecryptFile(src, dst, password string) error {
 	}
 
 	if bytes.HasPrefix(data, []byte(directoryArtifactMagicV1)) {
-		archive, err := decryptBytes(data[len(directoryArtifactMagicV1):], password)
-		if err != nil {
-			return err
+		archive, err := decryptBytesWithAAD(data[len(directoryArtifactMagicV1):], password, []byte(directoryArtifactMagicV1))
+		if err == nil {
+			return restoreDirectoryArchive(archive, dst)
 		}
-		return restoreDirectoryArchive(archive, dst)
 	}
 
 	plaintext, err := decryptBytes(data, password)
@@ -132,6 +119,10 @@ func DecryptFile(src, dst, password string) error {
 }
 
 func encryptBytes(plaintext []byte, password string) ([]byte, error) {
+	return encryptBytesWithAAD(plaintext, password, nil)
+}
+
+func encryptBytesWithAAD(plaintext []byte, password string, aad []byte) ([]byte, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
@@ -153,7 +144,7 @@ func encryptBytes(plaintext []byte, password string) ([]byte, error) {
 		return nil, fmt.Errorf("create GCM: %w", err)
 	}
 
-	ciphertext := gcm.Seal(nil, iv, plaintext, nil)
+	ciphertext := gcm.Seal(plaintext[:0], iv, plaintext, aad)
 
 	// Layout: [salt (16)] [iv (12)] [ciphertext]
 	out := make([]byte, 0, saltLen+ivLen+len(ciphertext))
@@ -164,6 +155,10 @@ func encryptBytes(plaintext []byte, password string) ([]byte, error) {
 }
 
 func decryptBytes(data []byte, password string) ([]byte, error) {
+	return decryptBytesWithAAD(data, password, nil)
+}
+
+func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, error) {
 	if len(data) < saltLen+ivLen {
 		return nil, errors.New("file too small to be a valid encrypted file")
 	}
@@ -183,61 +178,87 @@ func decryptBytes(data []byte, password string) ([]byte, error) {
 		return nil, fmt.Errorf("create GCM: %w", err)
 	}
 
-	plaintext, err := gcm.Open(nil, iv, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, iv, ciphertext, aad)
 	if err != nil {
 		return nil, errors.New("decryption failed: wrong password or corrupted file")
 	}
 	return plaintext, nil
 }
 
-func archiveDirectoryForEncryption(src string) ([]byte, error) {
-	info, err := os.Lstat(src)
+func encryptDirectory(src, dst, password string) error {
+	archivePath, cleanup, err := createDirectoryArchiveTempFile(src)
 	if err != nil {
-		return nil, fmt.Errorf("lstat source path: %w", err)
+		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("encrypt directory: symlinks are not supported (%s)", src)
-	}
+	defer cleanup()
 
-	var archive bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&archive, gzip.DefaultCompression)
+	plaintext, err := os.ReadFile(archivePath)
 	if err != nil {
-		return nil, fmt.Errorf("create gzip writer: %w", err)
-	}
-	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
-
-	entries, writeErr := writeTarGz(gz, src)
-	closeErr := gz.Close()
-	if writeErr != nil {
-		return nil, writeErr
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("finalise gzip: %w", closeErr)
-	}
-	if entries == 0 {
-		return nil, errors.New("encrypt directory: source directory is empty")
+		return fmt.Errorf("read temporary directory archive: %w", err)
 	}
 
-	return archive.Bytes(), nil
+	ciphertext, err := encryptBytesWithAAD(plaintext, password, []byte(directoryArtifactMagicV1))
+	if err != nil {
+		return err
+	}
+
+	payload := append([]byte(directoryArtifactMagicV1), ciphertext...)
+	if err := os.WriteFile(dst, payload, 0o600); err != nil {
+		return fmt.Errorf("write output file: %w", err)
+	}
+	return nil
 }
 
-func restoreDirectoryArchive(archive []byte, dst string) error {
+func createDirectoryArchiveTempFile(src string) (archivePath string, cleanup func(), err error) {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return "", nil, fmt.Errorf("lstat source path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", nil, fmt.Errorf("encrypt directory: symlinks are not supported (%s)", src)
+	}
+
+	tmpFile, err := os.CreateTemp("", "cryptare-dir-*.tar.gz")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temporary directory archive: %w", err)
+	}
+	archivePath = tmpFile.Name()
+	archiveCleanup := func() {
+		_ = os.Remove(archivePath)
+	}
+	defer func() {
+		if err != nil {
+			archiveCleanup()
+		}
+	}()
+	defer closeWithError(&err, tmpFile, "close temporary directory archive")
+
+	gz, err := gzip.NewWriterLevel(tmpFile, gzip.DefaultCompression)
+	if err != nil {
+		return "", nil, fmt.Errorf("create gzip writer: %w", err)
+	}
+	defer closeWithError(&err, gz, "finalise gzip")
+	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
+
+	entries, err := writeTarGz(gz, src)
+	if err != nil {
+		return "", nil, err
+	}
+	if entries == 0 {
+		return "", nil, errors.New("encrypt directory: source directory is empty")
+	}
+
+	return archivePath, archiveCleanup, nil
+}
+
+func restoreDirectoryArchive(archive []byte, dst string) (err error) {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("read decrypted directory archive: %w", err)
 	}
+	defer closeWithError(&err, gz, "close directory archive reader")
 
-	if err := extractTarGz(gz, dst); err != nil {
-		closeErr := gz.Close()
-		if closeErr != nil {
-			return errors.Join(err, fmt.Errorf("close directory archive reader: %w", closeErr))
-		}
-		return err
-	}
-	if err := gz.Close(); err != nil {
-		return fmt.Errorf("close directory archive reader: %w", err)
-	}
-	return nil
+	return extractTarGz(gz, dst)
 }
 
 //--------------------------------------------------key management---------------------------------------------------------------------------------------//
