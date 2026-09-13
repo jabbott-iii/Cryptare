@@ -25,6 +25,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"gorm.io/gorm"
 )
 
 //--------------------------------------------------styles---------------------------------------------------------------------------------------//
@@ -534,7 +535,10 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 
 			km, err := db.GetKey(keyID)
 			if err != nil {
-				return actionResultMsg{err: fmt.Errorf("key %q not found: %w", keyID, err)}
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return actionResultMsg{err: fmt.Errorf("key %q not found", keyID)}
+				}
+				return actionResultMsg{err: fmt.Errorf("load key %q: %w", keyID, err)}
 			}
 
 			blob := []byte(km.EncryptedBlob)
