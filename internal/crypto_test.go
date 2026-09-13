@@ -260,6 +260,33 @@ func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
 	}
 }
 
+func TestDecryptLegacyEncryptedFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "legacy.txt")
+	originalContent := []byte("legacy encrypted file data")
+	if err := os.WriteFile(srcFile, originalContent, 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	if err := EncryptFile(srcFile, encFile, "testpassword"); err != nil {
+		t.Fatalf("EncryptFile failed: %v", err)
+	}
+
+	decFile := filepath.Join(tmpDir, "legacy.txt.dec")
+	if err := DecryptFile(encFile, decFile, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	decData, err := os.ReadFile(decFile)
+	if err != nil {
+		t.Fatalf("Failed to read decrypted file: %v", err)
+	}
+	if string(decData) != string(originalContent) {
+		t.Fatalf("Decrypted content mismatch: got %q, want %q", string(decData), string(originalContent))
+	}
+}
+
 // TestDecryptWithWrongPassword tests that attempting to decrypt a file with an incorrect password fails as expected.
 // It ensures that the decryption process returns an error and does not produce the original content.
 func TestDecryptWithWrongPassword(t *testing.T) {

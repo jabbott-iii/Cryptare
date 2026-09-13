@@ -253,6 +253,10 @@ func createDirectoryArchiveTempFile(src string) (archivePath string, cleanup fun
 }
 
 func restoreDirectoryArchive(archive []byte, dst string) (err error) {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("read decrypted directory archive: %w", err)
