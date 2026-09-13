@@ -104,27 +104,29 @@ func (d *Database) GetKey(keyID string) (*KeyModel, error) {
 
 // DeleteKey removes a key record by its KeyID.
 func (d *Database) DeleteKey(keyID string) error {
-	var blob []byte
-	if err := d.conn.Model(&KeyModel{}).
-		Select("encrypted_blob").
-		Where("key_id = ?", keyID).
-		Row().
-		Scan(&blob); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	return d.conn.Transaction(func(tx *gorm.DB) error {
+		var blob []byte
+		if err := tx.Model(&KeyModel{}).
+			Select("encrypted_blob").
+			Where("key_id = ?", keyID).
+			Row().
+			Scan(&blob); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrKeyNotFound
+			}
+			return err
+		}
+		defer zeroBytes(blob)
+
+		result := tx.Where("key_id = ?", keyID).Delete(&KeyModel{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
 			return ErrKeyNotFound
 		}
-		return err
-	}
-	defer zeroBytes(blob)
-
-	result := d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrKeyNotFound
-	}
-	return nil
+		return nil
+	})
 }
 
 func zeroBytes(buf []byte) {
