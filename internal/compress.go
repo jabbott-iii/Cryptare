@@ -260,7 +260,7 @@ func extractTarGz(r io.Reader, dst string) error {
 			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
 				return fmt.Errorf("create directory: %w", err)
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, 0:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return fmt.Errorf("create parent directory: %w", err)
 			}
