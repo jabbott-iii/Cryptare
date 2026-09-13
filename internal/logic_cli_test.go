@@ -239,6 +239,65 @@ func TestEncryptDecryptCmdRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEncryptDecryptDirectoryCmdRoundTrip verifies the CLI can encrypt a
+// directory into a single artifact and restore its tree on decrypt.
+func TestEncryptDecryptDirectoryCmdRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "project")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create source directories: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("root secret"), 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "child.txt"), []byte("nested secret"), 0o644); err != nil {
+		t.Fatalf("Failed to write nested source file: %v", err)
+	}
+
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	password := "testpass123"
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"encrypt", srcDir, "-p", password})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Encrypt failed: %v", err)
+	}
+
+	encFile := srcDir + encExt
+	if info, err := os.Stat(encFile); err != nil {
+		t.Fatalf("Encrypted artifact not created: %v", err)
+	} else if info.IsDir() {
+		t.Fatal("Encrypted artifact should be a file")
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restored-project")
+	rootCmd = NewRootCmd(db)
+	rootCmd.SetArgs([]string{"decrypt", encFile, "-o", restoreDir, "-p", password})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Decrypt failed: %v", err)
+	}
+
+	rootData, err := os.ReadFile(filepath.Join(restoreDir, "root.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored root file: %v", err)
+	}
+	if string(rootData) != "root secret" {
+		t.Fatalf("Content mismatch: got %q", string(rootData))
+	}
+
+	childData, err := os.ReadFile(filepath.Join(restoreDir, "nested", "child.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored nested file: %v", err)
+	}
+	if string(childData) != "nested secret" {
+		t.Fatalf("Content mismatch: got %q", string(childData))
+	}
+}
+
 // TestCompressDecompressCmdRoundTrip tests the full round-trip of compressing and then decompressing a file.
 // It verifies that the decompressed content matches the original content.
 func TestCompressDecompressCmdRoundTrip(t *testing.T) {

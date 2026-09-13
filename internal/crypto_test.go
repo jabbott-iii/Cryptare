@@ -19,6 +19,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,81 @@ func TestEncryptDecryptFile(t *testing.T) {
 				t.Errorf("Decrypted content mismatch: got %q, want %q", string(decData), string(originalContent))
 			}
 		})
+	}
+}
+
+// TestEncryptDecryptDirectory verifies directory encryption produces one
+// encrypted artifact and decrypts back into the original directory structure.
+func TestEncryptDecryptDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create nested directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("root data"), 0o644); err != nil {
+		t.Fatalf("Failed to write root file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "child.txt"), []byte("nested data"), 0o640); err != nil {
+		t.Fatalf("Failed to write nested file: %v", err)
+	}
+
+	encFile := srcDir + encExt
+	if err := EncryptFile(srcDir, "", "testpassword"); err != nil {
+		t.Fatalf("EncryptFile failed: %v", err)
+	}
+
+	info, err := os.Stat(encFile)
+	if err != nil {
+		t.Fatalf("Encrypted artifact not found: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal("Encrypted artifact should be a single file")
+	}
+
+	restoreDir := filepath.Join(tmpDir, "restored")
+	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+		t.Fatalf("DecryptFile failed: %v", err)
+	}
+
+	rootData, err := os.ReadFile(filepath.Join(restoreDir, "root.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored root file: %v", err)
+	}
+	if string(rootData) != "root data" {
+		t.Fatalf("Root file mismatch: got %q", string(rootData))
+	}
+
+	nestedData, err := os.ReadFile(filepath.Join(restoreDir, "nested", "child.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored nested file: %v", err)
+	}
+	if string(nestedData) != "nested data" {
+		t.Fatalf("Nested file mismatch: got %q", string(nestedData))
+	}
+
+	if info, err := os.Stat(filepath.Join(restoreDir, "empty")); err != nil {
+		t.Fatalf("Expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("Restored empty path is not a directory")
+	}
+}
+
+func TestEncryptEmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	emptyDir := filepath.Join(tmpDir, "empty")
+	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+
+	err := EncryptFile(emptyDir, "", "testpassword")
+	if err == nil {
+		t.Fatal("EncryptFile should fail for an empty directory")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("Expected empty directory error, got %v", err)
 	}
 }
 

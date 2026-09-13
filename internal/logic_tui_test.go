@@ -155,6 +155,85 @@ func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDashboardEncryptDecryptDirectoryRoundTrip verifies the TUI accepts a
+// directory path for encrypt/decrypt actions and restores the directory tree.
+func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "file.txt"), []byte("secret tui directory data"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	m := NewDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	m = typeString(m, srcDir)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, "hunter2")
+
+	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for encrypt submission")
+	}
+
+	msg := cmd()
+	result, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("encrypt action failed: %v", result.err)
+	}
+
+	encFile := srcDir + encExt
+	if _, err := os.Stat(encFile); err != nil {
+		t.Fatalf("encrypted artifact not created: %v", err)
+	}
+
+	m.startForm(actionDecrypt, screenMain)
+	m = typeString(m, encFile)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	restoreDir := filepath.Join(tmpDir, "restored")
+	m = typeString(m, restoreDir)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, "hunter2")
+
+	_, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for decrypt submission")
+	}
+
+	msg = cmd()
+	result, ok = msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("decrypt action failed: %v", result.err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(restoreDir, "nested", "file.txt"))
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(data) != "secret tui directory data" {
+		t.Fatalf("content mismatch: got %q", string(data))
+	}
+}
+
 // TestDashboardKeysGenerateAndExport drives the "Generate a new key" and
 // "Export a key" forms and verifies the key is stored and exported.
 func TestDashboardKeysGenerateAndExport(t *testing.T) {

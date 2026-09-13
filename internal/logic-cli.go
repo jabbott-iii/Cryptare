@@ -56,8 +56,8 @@ func newEncryptCmd() *cobra.Command {
 	var output, password string
 
 	cmd := &cobra.Command{
-		Use:   "encrypt [file]",
-		Short: "Encrypt a file with AES-256-GCM",
+		Use:   "encrypt [path]",
+		Short: "Encrypt a file or directory with AES-256-GCM",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -75,12 +75,14 @@ func newEncryptCmd() *cobra.Command {
 			if dst == "" {
 				dst = src + encExt
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Encrypted: %s → %s\n", src, dst)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Encrypted: %s → %s\n", src, dst); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <file>.enc)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc)")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "encryption password")
 	return cmd
 }
@@ -91,8 +93,8 @@ func newDecryptCmd() *cobra.Command {
 	var output, password string
 
 	cmd := &cobra.Command{
-		Use:   "decrypt [file]",
-		Short: "Decrypt an AES-256-GCM encrypted file",
+		Use:   "decrypt [path]",
+		Short: "Decrypt an AES-256-GCM encrypted file or directory archive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -110,12 +112,14 @@ func newDecryptCmd() *cobra.Command {
 			if dst == "" {
 				dst = deriveDecryptOutput(src)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output file or directory path")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "decryption password")
 	return cmd
 }
@@ -139,7 +143,9 @@ func newCompressCmd() *cobra.Command {
 			if dst == "" {
 				dst = deriveCompressOutput(src)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -167,7 +173,9 @@ func newDecompressCmd() *cobra.Command {
 			if dst == "" {
 				dst = deriveDecompressOutput(src)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Decompressed: %s → %s\n", src, dst)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decompressed: %s → %s\n", src, dst); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -204,14 +212,20 @@ func newKeysListCmd(db *Database) *cobra.Command {
 				return fmt.Errorf("list keys: %w", err)
 			}
 			if len(keys) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No keys stored.")
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "No keys stored."); err != nil {
+					return fmt.Errorf("write command output: %w", err)
+				}
 				return nil
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "%-20s  %-12s  %s\n", "KEY ID", "ALGORITHM", "CREATED")
+			if _, err := fmt.Fprintf(w, "%-20s  %-12s  %s\n", "KEY ID", "ALGORITHM", "CREATED"); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			for _, k := range keys {
 				created := time.Unix(k.CreatedAt_, 0).Format("2006-01-02 15:04")
-				fmt.Fprintf(w, "%-20s  %-12s  %s\n", k.KeyID, k.Algorithm, created)
+				if _, err := fmt.Fprintf(w, "%-20s  %-12s  %s\n", k.KeyID, k.Algorithm, created); err != nil {
+					return fmt.Errorf("write command output: %w", err)
+				}
 			}
 			return nil
 		},
@@ -259,7 +273,9 @@ func newKeysGenerateCmd(db *Database) *cobra.Command {
 				return fmt.Errorf("save key: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Generated key: %s\n", keyID)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Generated key: %s\n", keyID); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -297,7 +313,9 @@ func newKeysExportCmd(db *Database) *cobra.Command {
 			if output == "" {
 				output = fmt.Sprintf("%s-%d.ckey", keyID, time.Now().Unix())
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Exported key %s → %s\n", keyID, output)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Exported key %s → %s\n", keyID, output); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -334,7 +352,9 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 				return fmt.Errorf("save imported key: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Imported key: %s\n", km.KeyID)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Imported key: %s\n", km.KeyID); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
 			return nil
 		},
 	}
@@ -347,7 +367,9 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 
 // readPassword reads a password from stdin (no echo when possible).
 func readPassword(prompt string) (string, error) {
-	fmt.Fprint(os.Stderr, prompt)
+	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
+		return "", fmt.Errorf("write password prompt: %w", err)
+	}
 	var pwd string
 	if _, err := fmt.Fscan(os.Stdin, &pwd); err != nil {
 		return "", fmt.Errorf("read password: %w", err)
