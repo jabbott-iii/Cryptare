@@ -38,11 +38,7 @@ func typeString(m DashboardModel, s string) DashboardModel {
 // TestDashboardNavigation verifies that the cursor moves between the main
 // menu items and that "enter" on "Manage keys" switches to the key screen.
 func TestDashboardNavigation(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	m := NewDashboardModel(db)
 
@@ -81,10 +77,7 @@ func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 		t.Fatalf("write source file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	m := NewDashboardModel(db)
 	m.startForm(actionEncrypt, screenMain)
@@ -172,10 +165,7 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 		t.Fatalf("write source file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	m := NewDashboardModel(db)
 	m.startForm(actionEncrypt, screenMain)
@@ -248,10 +238,7 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 // "Export a key" forms and verifies the key is stored and exported.
 func TestDashboardKeysGenerateAndExport(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	m := NewDashboardModel(db)
 	m.startForm(actionKeysGenerate, screenKeys)
@@ -309,11 +296,7 @@ func TestDashboardKeysGenerateAndExport(t *testing.T) {
 // TestDashboardFormBackspace verifies that backspace removes the last
 // character typed into the focused field.
 func TestDashboardFormBackspace(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	m := NewDashboardModel(db)
 	m.startForm(actionEncrypt, screenMain)
@@ -328,11 +311,7 @@ func TestDashboardFormBackspace(t *testing.T) {
 }
 
 func TestDashboardKeysDelete(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "tui-delete",
@@ -373,11 +352,7 @@ func TestDashboardKeysDelete(t *testing.T) {
 }
 
 func TestDashboardKeysDeleteRequiresConfirmationPhrase(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "tui-delete-confirmation",

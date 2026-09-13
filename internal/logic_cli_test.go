@@ -28,11 +28,7 @@ import (
 // TestNewRootCmd tests the NewRootCmd function to ensure it returns a valid root command.
 // It verifies that the command is not nil and has the expected use string.
 func TestNewRootCmd(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	cmd := NewRootCmd(db)
 	if cmd.Use != "cryptare" {
@@ -168,10 +164,7 @@ func TestEncryptCmdWithPassword(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	rootCmd := NewRootCmd(db)
 	rootCmd.SetArgs([]string{"encrypt", srcFile, "-p", "testpass"})
@@ -179,7 +172,7 @@ func TestEncryptCmdWithPassword(t *testing.T) {
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
 
-	err = rootCmd.Execute()
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("Command execution failed: %v", err)
 	}
@@ -201,10 +194,7 @@ func TestEncryptDecryptCmdRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	password := "testpass123"
 
@@ -254,10 +244,7 @@ func TestEncryptDecryptDirectoryCmdRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write nested source file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	password := "testpass123"
 
@@ -314,10 +301,7 @@ func TestCompressDecompressCmdRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	// Compress
 	rootCmd := NewRootCmd(db)
@@ -359,10 +343,7 @@ func TestCompressDecompressDirectoryCmdRoundTrip(t *testing.T) {
 		t.Fatalf("Failed to write source file: %v", err)
 	}
 
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	rootCmd := NewRootCmd(db)
 	rootCmd.SetArgs([]string{"compress", srcDir})
@@ -397,11 +378,7 @@ func TestCompressDecompressDirectoryCmdRoundTrip(t *testing.T) {
 // TestKeysListCmd tests the "keys list" command to ensure it correctly lists all keys in the database.
 // It verifies that the output contains the expected key IDs.
 func TestKeysListCmd(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	// Add a key
 	km := &KeyModel{
@@ -431,11 +408,7 @@ func TestKeysListCmd(t *testing.T) {
 }
 
 func TestKeysDeleteCmdConfirmed(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "delete-me",
@@ -466,11 +439,7 @@ func TestKeysDeleteCmdConfirmed(t *testing.T) {
 }
 
 func TestKeysDeleteCmdRequiresConfirmation(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "do-not-delete",
@@ -486,7 +455,7 @@ func TestKeysDeleteCmdRequiresConfirmation(t *testing.T) {
 	rootCmd.SetArgs([]string{"keys", "delete", km.KeyID})
 	rootCmd.SetIn(bytes.NewBufferString("n\n"))
 
-	err = rootCmd.Execute()
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("expected confirmation rejection error")
 	}
@@ -499,11 +468,7 @@ func TestKeysDeleteCmdRequiresConfirmation(t *testing.T) {
 }
 
 func TestKeysDeleteCmdForceBypass(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "force-delete",
@@ -527,11 +492,7 @@ func TestKeysDeleteCmdForceBypass(t *testing.T) {
 }
 
 func TestKeysDeleteCmdYesBypass(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	km := &KeyModel{
 		KeyID:         "yes-delete",
@@ -555,15 +516,11 @@ func TestKeysDeleteCmdYesBypass(t *testing.T) {
 }
 
 func TestKeysDeleteCmdNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
+	db := newTestDatabase(t, false)
 
 	rootCmd := NewRootCmd(db)
 	rootCmd.SetArgs([]string{"keys", "delete", "missing-key", "--yes"})
-	err = rootCmd.Execute()
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("expected not found error")
 	}
