@@ -211,7 +211,9 @@ func encryptDirectory(src, dst, password string) error {
 		return err
 	}
 
-	payload := append([]byte(directoryArtifactMagicV1), ciphertext...)
+	payload := make([]byte, 0, len(directoryArtifactMagicV1)+len(ciphertext))
+	payload = append(payload, directoryArtifactMagicV1...)
+	payload = append(payload, ciphertext...)
 	if err := os.WriteFile(dst, payload, 0o600); err != nil {
 		return fmt.Errorf("write output file: %w", err)
 	}

@@ -201,6 +201,7 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 }
 
+// TestEncryptEmptyDirectory ensures directory encryption rejects empty folders.
 func TestEncryptEmptyDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	emptyDir := filepath.Join(tmpDir, "empty")
@@ -217,6 +218,7 @@ func TestEncryptEmptyDirectory(t *testing.T) {
 	}
 }
 
+// TestEncryptDirectoryWithSymlink ensures nested symlinks are rejected.
 func TestEncryptDirectoryWithSymlink(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "bundle")
@@ -241,6 +243,7 @@ func TestEncryptDirectoryWithSymlink(t *testing.T) {
 	}
 }
 
+// TestEncryptSymlinkedDirectoryPath ensures symlinked source directories are rejected.
 func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	targetDir := filepath.Join(tmpDir, "target")
@@ -265,6 +268,7 @@ func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
 	}
 }
 
+// TestDecryptLegacyEncryptedFile verifies backward compatibility with legacy file ciphertext layout.
 func TestDecryptLegacyEncryptedFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	originalContent := []byte("legacy encrypted file data")
