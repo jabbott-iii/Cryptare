@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"errors"
 	"fmt"
 
 	"gorm.io/driver/sqlite"
@@ -100,5 +101,22 @@ func (d *Database) GetKey(keyID string) (*KeyModel, error) {
 
 // DeleteKey removes a key record by its KeyID.
 func (d *Database) DeleteKey(keyID string) error {
-	return d.conn.Where("key_id = ?", keyID).Delete(&KeyModel{}).Error
+	var k KeyModel
+	if err := d.conn.Where("key_id = ?", keyID).First(&k).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return gorm.ErrRecordNotFound
+		}
+		return err
+	}
+
+	blob := []byte(k.EncryptedBlob)
+	defer zeroBytes(blob)
+
+	return d.conn.Delete(&k).Error
+}
+
+func zeroBytes(buf []byte) {
+	for i := range buf {
+		buf[i] = 0
+	}
 }

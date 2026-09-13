@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -430,5 +431,119 @@ func TestKeysListCmd(t *testing.T) {
 	output := out.String()
 	if output == "" {
 		t.Error("Command produced no output")
+	}
+}
+
+func TestKeysDeleteCmdConfirmed(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "delete-me",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "delete", km.KeyID})
+	rootCmd.SetIn(bytes.NewBufferString("y\n"))
+
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Command execution failed: %v", err)
+	}
+
+	if _, err := db.GetKey(km.KeyID); err == nil {
+		t.Fatal("expected key to be deleted")
+	}
+	if !strings.Contains(out.String(), "Deleted key: "+km.KeyID) {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestKeysDeleteCmdRequiresConfirmation(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "do-not-delete",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "delete", km.KeyID})
+	rootCmd.SetIn(bytes.NewBufferString("n\n"))
+
+	err = rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected confirmation rejection error")
+	}
+	if !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := db.GetKey(km.KeyID); err != nil {
+		t.Fatalf("expected key to remain after abort, got: %v", err)
+	}
+}
+
+func TestKeysDeleteCmdForceBypass(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "force-delete",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "delete", km.KeyID, "--force"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Command execution failed: %v", err)
+	}
+
+	if _, err := db.GetKey(km.KeyID); err == nil {
+		t.Fatal("expected key to be deleted")
+	}
+}
+
+func TestKeysDeleteCmdNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "delete", "missing-key", "--yes"})
+	err = rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected not found error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

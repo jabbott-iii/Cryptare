@@ -17,12 +17,17 @@ limitations under the License.
 package internal
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 )
 
 //-----------------------------------------core---------------------------------------------------------//
@@ -197,6 +202,7 @@ func newKeysCmd(db *Database) *cobra.Command {
 		newKeysGenerateCmd(db),
 		newKeysExportCmd(db),
 		newKeysImportCmd(db),
+		newKeysDeleteCmd(db),
 	)
 
 	return cmd
@@ -363,6 +369,45 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
+func newKeysDeleteCmd(db *Database) *cobra.Command {
+	var yes bool
+
+	cmd := &cobra.Command{
+		Use:   "delete [key-id]",
+		Short: "Delete a stored encryption key (irreversible)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			keyID := args[0]
+
+			if !yes {
+				ok, err := confirmAction(cmd, fmt.Sprintf("Delete key %q? This cannot be undone. [y/N]: ", keyID))
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return errors.New("key deletion aborted by user")
+				}
+			}
+
+			if err := db.DeleteKey(keyID); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("key %q not found", keyID)
+				}
+				return fmt.Errorf("delete key: %w", err)
+			}
+
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Deleted key: %s\n", keyID); err != nil {
+				return fmt.Errorf("write command output: %w", err)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "delete without confirmation prompt")
+	cmd.Flags().BoolVar(&yes, "force", false, "delete without confirmation prompt")
+	return cmd
+}
+
 //-----------------------------------------helpers------------------------------------------------------//
 
 // readPassword reads a password from the command's configured streams.
@@ -375,6 +420,20 @@ func readPassword(cmd *cobra.Command, prompt string) (string, error) {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return pwd, nil
+}
+
+func confirmAction(cmd *cobra.Command, prompt string) (bool, error) {
+	if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
+		return false, fmt.Errorf("write confirmation prompt: %w", err)
+	}
+
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read confirmation: %w", err)
+	}
+
+	resp := strings.TrimSpace(line)
+	return strings.EqualFold(resp, "y") || strings.EqualFold(resp, "yes"), nil
 }
 
 func deriveDecryptOutput(src string) string {

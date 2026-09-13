@@ -55,6 +55,7 @@ const (
 	actionKeysGenerate
 	actionKeysExport
 	actionKeysImport
+	actionKeysDelete
 )
 
 // formField is a single editable text field rendered on the form screen.
@@ -95,6 +96,7 @@ var keysMenuItems = []string{
 	"Generate a new key",
 	"Export a key",
 	"Import a key",
+	"Delete a key",
 }
 
 // NewDashboardModel creates the initial dashboard model.
