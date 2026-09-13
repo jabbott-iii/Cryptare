@@ -104,16 +104,29 @@ func (d *Database) GetKey(keyID string) (*KeyModel, error) {
 
 // DeleteKey removes a key record by its KeyID.
 func (d *Database) DeleteKey(keyID string) error {
+	sqlDB, err := d.conn.DB()
+	if err != nil {
+		return err
+	}
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return err
+	}
+
 	var blob []byte
-	if err := d.conn.Raw("DELETE FROM key_models WHERE key_id = ? RETURNING encrypted_blob", keyID).
-		Row().
-		Scan(&blob); err != nil {
+	if err := tx.QueryRow("DELETE FROM key_models WHERE key_id = ? RETURNING encrypted_blob", keyID).Scan(&blob); err != nil {
+		_ = tx.Rollback()
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrKeyNotFound
 		}
 		return err
 	}
 	defer zeroBytes(blob)
+
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
 	return nil
 }
 

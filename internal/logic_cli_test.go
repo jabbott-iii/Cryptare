@@ -530,6 +530,34 @@ func TestKeysDeleteCmdForceBypass(t *testing.T) {
 	}
 }
 
+func TestKeysDeleteCmdYesBypass(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	km := &KeyModel{
+		KeyID:         "yes-delete",
+		Algorithm:     "AES-256-GCM",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}
+	if err := db.SaveKey(km); err != nil {
+		t.Fatalf("SaveKey failed: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "delete", km.KeyID, "--yes"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Command execution failed: %v", err)
+	}
+
+	if _, err := db.GetKey(km.KeyID); err == nil {
+		t.Fatal("expected key to be deleted")
+	}
+}
+
 func TestKeysDeleteCmdNotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))

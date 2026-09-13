@@ -89,7 +89,8 @@ Examples:
 - cryptare keys export [key-id] — export an encrypted key to a file
 - cryptare keys import [file] — import an encrypted key from a file
 - cryptare keys delete [key-id] — delete a stored encryption key (irreversible)
-- cryptare keys delete [key-id] --yes|--force — delete non-interactively (automation)
+- cryptare keys delete [key-id] --yes — delete non-interactively (automation)
+- cryptare keys delete [key-id] --force — delete non-interactively (automation)
 
 Examples:
 - cryptare keys list
