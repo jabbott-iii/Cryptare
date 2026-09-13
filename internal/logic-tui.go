@@ -240,7 +240,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // startForm switches the model into the form screen for the given action.
-func (m DashboardModel) startForm(action actionKind, origin dashboardScreen) {
+func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.action = action
 	m.fields = fieldsFor(action)
 	m.fieldIdx = 0
