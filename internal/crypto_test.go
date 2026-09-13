@@ -267,15 +267,15 @@ func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
 
 func TestDecryptLegacyEncryptedFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "legacy.txt")
 	originalContent := []byte("legacy encrypted file data")
-	if err := os.WriteFile(srcFile, originalContent, 0o644); err != nil {
-		t.Fatalf("Failed to write source file: %v", err)
-	}
 
 	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
-	if err := EncryptFile(srcFile, encFile, "testpassword"); err != nil {
-		t.Fatalf("EncryptFile failed: %v", err)
+	legacyCiphertext, err := encryptBytes(originalContent, "testpassword")
+	if err != nil {
+		t.Fatalf("encryptBytes failed: %v", err)
+	}
+	if err := os.WriteFile(encFile, legacyCiphertext, 0o600); err != nil {
+		t.Fatalf("Failed to write legacy ciphertext: %v", err)
 	}
 
 	decFile := filepath.Join(tmpDir, "legacy.txt.dec")

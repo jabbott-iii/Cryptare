@@ -54,7 +54,15 @@ func deriveKey(password string, salt []byte) []byte {
 // EncryptFile encrypts src with AES-256-GCM using password, writing to dst.
 // If dst is empty, the output path is src + ".enc".
 func EncryptFile(src, dst, password string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
+	if err != nil {
+		return fmt.Errorf("lstat source path: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("encrypt input: symlinks are not supported (%s)", src)
+	}
+
+	statInfo, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat source path: %w", err)
 	}
@@ -63,7 +71,7 @@ func EncryptFile(src, dst, password string) error {
 		dst = src + encExt
 	}
 
-	if info.IsDir() {
+	if statInfo.IsDir() {
 		return encryptDirectory(src, dst, password)
 	}
 
