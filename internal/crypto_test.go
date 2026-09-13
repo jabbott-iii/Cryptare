@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-// TestDeriveKey tests the deriveKey function for various scenarios including basic derivation, empty password, and unicode password.
+// TestDeriveKey tests the deriveKey function for various scenarios including basic derivation, empty password, and Unicode password.
 // It verifies that the derived key has the expected length and is deterministic for the same inputs.
 func TestDeriveKey(t *testing.T) {
 	tests := []struct {
@@ -137,8 +137,8 @@ func TestEncryptDecryptFile(t *testing.T) {
 	}
 }
 
-// TestEncryptDecryptDirectory verifies directory encryption produces one
-// encrypted artifact and decrypts back into the original directory structure.
+// TestEncryptDecryptDirectory verifies directory encryption, produces one
+// encrypted artifact, and decrypts back into the original directory structure.
 func TestEncryptDecryptDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcDir := filepath.Join(tmpDir, "bundle")

@@ -36,7 +36,7 @@ func typeString(m DashboardModel, s string) DashboardModel {
 }
 
 // TestDashboardNavigation verifies that the cursor moves between the main
-// menu items and that "enter" on "Manage keys" switches to the keys screen.
+// menu items and that "enter" on "Manage keys" switches to the key screen.
 func TestDashboardNavigation(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
@@ -70,9 +70,9 @@ func TestDashboardNavigation(t *testing.T) {
 	}
 }
 
-// TestDashboardEncryptDecryptRoundTrip drives the encrypt then decrypt forms
+// TestDashboardEncryptDecryptRoundTrip drives the encrypting, then decrypt forms
 // exactly as a user typing into the TUI would, and verifies the resulting
-// files match the CLI's behaviour.
+// files match the CLI's behavior.
 func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "test.txt")

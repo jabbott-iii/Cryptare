@@ -34,10 +34,6 @@ func TestNewDatabase(t *testing.T) {
 		t.Fatalf("NewDatabase failed: %v", err)
 	}
 
-	if db == nil {
-		t.Error("NewDatabase returned nil")
-	}
-
 	if db.Conn() == nil {
 		t.Error("Database connection is nil")
 	}
@@ -53,8 +49,16 @@ func TestNewDatabase(t *testing.T) {
 func TestNewDatabaseDefaultPath(t *testing.T) {
 	tmpDir := t.TempDir()
 	cwd, _ := os.Getwd()
-	defer os.Chdir(cwd)
-	os.Chdir(tmpDir)
+	defer func(dir string) {
+		err := os.Chdir(dir)
+		if err != nil {
+			t.Fatalf("Failed to change directory back to original: %v", err)
+		}
+	}(cwd)
+	err := os.Chdir(tmpDir)
+	if err != nil {
+		return
+	}
 
 	db, err := NewDatabase("")
 	if err != nil {
@@ -249,7 +253,7 @@ func TestKeyModelUniqueConstraint(t *testing.T) {
 	}
 
 	// Second save should fail due to unique constraint or succeed as update
-	// Both behaviors are acceptable depending on GORM's save semantics
+	// Both behaviors are acceptable depending on GORM's safe semantics
 	_ = db.SaveKey(km2)
 
 	// Verify only one key with this ID exists

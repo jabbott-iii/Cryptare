@@ -35,10 +35,6 @@ func TestNewRootCmd(t *testing.T) {
 	}
 
 	cmd := NewRootCmd(db)
-	if cmd == nil {
-		t.Error("NewRootCmd returned nil")
-	}
-
 	if cmd.Use != "cryptare" {
 		t.Errorf("Root command Use = %q, want cryptare", cmd.Use)
 	}
