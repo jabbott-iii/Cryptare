@@ -92,7 +92,7 @@ func EncryptFile(src, dst, password string) error {
 }
 
 // DecryptFile decrypts an AES-256-GCM encrypted file at src using password,
-// writing plaintext to dst.  If dst is empty the ".enc" suffix is stripped.
+// writing plaintext to dst.  If dst is empty, the ".enc" suffix is stripped.
 func DecryptFile(src, dst, password string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -353,7 +353,7 @@ func DecryptKeyBlob(blob, masterPassword string) ([]byte, error) {
 
 //--------------------------------------------------key export/import------------------------------------------------------------------------------------//
 
-// KeyExport is the JSON-serialisable export envelope written to disk.
+// KeyExport is the JSON-serializable export envelope written to disk.
 type KeyExport struct {
 	Version       int    `json:"version"`
 	KeyID         string `json:"key_id"`
@@ -362,7 +362,7 @@ type KeyExport struct {
 	EncryptedBlob string `json:"encrypted_blob"` // base64 AES-256-GCM ciphertext
 }
 
-// ExportKeyToFile writes an encrypted key export to path using masterPassword.
+// ExportKeyToFile writes an encrypted key export to the path using masterPassword.
 func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
 	export := KeyExport{
 		Version:       1,

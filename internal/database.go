@@ -79,7 +79,7 @@ type Storage interface {
 	DeleteKey(keyID string) error
 }
 
-// SaveKey persists a key record.
+// SaveKey persists as a key record.
 func (d *Database) SaveKey(k *KeyModel) error {
 	return d.conn.Save(k).Error
 }

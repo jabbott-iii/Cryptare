@@ -224,6 +224,8 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 3:
 					m.startForm(actionKeysDelete, screenKeys)
 				}
+			default:
+				panic("unhandled default case")
 			}
 
 		case "esc", "b":
@@ -238,7 +240,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // startForm switches the model into the form screen for the given action.
-func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
+func (m DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.action = action
 	m.fields = fieldsFor(action)
 	m.fieldIdx = 0
@@ -302,6 +304,8 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			f.value = append(f.value, msg.Runes...)
 		}
 		return m, nil
+	default:
+		panic("unhandled default case")
 	}
 
 	return m, nil
@@ -394,7 +398,7 @@ func (m DashboardModel) View() string {
 
 // buildActionCmd returns a tea.Cmd that performs the currently selected
 // action using the values entered into the form fields, mirroring the
-// behaviour of the equivalent commands in logic-cli.go.
+// behavior of the equivalent commands in logic-cli.go.
 func (m DashboardModel) buildActionCmd() tea.Cmd {
 	db := m.db
 	action := m.action
@@ -541,6 +545,8 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 
 			return actionResultMsg{message: fmt.Sprintf("Deleted key: %s", keyID), reload: true}
 		}
+	default:
+		panic("unhandled default case")
 	}
 
 	return nil
