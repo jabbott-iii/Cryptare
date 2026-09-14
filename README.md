@@ -1,4 +1,4 @@
-<img width="720" height="430" alt="cryptarev1" src="https://github.com/user-attachments/assets/c5d4e1c5-8315-46e7-8d3f-06131534596d" />
+<img width="720" height="430" alt="cryptarev1" src="https://github.com/user-attachments/assets/b89d0d00-0d77-44b0-985d-a4d7ce831436" />
 
 ## Features:
 
