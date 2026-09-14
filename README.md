@@ -1,3 +1,5 @@
+<img width="720" height="430" alt="cryptarev1" src="https://github.com/user-attachments/assets/c5d4e1c5-8315-46e7-8d3f-06131534596d" />
+
 ## Features:
 
 - **File Encryption & Decryption**
