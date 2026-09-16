@@ -18,6 +18,8 @@ package internal
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"compress/flate"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -32,13 +34,32 @@ const (
 	gzExt    = ".gz"
 	tarGzExt = ".tar.gz"
 	tgzExt   = ".tgz"
+	zipExt   = ".zip"
+)
+
+type compressFormat string
+
+const (
+	formatGzip compressFormat = "gzip"
+	formatZip  compressFormat = "zip"
 )
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
-// CompressFile compresses src with gzip at the given level (1–9), writing to dst.
-// If src is a directory, it is archived as tar.gz.
+// CompressFile compresses src at the given level (1–9), writing to dst.
+// It defaults to gzip/tar.gz unless dst implies zip.
 func CompressFile(src, dst string, level int) (err error) {
+	return CompressFileWithFormat(src, dst, "", level)
+}
+
+// CompressFileWithFormat compresses src with the selected format (gzip or zip)
+// at the given level (1–9), writing to dst.
+func CompressFileWithFormat(src, dst, format string, level int) (err error) {
+	selectedFormat, err := resolveCompressFormat(format, dst)
+	if err != nil {
+		return err
+	}
+
 	if level < gzip.BestSpeed || level > gzip.BestCompression {
 		level = gzip.DefaultCompression
 	}
@@ -49,7 +70,7 @@ func CompressFile(src, dst string, level int) (err error) {
 	}
 
 	if dst == "" {
-		dst = defaultCompressOutput(src, info.IsDir())
+		dst = defaultCompressOutput(src, info.IsDir(), selectedFormat)
 	}
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -57,6 +78,13 @@ func CompressFile(src, dst string, level int) (err error) {
 		return fmt.Errorf("create output file: %w", err)
 	}
 	defer closeWithError(&err, out, "close output file")
+
+	if selectedFormat == formatZip {
+		if err := writeZip(out, src, info, level); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	gz, err := gzip.NewWriterLevel(out, level)
 	if err != nil {
@@ -85,9 +113,16 @@ func CompressFile(src, dst string, level int) (err error) {
 	return nil
 }
 
-// DecompressFile decompresses a gzip file at src, writing to dst.
-// Tar-based gzip archives are extracted into a directory.
+// DecompressFile decompresses a gzip/zip file at src, writing to dst.
+// Tar-based gzip archives and zip archives are extracted into directories.
 func DecompressFile(src, dst string) (err error) {
+	if strings.HasSuffix(strings.ToLower(src), zipExt) {
+		if dst == "" {
+			dst = defaultDecompressOutput(src)
+		}
+		return extractZip(src, dst)
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
@@ -123,7 +158,10 @@ func DecompressFile(src, dst string) (err error) {
 	return nil
 }
 
-func defaultCompressOutput(src string, isDir bool) string {
+func defaultCompressOutput(src string, isDir bool, format compressFormat) string {
+	if format == formatZip {
+		return filepath.Clean(src) + zipExt
+	}
 	if isDir {
 		return filepath.Clean(src) + tarGzExt
 	}
@@ -138,6 +176,8 @@ func defaultDecompressOutput(src string) string {
 		return src[:len(src)-len(tgzExt)]
 	case strings.HasSuffix(src, gzExt):
 		return src[:len(src)-len(gzExt)]
+	case strings.HasSuffix(src, zipExt):
+		return src[:len(src)-len(zipExt)]
 	default:
 		return src + ".dec"
 	}
@@ -147,6 +187,20 @@ func isTarGzArchive(src, gzipName string) bool {
 	return strings.HasSuffix(src, tarGzExt) ||
 		strings.HasSuffix(src, tgzExt) ||
 		strings.HasSuffix(gzipName, ".tar")
+}
+
+func resolveCompressFormat(format, dst string) (compressFormat, error) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "", string(formatGzip):
+		if strings.HasSuffix(strings.ToLower(dst), zipExt) {
+			return formatZip, nil
+		}
+		return formatGzip, nil
+	case string(formatZip):
+		return formatZip, nil
+	default:
+		return "", fmt.Errorf("unsupported compression format %q (supported: gzip, zip)", format)
+	}
 }
 
 func writeTarGz(w io.Writer, root string) (int, error) {
@@ -226,6 +280,97 @@ func writeTarGz(w io.Writer, root string) (int, error) {
 	return entries, nil
 }
 
+func writeZip(w io.Writer, src string, info fs.FileInfo, level int) (err error) {
+	zw := zip.NewWriter(w)
+	defer closeWithError(&err, zw, "finalise zip")
+
+	zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(out, level)
+	})
+
+	if info.IsDir() {
+		return writeZipDirectory(zw, src)
+	}
+	return writeZipFile(zw, src, filepath.Base(src))
+}
+
+func writeZipDirectory(zw *zip.Writer, root string) error {
+	root = filepath.Clean(root)
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk source directory: %w", walkErr)
+		}
+		if path == root {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("read entry info: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("compress directory: symlinks are not supported (%s)", path)
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			return fmt.Errorf("compress directory: unsupported file type at %s", path)
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("derive archive path: %w", err)
+		}
+		rel = filepath.ToSlash(rel)
+
+		if info.IsDir() {
+			header, err := zip.FileInfoHeader(info)
+			if err != nil {
+				return fmt.Errorf("create zip header: %w", err)
+			}
+			header.Name = rel + "/"
+			if _, err := zw.CreateHeader(header); err != nil {
+				return fmt.Errorf("write zip header: %w", err)
+			}
+			return nil
+		}
+
+		return writeZipFile(zw, path, rel)
+	})
+}
+
+func writeZipFile(zw *zip.Writer, srcPath, zipName string) error {
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return fmt.Errorf("stat source file: %w", err)
+	}
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return fmt.Errorf("create zip header: %w", err)
+	}
+	header.Name = filepath.ToSlash(zipName)
+	header.Method = zip.Deflate
+
+	writer, err := zw.CreateHeader(header)
+	if err != nil {
+		return fmt.Errorf("write zip header: %w", err)
+	}
+
+	file, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
+	if _, err := io.Copy(writer, file); err != nil {
+		closeErr := file.Close()
+		if closeErr != nil {
+			return errors.Join(fmt.Errorf("write zip contents: %w", err), fmt.Errorf("close source file: %w", closeErr))
+		}
+		return fmt.Errorf("write zip contents: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close source file: %w", err)
+	}
+	return nil
+}
+
 func extractTarGz(r io.Reader, dst string) error {
 	cleanDst := filepath.Clean(dst)
 	cleanDstWithSep := cleanDst + string(os.PathSeparator)
@@ -282,6 +427,152 @@ func extractTarGz(r io.Reader, dst string) error {
 			return fmt.Errorf("extract archive: unsupported entry type %q", header.Name)
 		}
 	}
+}
+
+func extractZip(src, dst string) (err error) {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return fmt.Errorf("open zip archive: %w", err)
+	}
+	defer closeWithError(&err, r, "close zip reader")
+
+	singleFile := len(r.File) == 1 && !r.File[0].FileInfo().IsDir() && r.File[0].Mode().IsRegular()
+	cleanDst := filepath.Clean(dst)
+	if singleFile {
+		entryName := filepath.Clean(filepath.FromSlash(r.File[0].Name))
+		if filepath.Base(entryName) == filepath.Base(cleanDst) {
+			return extractZipSingleFile(r.File[0], cleanDst)
+		}
+	}
+
+	cleanDstWithSep := cleanDst + string(os.PathSeparator)
+	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+
+	for _, file := range r.File {
+		archivePath := filepath.Clean(filepath.FromSlash(file.Name))
+		target := filepath.Join(cleanDst, archivePath)
+		if target == cleanDst {
+			continue
+		}
+		if !strings.HasPrefix(target, cleanDstWithSep) {
+			return fmt.Errorf("extract archive: invalid path %q", file.Name)
+		}
+		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("extract archive: invalid path %q", file.Name)
+		}
+
+		mode := file.Mode()
+		if mode&os.ModeSymlink != 0 {
+			return fmt.Errorf("extract archive: unsupported entry type %q", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, mode.Perm()); err != nil {
+				return fmt.Errorf("create directory: %w", err)
+			}
+			continue
+		}
+		if !mode.IsRegular() {
+			return fmt.Errorf("extract archive: unsupported entry type %q", file.Name)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("create parent directory: %w", err)
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("open zip entry: %w", err)
+		}
+
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		if err != nil {
+			closeErr := rc.Close()
+			if closeErr != nil {
+				return errors.Join(fmt.Errorf("create output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
+			}
+			return fmt.Errorf("create output file: %w", err)
+		}
+		if _, err := io.Copy(out, rc); err != nil {
+			closeOutErr := out.Close()
+			closeReadErr := rc.Close()
+			if closeOutErr != nil && closeReadErr != nil {
+				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr), fmt.Errorf("close zip entry: %w", closeReadErr))
+			}
+			if closeOutErr != nil {
+				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr))
+			}
+			if closeReadErr != nil {
+				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close zip entry: %w", closeReadErr))
+			}
+			return fmt.Errorf("extract file contents: %w", err)
+		}
+		if err := out.Close(); err != nil {
+			closeErr := rc.Close()
+			if closeErr != nil {
+				return errors.Join(fmt.Errorf("close output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
+			}
+			return fmt.Errorf("close output file: %w", err)
+		}
+		if err := rc.Close(); err != nil {
+			return fmt.Errorf("close zip entry: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func extractZipSingleFile(file *zip.File, dst string) error {
+	mode := file.Mode()
+	if mode&os.ModeSymlink != 0 || !mode.IsRegular() {
+		return fmt.Errorf("extract archive: unsupported entry type %q", file.Name)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create parent directory: %w", err)
+	}
+
+	rc, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("open zip entry: %w", err)
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		closeErr := rc.Close()
+		if closeErr != nil {
+			return errors.Join(fmt.Errorf("create output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
+		}
+		return fmt.Errorf("create output file: %w", err)
+	}
+
+	if _, err := io.Copy(out, rc); err != nil {
+		closeOutErr := out.Close()
+		closeReadErr := rc.Close()
+		if closeOutErr != nil && closeReadErr != nil {
+			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr), fmt.Errorf("close zip entry: %w", closeReadErr))
+		}
+		if closeOutErr != nil {
+			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr))
+		}
+		if closeReadErr != nil {
+			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close zip entry: %w", closeReadErr))
+		}
+		return fmt.Errorf("extract file contents: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		closeErr := rc.Close()
+		if closeErr != nil {
+			return errors.Join(fmt.Errorf("close output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
+		}
+		return fmt.Errorf("close output file: %w", err)
+	}
+	if err := rc.Close(); err != nil {
+		return fmt.Errorf("close zip entry: %w", err)
+	}
+	return nil
 }
 
 func closeWithError(target *error, closer io.Closer, message string) {

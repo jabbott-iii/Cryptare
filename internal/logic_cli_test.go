@@ -104,6 +104,11 @@ func TestDeriveDecompressOutput(t *testing.T) {
 			src:  "folder.tgz",
 			want: "folder",
 		},
+		{
+			name: "with .zip extension",
+			src:  "folder.zip",
+			want: "folder",
+		},
 	}
 
 	for _, tt := range tests {
@@ -130,26 +135,41 @@ func TestDeriveCompressOutput(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		src  string
-		want string
+		name   string
+		src    string
+		format string
+		want   string
 	}{
 		{
-			name: "file path",
-			src:  filePath,
-			want: filePath + gzExt,
+			name:   "file path",
+			src:    filePath,
+			format: "",
+			want:   filePath + gzExt,
 		},
 		{
-			name: "directory path",
-			src:  dirPath,
-			want: dirPath + tarGzExt,
+			name:   "directory path",
+			src:    dirPath,
+			format: "",
+			want:   dirPath + tarGzExt,
+		},
+		{
+			name:   "zip file path",
+			src:    filePath,
+			format: "zip",
+			want:   filePath + zipExt,
+		},
+		{
+			name:   "zip directory path",
+			src:    dirPath,
+			format: "zip",
+			want:   dirPath + zipExt,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := deriveCompressOutput(tt.src); got != tt.want {
-				t.Errorf("deriveCompressOutput(%q) = %q, want %q", tt.src, got, tt.want)
+			if got := deriveCompressOutput(tt.src, tt.format); got != tt.want {
+				t.Errorf("deriveCompressOutput(%q, %q) = %q, want %q", tt.src, tt.format, got, tt.want)
 			}
 		})
 	}
@@ -372,6 +392,96 @@ func TestCompressDecompressDirectoryCmdRoundTrip(t *testing.T) {
 	}
 	if string(data) != "directory data" {
 		t.Fatalf("Content mismatch: got %q", string(data))
+	}
+}
+
+func TestCompressDecompressZipCmdRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "artifact.txt")
+	originalContent := []byte("zip file content")
+	if err := os.WriteFile(srcFile, originalContent, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	db := newTestDatabase(t, false)
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"compress", srcFile, "--format", "zip"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Compress failed: %v", err)
+	}
+
+	archive := srcFile + zipExt
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("Zip archive not created: %v", err)
+	}
+
+	if err := os.Remove(srcFile); err != nil {
+		t.Fatalf("Failed to remove source file: %v", err)
+	}
+
+	rootCmd = NewRootCmd(db)
+	rootCmd.SetArgs([]string{"decompress", archive})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Decompress failed: %v", err)
+	}
+
+	restored, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+	if string(restored) != string(originalContent) {
+		t.Fatalf("Content mismatch: got %q", string(restored))
+	}
+}
+
+func TestCompressDecompressZipDirectoryCmdRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "folder")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create source directories: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "file.txt"), []byte("zip directory data"), 0o644); err != nil {
+		t.Fatalf("Failed to write source file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("Failed to create empty source directory: %v", err)
+	}
+
+	db := newTestDatabase(t, false)
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"compress", srcDir, "--format", "zip"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Compress failed: %v", err)
+	}
+
+	archive := srcDir + zipExt
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("Zip archive not created: %v", err)
+	}
+
+	if err := os.RemoveAll(srcDir); err != nil {
+		t.Fatalf("Failed to remove source directory: %v", err)
+	}
+
+	rootCmd = NewRootCmd(db)
+	rootCmd.SetArgs([]string{"decompress", archive})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Decompress failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(srcDir, "nested", "file.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+	if string(data) != "zip directory data" {
+		t.Fatalf("Content mismatch: got %q", string(data))
+	}
+	if info, err := os.Stat(filepath.Join(srcDir, "empty")); err != nil {
+		t.Fatalf("Expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("Restored empty path is not a directory")
 	}
 }
 

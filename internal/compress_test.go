@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"archive/zip"
 	"compress/gzip"
 	"os"
 	"path/filepath"
@@ -334,5 +335,103 @@ func TestDecompressInvalidFile(t *testing.T) {
 	err := DecompressFile(fakeGzFile, filepath.Join(tmpDir, "out.txt"))
 	if err == nil {
 		t.Error("DecompressFile should fail on invalid gzip file")
+	}
+}
+
+func TestCompressZipFileRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "single.txt")
+	originalContent := []byte("zip single file data")
+	if err := os.WriteFile(srcFile, originalContent, 0o644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	archive := srcFile + zipExt
+	if err := CompressFileWithFormat(srcFile, "", "zip", gzip.BestCompression); err != nil {
+		t.Fatalf("CompressFileWithFormat failed: %v", err)
+	}
+
+	reader, err := zip.OpenReader(archive)
+	if err != nil {
+		t.Fatalf("Failed to open zip archive: %v", err)
+	}
+	if len(reader.File) != 1 {
+		_ = reader.Close()
+		t.Fatalf("Expected single zip entry, got %d", len(reader.File))
+	}
+	if reader.File[0].Name != "single.txt" {
+		_ = reader.Close()
+		t.Fatalf("Unexpected zip entry name: %q", reader.File[0].Name)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Failed to close zip reader: %v", err)
+	}
+
+	if err := os.Remove(srcFile); err != nil {
+		t.Fatalf("Failed to remove source file: %v", err)
+	}
+	if err := DecompressFile(archive, ""); err != nil {
+		t.Fatalf("DecompressFile failed: %v", err)
+	}
+
+	restored, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatalf("Failed to read restored file: %v", err)
+	}
+	if string(restored) != string(originalContent) {
+		t.Fatalf("Content mismatch: got %q", string(restored))
+	}
+}
+
+func TestCompressZipDirectoryRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "bundle")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("Failed to create nested directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("Failed to create empty directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "root.txt"), []byte("zip root"), 0o644); err != nil {
+		t.Fatalf("Failed to write root file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "child.txt"), []byte("zip nested"), 0o644); err != nil {
+		t.Fatalf("Failed to write nested file: %v", err)
+	}
+
+	archive := srcDir + zipExt
+	if err := CompressFileWithFormat(srcDir, "", "zip", gzip.BestSpeed); err != nil {
+		t.Fatalf("CompressFileWithFormat failed: %v", err)
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("Expected archive not found: %v", err)
+	}
+
+	if err := os.RemoveAll(srcDir); err != nil {
+		t.Fatalf("Failed to remove source directory: %v", err)
+	}
+	if err := DecompressFile(archive, ""); err != nil {
+		t.Fatalf("DecompressFile failed: %v", err)
+	}
+
+	rootData, err := os.ReadFile(filepath.Join(srcDir, "root.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored root file: %v", err)
+	}
+	if string(rootData) != "zip root" {
+		t.Fatalf("Root file mismatch: got %q", string(rootData))
+	}
+
+	nestedData, err := os.ReadFile(filepath.Join(srcDir, "nested", "child.txt"))
+	if err != nil {
+		t.Fatalf("Failed to read restored nested file: %v", err)
+	}
+	if string(nestedData) != "zip nested" {
+		t.Fatalf("Nested file mismatch: got %q", string(nestedData))
+	}
+	if info, err := os.Stat(filepath.Join(srcDir, "empty")); err != nil {
+		t.Fatalf("Expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatalf("Restored empty path is not a directory")
 	}
 }
