@@ -179,8 +179,25 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 	}
 
 	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc, tea.KeyTab, tea.KeyShiftTab, tea.KeyUp, tea.KeyDown, tea.KeyEnter:
-		return m, nil, false
+	case tea.KeyCtrlC:
+		return m, tea.Quit, true
+	case tea.KeyEsc:
+		m.screen = m.formOrigin
+		m.status = ""
+		return m, nil, true
+	case tea.KeyTab, tea.KeyDown:
+		if m.fieldIdx < len(m.fields)-1 {
+			m.fieldIdx++
+		}
+		return m, nil, true
+	case tea.KeyShiftTab, tea.KeyUp:
+		if m.fieldIdx > 0 {
+			m.fieldIdx--
+		}
+		return m, nil, true
+	case tea.KeyEnter:
+		next, cmd := m.advanceOrSubmitForm()
+		return next.(DashboardModel), cmd, true
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "i", "I", "a", "A":
