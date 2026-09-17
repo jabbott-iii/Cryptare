@@ -189,6 +189,12 @@ func TestDashboardVimNormalModeDoesNotEditFields(t *testing.T) {
 		t.Fatalf("fieldValue = %q, want %q after space in normal mode", got, "path")
 	}
 
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = next.(DashboardModel)
+	if got := m.fieldValue(labelFilePath); got != "path" {
+		t.Fatalf("fieldValue = %q, want %q after backspace in normal mode", got, "path")
+	}
+
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	m = next.(DashboardModel)
 	m = typeString(m, "!")

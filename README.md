@@ -115,7 +115,7 @@ Examples:
 - With vim bindings enabled:
   - Menus accept `j`/`k` to move, `l` to select, and `Esc`, `h`, or `b` to go back when a back action exists.
   - Forms start in insert mode so file paths and passwords can be typed normally.
-  - Press `Esc` in a form to switch to normal mode, then use `j`/`k` to change fields, `h` to cancel, `l` to advance, and `i`/`a`/`o` to return to insert mode.
+  - Press `Esc` in a form to switch to normal mode, then use `j`/`k` to change fields, `h` to cancel, `l` or `Enter` to advance, and `i`/`a`/`o` (also `I`/`A`/`O`) to return to insert mode. `o`/`O` move to the next field before re-entering insert mode.
 
 ## Install:
 
