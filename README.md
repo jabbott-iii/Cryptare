@@ -111,6 +111,11 @@ Examples:
 ### Interactive TUI
 
 - Running cryptare with no subcommand launches the terminal UI dashboard for interactive file and key management.
+- Run `cryptare --vim` to enable vim-style TUI bindings.
+- With vim bindings enabled:
+  - Menus accept `j`/`k` to move, `l` to select, and `h` to go back when a back action exists.
+  - Forms start in insert mode so file paths and passwords can be typed normally.
+  - Press `Esc` in a form to switch to normal mode, then use `j`/`k` to change fields, `h` to cancel, `l` to advance, and `i`/`a`/`o` to return to insert mode.
 
 ## Install:
 

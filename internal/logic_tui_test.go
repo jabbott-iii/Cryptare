@@ -35,6 +35,10 @@ func typeString(m DashboardModel, s string) DashboardModel {
 	return m
 }
 
+func newVimDashboardModel(db *Database) DashboardModel {
+	return NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: true})
+}
+
 // TestDashboardNavigation verifies that the cursor moves between the main
 // menu items and that "enter" on "Manage keys" switches to the key screen.
 func TestDashboardNavigation(t *testing.T) {
@@ -63,6 +67,138 @@ func TestDashboardNavigation(t *testing.T) {
 	m = next.(DashboardModel)
 	if m.screen != screenMain {
 		t.Fatalf("screen = %v, want screenMain after Esc", m.screen)
+	}
+}
+
+func TestDashboardVimMenuNavigation(t *testing.T) {
+	db := newTestDatabase(t, false)
+
+	m := newVimDashboardModel(db)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(DashboardModel)
+	if m.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1 after j", m.cursor)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = next.(DashboardModel)
+	if m.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0 after k", m.cursor)
+	}
+
+	for m.cursor < 4 {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = next.(DashboardModel)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = next.(DashboardModel)
+	if m.screen != screenKeys {
+		t.Fatalf("screen = %v, want screenKeys after l", m.screen)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = next.(DashboardModel)
+	if m.screen != screenMain {
+		t.Fatalf("screen = %v, want screenMain after h", m.screen)
+	}
+}
+
+func TestDashboardVimFormModeTransitions(t *testing.T) {
+	db := newTestDatabase(t, false)
+
+	m := newVimDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+
+	if m.formMode != formModeInsert {
+		t.Fatalf("formMode = %v, want insert", m.formMode)
+	}
+
+	m = typeString(m, "ab")
+	if got := m.fieldValue(labelFilePath); got != "ab" {
+		t.Fatalf("fieldValue = %q, want %q", got, "ab")
+	}
+
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(DashboardModel)
+	if m.screen != screenForm {
+		t.Fatalf("screen = %v, want screenForm after leaving insert mode", m.screen)
+	}
+	if m.formMode != formModeNormal {
+		t.Fatalf("formMode = %v, want normal after Esc", m.formMode)
+	}
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(DashboardModel)
+	if m.fieldIdx != 1 {
+		t.Fatalf("fieldIdx = %d, want 1 after j", m.fieldIdx)
+	}
+	if got := m.fieldValue(labelFilePath); got != "ab" {
+		t.Fatalf("fieldValue changed in normal mode: got %q, want %q", got, "ab")
+	}
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	m = next.(DashboardModel)
+	if m.fieldIdx != 2 {
+		t.Fatalf("fieldIdx = %d, want 2 after o", m.fieldIdx)
+	}
+	if m.formMode != formModeInsert {
+		t.Fatalf("formMode = %v, want insert after o", m.formMode)
+	}
+
+	m = typeString(m, "pw")
+	if got := m.fieldValue(labelPassword); got != "pw" {
+		t.Fatalf("password field = %q, want %q", got, "pw")
+	}
+}
+
+func TestDashboardVimNormalModeDoesNotEditFields(t *testing.T) {
+	db := newTestDatabase(t, false)
+
+	m := newVimDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	m = typeString(m, "path")
+
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(DashboardModel)
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(DashboardModel)
+	if got := m.fieldValue(labelFilePath); got != "path" {
+		t.Fatalf("fieldValue = %q, want %q after x in normal mode", got, "path")
+	}
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(DashboardModel)
+	if got := m.fieldValue(labelFilePath); got != "path" {
+		t.Fatalf("fieldValue = %q, want %q after space in normal mode", got, "path")
+	}
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
+	m = next.(DashboardModel)
+	m = typeString(m, "!")
+	if got := m.fieldValue(labelFilePath); got != "path!" {
+		t.Fatalf("fieldValue = %q, want %q after returning to insert mode", got, "path!")
+	}
+}
+
+func TestDashboardStandardFormBindingsUnaffectedWhenVimDisabled(t *testing.T) {
+	db := newTestDatabase(t, false)
+
+	m := NewDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(DashboardModel)
+	if got := m.fieldValue(labelFilePath); got != "j" {
+		t.Fatalf("fieldValue = %q, want %q with vim disabled", got, "j")
+	}
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(DashboardModel)
+	if m.screen != screenMain {
+		t.Fatalf("screen = %v, want screenMain after Esc with vim disabled", m.screen)
 	}
 }
 

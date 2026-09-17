@@ -145,6 +145,73 @@ func (m DashboardModel) fieldValue(label string) string {
 	return ""
 }
 
+func (m DashboardModel) menuKey(msg tea.KeyMsg) string {
+	key := msg.String()
+	if !m.vimEnabled {
+		return key
+	}
+
+	switch key {
+	case "j":
+		return "down"
+	case "k":
+		return "up"
+	case "l":
+		return "enter"
+	case "h":
+		return "esc"
+	default:
+		return key
+	}
+}
+
+func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cmd, bool) {
+	if !m.vimEnabled {
+		return m, nil, false
+	}
+
+	if m.formMode == formModeInsert {
+		if msg.Type == tea.KeyEsc {
+			m.formMode = formModeNormal
+			return m, nil, true
+		}
+		return m, nil, false
+	}
+
+	switch msg.Type {
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "i", "I", "a", "A":
+			m.formMode = formModeInsert
+		case "o", "O":
+			if m.fieldIdx < len(m.fields)-1 {
+				m.fieldIdx++
+			}
+			m.formMode = formModeInsert
+		case "j":
+			if m.fieldIdx < len(m.fields)-1 {
+				m.fieldIdx++
+			}
+		case "k":
+			if m.fieldIdx > 0 {
+				m.fieldIdx--
+			}
+		case "h":
+			m.screen = m.formOrigin
+			m.status = ""
+		case "l":
+			if m.fieldIdx < len(m.fields)-1 {
+				m.fieldIdx++
+			}
+		}
+		return m, nil, true
+	case tea.KeyBackspace, tea.KeySpace:
+		return m, nil, true
+	default:
+		return m, nil, false
+	}
+}
+
 //--------------------------------------------------bubbletea update-----------------------------------------------------------------------------//
 
 func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -183,7 +250,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		}
 
-		switch msg.String() {
+		switch m.menuKey(msg) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
@@ -247,12 +314,17 @@ func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.fields = fieldsFor(action)
 	m.fieldIdx = 0
 	m.formOrigin = origin
+	m.formMode = formModeInsert
 	m.screen = screenForm
 	m.status = ""
 }
 
 // updateForm handles key input while the form screen is active.
 func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleVimFormKey(msg); handled {
+		return next, cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -357,6 +429,14 @@ func (m DashboardModel) View() string {
 
 	case screenForm:
 		sb.WriteString(statusStyle.Render(actionTitle(m.action) + "\n\n"))
+		if m.vimEnabled {
+			mode := "-- INSERT --"
+			if m.formMode == formModeNormal {
+				mode = "-- NORMAL --"
+			}
+			sb.WriteString(statusStyle.Render(mode))
+			sb.WriteString("\n\n")
+		}
 		for i, f := range m.fields {
 			display := string(f.value)
 			if f.password {
@@ -386,9 +466,21 @@ func (m DashboardModel) View() string {
 	}
 
 	if m.screen == screenForm {
-		sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
+		if m.vimEnabled {
+			if m.formMode == formModeInsert {
+				sb.WriteString(statusStyle.Render("Vim insert • Esc: normal • Tab/Enter: next field • Shift+Tab: prev • ctrl+c: quit"))
+			} else {
+				sb.WriteString(statusStyle.Render("Vim normal • j/k: fields • h: cancel • l: next • i/a/o: insert • Enter: next/submit"))
+			}
+		} else {
+			sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
+		}
 	} else {
-		sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+		if m.vimEnabled {
+			sb.WriteString(statusStyle.Render("↑/shift+tab or k | ↓/tab or j: navigate • Enter/l: select • Esc/h/b: back when available • q: quit"))
+		} else {
+			sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+		}
 	}
 	sb.WriteString("\n")
 	return sb.String()
