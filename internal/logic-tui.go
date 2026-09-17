@@ -231,7 +231,7 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 	case tea.KeyBackspace, tea.KeySpace:
 		return m, nil, true
 	default:
-		return m, nil, true
+		return m, nil, false
 	}
 }
 
@@ -360,6 +360,9 @@ func (m DashboardModel) advanceOrSubmitForm() (tea.Model, tea.Cmd) {
 func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if next, cmd, handled := m.handleVimFormKey(msg); handled {
 		return next, cmd
+	}
+	if m.vimEnabled && m.formMode == formModeNormal {
+		return m, nil
 	}
 
 	switch msg.Type {
