@@ -57,6 +57,7 @@ var (
 const (
 	labelFilePath = "File or directory path"
 	labelOutput   = "Output path (optional)"
+	labelFormat   = "Compression format gzip|zip (optional)"
 	labelPassword = "Password"
 	labelLevel    = "Compression level 1-9 (optional)"
 	labelKeyID    = "Key ID"
@@ -77,6 +78,7 @@ func fieldsFor(action actionKind) []formField {
 		return []formField{
 			{label: labelFilePath},
 			{label: labelOutput},
+			{label: labelFormat},
 			{label: labelLevel},
 		}
 	case actionDecompress:
@@ -406,6 +408,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 	password := m.fieldValue(labelPassword)
 	keyID := m.fieldValue(labelKeyID)
 	levelStr := m.fieldValue(labelLevel)
+	format := m.fieldValue(labelFormat)
 	confirm := m.fieldValue(labelConfirm)
 
 	switch action {
@@ -443,12 +446,12 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				}
 				level = lv
 			}
-			if err := CompressFile(file, output, level); err != nil {
+			if err := CompressFileWithFormat(file, output, format, level); err != nil {
 				return actionResultMsg{err: err}
 			}
 			dst := output
 			if dst == "" {
-				dst = deriveCompressOutput(file)
+				dst = deriveCompressOutput(file, format)
 			}
 			return actionResultMsg{message: fmt.Sprintf("Compressed: %s → %s", file, dst)}
 		}

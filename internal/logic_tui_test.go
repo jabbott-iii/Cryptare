@@ -234,6 +234,86 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDashboardCompressDecompressZipRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "zip-bundle")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "empty"), 0o755); err != nil {
+		t.Fatalf("create empty source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "file.txt"), []byte("zip tui data"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	db := newTestDatabase(t, false)
+
+	m := NewDashboardModel(db)
+	m.startForm(actionCompress, screenMain)
+	m = typeString(m, srcDir)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
+	m = next.(DashboardModel)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // format
+	m = next.(DashboardModel)
+	m = typeString(m, "zip")
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // level
+	m = next.(DashboardModel)
+	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
+	m = next.(DashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for compress submission")
+	}
+
+	msg := cmd()
+	result, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("compress action failed: %v", result.err)
+	}
+
+	archive := srcDir + zipExt
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("zip archive not created: %v", err)
+	}
+	if err := os.RemoveAll(srcDir); err != nil {
+		t.Fatalf("remove source directory: %v", err)
+	}
+
+	m.startForm(actionDecompress, screenMain)
+	m = typeString(m, archive)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
+	m = next.(DashboardModel)
+	next, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for decompress submission")
+	}
+
+	msg = cmd()
+	result, ok = msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("decompress action failed: %v", result.err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(srcDir, "nested", "file.txt"))
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(data) != "zip tui data" {
+		t.Fatalf("content mismatch: got %q", string(data))
+	}
+	if info, err := os.Stat(filepath.Join(srcDir, "empty")); err != nil {
+		t.Fatalf("expected empty directory not restored: %v", err)
+	} else if !info.IsDir() {
+		t.Fatal("restored empty path is not a directory")
+	}
+}
+
 // TestDashboardKeysGenerateAndExport drives the "Generate a new key" and
 // "Export a key" forms and verifies the key is stored and exported.
 func TestDashboardKeysGenerateAndExport(t *testing.T) {

@@ -133,19 +133,20 @@ func newDecryptCmd() *cobra.Command {
 func newCompressCmd() *cobra.Command {
 	var output string
 	var level int
+	var format string
 
 	cmd := &cobra.Command{
 		Use:   "compress [path]",
-		Short: "Compress a file or directory with gzip",
+		Short: "Compress a file or directory with gzip or zip",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
-			if err := CompressFile(src, output, level); err != nil {
+			if err := CompressFileWithFormat(src, output, format, level); err != nil {
 				return err
 			}
 			dst := output
 			if dst == "" {
-				dst = deriveCompressOutput(src)
+				dst = deriveCompressOutput(src, format)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -154,7 +155,8 @@ func newCompressCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output path (default: <file>.gz or <dir>.tar.gz)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output path (default: <file>.gz or <dir>.tar.gz for gzip, <path>.zip for zip)")
+	cmd.Flags().StringVarP(&format, "format", "f", "", "compression format: gzip or zip (default: gzip)")
 	cmd.Flags().IntVarP(&level, "level", "l", -1, "compression level 1-9 (default: -1 = default)")
 	return cmd
 }
@@ -166,7 +168,7 @@ func newDecompressCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "decompress [archive]",
-		Short: "Decompress a gzip file or extract a tar.gz archive",
+		Short: "Decompress gzip/tar.gz files or extract zip archives",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
@@ -442,10 +444,17 @@ func deriveDecryptOutput(src string) string {
 	return src + ".dec"
 }
 
-func deriveCompressOutput(src string) string {
+func deriveCompressOutput(src, format string) string {
 	info, err := os.Stat(src)
+	selectedFormat, formatErr := resolveCompressFormat(format, "")
+	if formatErr != nil {
+		selectedFormat = formatGzip
+	}
 	if err == nil {
-		return defaultCompressOutput(src, info.IsDir())
+		return defaultCompressOutput(src, info.IsDir(), selectedFormat)
+	}
+	if selectedFormat == formatZip {
+		return src + zipExt
 	}
 	return src + gzExt
 }

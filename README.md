@@ -12,8 +12,9 @@
 
 - **Compression & Decompression**
   - Compress files with gzip
+  - Compress files or directories as zip archives
   - Compress directories as tar.gz archives
-  - Decompress gzip files and tar.gz archives
+  - Decompress gzip files, tar.gz archives, and zip archives
   - Optional compression levels
   - Automatic output name derivation
 
@@ -64,25 +65,28 @@ Examples:
 
 ### compress
 
-- cryptare compress [path] — compress a file with gzip or a directory as tar.gz
+- cryptare compress [path] — compress with gzip (default) or zip
 - cryptare compress [path] --output [path] — write to a custom output file or archive
+- cryptare compress [path] --format [gzip|zip] — select compression format
 - cryptare compress [path] --level [1-9] — set gzip compression level
 
 Examples:
 - cryptare compress ./artifact.bin
 - cryptare compress ./artifact.bin --output ./artifact.bin.gz
 - cryptare compress ./build --output ./build-backup.tar.gz
+- cryptare compress ./build --format zip --output ./build-backup.zip
 - cryptare compress ./artifact.bin --level 9
 
 ### decompress
 
-- cryptare decompress [archive] — decompress a gzip file or extract a tar.gz archive
+- cryptare decompress [archive] — decompress a gzip file or extract a tar.gz/zip archive
 - cryptare decompress [archive] --output [path] — write to a custom output file or extract to a directory
 
 Examples:
 - cryptare decompress ./artifact.bin.gz
 - cryptare decompress ./artifact.bin.gz --output ./artifact.bin
 - cryptare decompress ./build-backup.tar.gz --output ./restored-build
+- cryptare decompress ./build-backup.zip --output ./restored-build
 
 ### keys
 
