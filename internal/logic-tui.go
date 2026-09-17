@@ -202,27 +202,32 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 		switch string(msg.Runes) {
 		case "i", "a":
 			m.formMode = formModeInsert
+			return m, nil, true
 		case "o":
 			if m.fieldIdx < len(m.fields)-1 {
 				m.fieldIdx++
 			}
 			m.formMode = formModeInsert
+			return m, nil, true
 		case "j":
 			if m.fieldIdx < len(m.fields)-1 {
 				m.fieldIdx++
 			}
+			return m, nil, true
 		case "k":
 			if m.fieldIdx > 0 {
 				m.fieldIdx--
 			}
+			return m, nil, true
 		case "h":
 			m.screen = m.formOrigin
 			m.status = ""
+			return m, nil, true
 		case "l":
 			next, cmd := m.advanceOrSubmitForm()
 			return next.(DashboardModel), cmd, true
 		}
-		return m, nil, true
+		return m, nil, false
 	case tea.KeyBackspace, tea.KeySpace:
 		return m, nil, true
 	default:
@@ -396,6 +401,9 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyRunes:
+		if m.vimEnabled && m.formMode == formModeNormal {
+			return m, nil
+		}
 		if len(m.fields) > 0 {
 			f := &m.fields[m.fieldIdx]
 			f.value = append(f.value, msg.Runes...)
