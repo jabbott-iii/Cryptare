@@ -202,9 +202,8 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 			m.screen = m.formOrigin
 			m.status = ""
 		case "l":
-			if m.fieldIdx < len(m.fields)-1 {
-				m.fieldIdx++
-			}
+			next, cmd := m.advanceOrSubmitForm()
+			return next.(DashboardModel), cmd, true
 		}
 		return m, nil, true
 	case tea.KeyBackspace, tea.KeySpace:
@@ -321,6 +320,20 @@ func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.status = ""
 }
 
+func (m DashboardModel) advanceOrSubmitForm() (tea.Model, tea.Cmd) {
+	if m.fieldIdx < len(m.fields)-1 {
+		m.fieldIdx++
+		return m, nil
+	}
+
+	cmd := m.buildActionCmd()
+	m.busy = true
+	m.screen = m.formOrigin
+	m.status = "Working…"
+	m.isError = false
+	return m, cmd
+}
+
 // updateForm handles key input while the form screen is active.
 func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if next, cmd, handled := m.handleVimFormKey(msg); handled {
@@ -356,16 +369,7 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		if m.fieldIdx < len(m.fields)-1 {
-			m.fieldIdx++
-			return m, nil
-		}
-		cmd := m.buildActionCmd()
-		m.busy = true
-		m.screen = m.formOrigin
-		m.status = "Working…"
-		m.isError = false
-		return m, cmd
+		return m.advanceOrSubmitForm()
 
 	case tea.KeySpace:
 		if len(m.fields) > 0 {

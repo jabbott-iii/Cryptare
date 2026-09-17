@@ -203,6 +203,57 @@ func TestDashboardVimNormalModeDoesNotEditFields(t *testing.T) {
 	}
 }
 
+func TestDashboardVimNormalModeLSubmitsLastField(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "submit.txt")
+	if err := os.WriteFile(srcFile, []byte("vim submit"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	db := newTestDatabase(t, false)
+
+	m := newVimDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	m = typeString(m, srcFile)
+
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, "hunter2")
+
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(DashboardModel)
+	if m.formMode != formModeNormal {
+		t.Fatalf("formMode = %v, want normal", m.formMode)
+	}
+
+	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = next.(DashboardModel)
+	if cmd == nil {
+		t.Fatal("expected a command to be returned for vim l submission")
+	}
+	if m.screen != screenMain {
+		t.Fatalf("screen = %v, want screenMain after submission", m.screen)
+	}
+	if !m.busy {
+		t.Fatal("expected busy=true after submission")
+	}
+
+	msg := cmd()
+	result, ok := msg.(actionResultMsg)
+	if !ok {
+		t.Fatalf("expected actionResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("encrypt action failed: %v", result.err)
+	}
+
+	if _, err := os.Stat(srcFile + encExt); err != nil {
+		t.Fatalf("encrypted file not created: %v", err)
+	}
+}
+
 func TestDashboardStandardFormBindingsUnaffectedWhenVimDisabled(t *testing.T) {
 	db := newTestDatabase(t, false)
 
