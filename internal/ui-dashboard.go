@@ -33,6 +33,10 @@ type actionResultMsg struct {
 	reload  bool // true if the stored key list should be reloaded
 }
 
+type dashboardOptions struct {
+	vimEnabled bool
+}
+
 //--------------------------------------------------model----------------------------------------------------------------------------------------//
 
 type dashboardScreen int
@@ -41,6 +45,13 @@ const (
 	screenMain dashboardScreen = iota
 	screenKeys
 	screenForm
+)
+
+type formInputMode int
+
+const (
+	formModeInsert formInputMode = iota
+	formModeNormal
 )
 
 // actionKind identifies which file/key operation a form screen submits.
@@ -82,6 +93,8 @@ type DashboardModel struct {
 	fields     []formField
 	fieldIdx   int
 	formOrigin dashboardScreen
+	formMode   formInputMode
+	vimEnabled bool
 }
 
 var mainMenuItems = []string{
@@ -101,7 +114,17 @@ var keysMenuItems = []string{
 
 // NewDashboardModel creates the initial dashboard model.
 func NewDashboardModel(db *Database) DashboardModel {
-	return DashboardModel{db: db}
+	return NewDashboardModelWithOptions(db, dashboardOptions{})
+}
+
+// NewDashboardModelWithOptions creates the initial dashboard model with the
+// provided dashboard options.
+func NewDashboardModelWithOptions(db *Database, opts dashboardOptions) DashboardModel {
+	return DashboardModel{
+		db:         db,
+		formMode:   formModeInsert,
+		vimEnabled: opts.vimEnabled,
+	}
 }
 
 //--------------------------------------------------bubbletea interface--------------------------------------------------------------------------//

@@ -33,11 +33,13 @@ import (
 
 // NewRootCmd is the cryptare application entry point.
 func NewRootCmd(db *Database) *cobra.Command {
+	var vim bool
+
 	cmd := &cobra.Command{
 		Use:   "cryptare",
 		Short: "A file encryption and management tool",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := tea.NewProgram(NewDashboardModel(db), tea.WithAltScreen())
+			p := tea.NewProgram(NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: vim}), tea.WithAltScreen())
 			_, err := p.Run()
 			return err
 		},
@@ -50,6 +52,7 @@ func NewRootCmd(db *Database) *cobra.Command {
 		newDecompressCmd(),
 		newKeysCmd(db),
 	)
+	cmd.Flags().BoolVar(&vim, "vim", false, "enable vim keybindings in the TUI")
 
 	return cmd
 }

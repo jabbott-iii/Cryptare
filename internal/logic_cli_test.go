@@ -34,6 +34,14 @@ func TestNewRootCmd(t *testing.T) {
 	if cmd.Use != "cryptare" {
 		t.Errorf("Root command Use = %q, want cryptare", cmd.Use)
 	}
+
+	flag := cmd.Flags().Lookup("vim")
+	if flag == nil {
+		t.Fatal("expected --vim flag to be registered on root command")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--vim default = %q, want false", flag.DefValue)
+	}
 }
 
 // TestDeriveDecryptOutput tests the deriveDecryptOutput function to ensure it correctly derives the output file name for decryption.

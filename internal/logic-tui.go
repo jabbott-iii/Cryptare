@@ -145,6 +145,96 @@ func (m DashboardModel) fieldValue(label string) string {
 	return ""
 }
 
+func (m DashboardModel) menuKey(msg tea.KeyMsg) string {
+	key := msg.String()
+	if !m.vimEnabled {
+		return key
+	}
+
+	switch key {
+	case "j":
+		return "down"
+	case "k":
+		return "up"
+	case "l":
+		return "enter"
+	case "h", "b":
+		return "esc"
+	default:
+		return key
+	}
+}
+
+func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cmd, bool) {
+	if !m.vimEnabled {
+		return m, nil, false
+	}
+
+	if m.formMode == formModeInsert {
+		if msg.Type == tea.KeyEsc {
+			m.formMode = formModeNormal
+			return m, nil, true
+		}
+		return m, nil, false
+	}
+
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit, true
+	case tea.KeyEsc:
+		m.screen = m.formOrigin
+		m.status = ""
+		return m, nil, true
+	case tea.KeyTab, tea.KeyDown:
+		if m.fieldIdx < len(m.fields)-1 {
+			m.fieldIdx++
+		}
+		return m, nil, true
+	case tea.KeyShiftTab, tea.KeyUp:
+		if m.fieldIdx > 0 {
+			m.fieldIdx--
+		}
+		return m, nil, true
+	case tea.KeyEnter:
+		next, cmd := m.advanceOrSubmitForm()
+		return next.(DashboardModel), cmd, true
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "i", "a":
+			m.formMode = formModeInsert
+			return m, nil, true
+		case "o":
+			if m.fieldIdx < len(m.fields)-1 {
+				m.fieldIdx++
+			}
+			m.formMode = formModeInsert
+			return m, nil, true
+		case "j":
+			if m.fieldIdx < len(m.fields)-1 {
+				m.fieldIdx++
+			}
+			return m, nil, true
+		case "k":
+			if m.fieldIdx > 0 {
+				m.fieldIdx--
+			}
+			return m, nil, true
+		case "h":
+			m.screen = m.formOrigin
+			m.status = ""
+			return m, nil, true
+		case "l":
+			next, cmd := m.advanceOrSubmitForm()
+			return next.(DashboardModel), cmd, true
+		}
+		return m, nil, false
+	case tea.KeyBackspace, tea.KeySpace:
+		return m, nil, true
+	default:
+		return m, nil, false
+	}
+}
+
 //--------------------------------------------------bubbletea update-----------------------------------------------------------------------------//
 
 func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -183,7 +273,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		}
 
-		switch msg.String() {
+		switch m.menuKey(msg) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
@@ -247,12 +337,34 @@ func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.fields = fieldsFor(action)
 	m.fieldIdx = 0
 	m.formOrigin = origin
+	m.formMode = formModeInsert
 	m.screen = screenForm
 	m.status = ""
 }
 
+func (m DashboardModel) advanceOrSubmitForm() (tea.Model, tea.Cmd) {
+	if m.fieldIdx < len(m.fields)-1 {
+		m.fieldIdx++
+		return m, nil
+	}
+
+	cmd := m.buildActionCmd()
+	m.busy = true
+	m.screen = m.formOrigin
+	m.status = "Working…"
+	m.isError = false
+	return m, cmd
+}
+
 // updateForm handles key input while the form screen is active.
 func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleVimFormKey(msg); handled {
+		return next, cmd
+	}
+	if m.vimEnabled && m.formMode == formModeNormal {
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -282,16 +394,7 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		if m.fieldIdx < len(m.fields)-1 {
-			m.fieldIdx++
-			return m, nil
-		}
-		cmd := m.buildActionCmd()
-		m.busy = true
-		m.screen = m.formOrigin
-		m.status = "Working…"
-		m.isError = false
-		return m, cmd
+		return m.advanceOrSubmitForm()
 
 	case tea.KeySpace:
 		if len(m.fields) > 0 {
@@ -301,6 +404,9 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyRunes:
+		if m.vimEnabled && m.formMode == formModeNormal {
+			return m, nil
+		}
 		if len(m.fields) > 0 {
 			f := &m.fields[m.fieldIdx]
 			f.value = append(f.value, msg.Runes...)
@@ -357,6 +463,14 @@ func (m DashboardModel) View() string {
 
 	case screenForm:
 		sb.WriteString(statusStyle.Render(actionTitle(m.action) + "\n\n"))
+		if m.vimEnabled {
+			mode := "-- INSERT --"
+			if m.formMode == formModeNormal {
+				mode = "-- NORMAL --"
+			}
+			sb.WriteString(statusStyle.Render(mode))
+			sb.WriteString("\n\n")
+		}
 		for i, f := range m.fields {
 			display := string(f.value)
 			if f.password {
@@ -386,9 +500,21 @@ func (m DashboardModel) View() string {
 	}
 
 	if m.screen == screenForm {
-		sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
+		if m.vimEnabled {
+			if m.formMode == formModeInsert {
+				sb.WriteString(statusStyle.Render("Vim insert • Esc: normal • cancel from normal with Esc/h • Tab/Enter: next field • Shift+Tab: prev • ctrl+c: quit"))
+			} else {
+				sb.WriteString(statusStyle.Render("Vim normal • j/k: fields • h: cancel • l: next • i/a/o: insert • Enter: next/submit"))
+			}
+		} else {
+			sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
+		}
 	} else {
-		sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+		if m.vimEnabled {
+			sb.WriteString(statusStyle.Render("↑/shift+tab or k | ↓/tab or j: navigate • Enter/l: select • Esc/h/b: back when available • q: quit"))
+		} else {
+			sb.WriteString(statusStyle.Render("↑/shift+tab | ↓/tab: navigate • Enter: select • q: quit"))
+		}
 	}
 	sb.WriteString("\n")
 	return sb.String()
