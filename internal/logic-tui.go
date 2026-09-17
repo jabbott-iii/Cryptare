@@ -200,9 +200,9 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 		return next.(DashboardModel), cmd, true
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
-		case "i", "I", "a", "A":
+		case "i", "a":
 			m.formMode = formModeInsert
-		case "o", "O":
+		case "o":
 			if m.fieldIdx < len(m.fields)-1 {
 				m.fieldIdx++
 			}
@@ -493,7 +493,7 @@ func (m DashboardModel) View() string {
 			if m.formMode == formModeInsert {
 				sb.WriteString(statusStyle.Render("Vim insert • Esc: normal • cancel from normal with Esc/h • Tab/Enter: next field • Shift+Tab: prev • ctrl+c: quit"))
 			} else {
-				sb.WriteString(statusStyle.Render("Vim normal • j/k: fields • h: cancel • l: next • i/a/o/I/A/O: insert • Enter: next/submit"))
+				sb.WriteString(statusStyle.Render("Vim normal • j/k: fields • h: cancel • l: next • i/a/o: insert • Enter: next/submit"))
 			}
 		} else {
 			sb.WriteString(statusStyle.Render("Tab/Enter: next field • Shift+Tab: prev • Esc: cancel • ctrl+c: quit"))
