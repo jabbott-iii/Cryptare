@@ -103,6 +103,20 @@ func TestDashboardVimMenuNavigation(t *testing.T) {
 	if m.screen != screenMain {
 		t.Fatalf("screen = %v, want screenMain after h", m.screen)
 	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(DashboardModel)
+	for m.cursor < 4 {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = next.(DashboardModel)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = next.(DashboardModel)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	m = next.(DashboardModel)
+	if m.screen != screenMain {
+		t.Fatalf("screen = %v, want screenMain after b", m.screen)
+	}
 }
 
 func TestDashboardVimFormModeTransitions(t *testing.T) {

@@ -158,7 +158,7 @@ func (m DashboardModel) menuKey(msg tea.KeyMsg) string {
 		return "up"
 	case "l":
 		return "enter"
-	case "h":
+	case "h", "b":
 		return "esc"
 	default:
 		return key
