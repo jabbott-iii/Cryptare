@@ -286,7 +286,7 @@ func TestDashboardCompressDecompressZipRoundTrip(t *testing.T) {
 	m = typeString(m, archive)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
 	m = next.(DashboardModel)
-	next, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
+	_, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	if cmd == nil {
 		t.Fatal("expected a command to be returned for decompress submission")
 	}
