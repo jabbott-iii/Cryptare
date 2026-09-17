@@ -491,7 +491,7 @@ func (m DashboardModel) View() string {
 	if m.screen == screenForm {
 		if m.vimEnabled {
 			if m.formMode == formModeInsert {
-				sb.WriteString(statusStyle.Render("Vim insert • Esc: normal • Tab/Enter: next field • Shift+Tab: prev • ctrl+c: quit"))
+				sb.WriteString(statusStyle.Render("Vim insert • Esc: normal • cancel from normal with Esc/h • Tab/Enter: next field • Shift+Tab: prev • ctrl+c: quit"))
 			} else {
 				sb.WriteString(statusStyle.Render("Vim normal • j/k: fields • h: cancel • l: next • i/a/o/I/A/O: insert • Enter: next/submit"))
 			}
