@@ -1,0 +1,100 @@
+# Repository Map
+
+Last updated: 2026-09-23. Architecture rules live in [`maint.md`](maint.md).
+
+## Structure
+
+```text
+Cryptare/
+├── main.go                  # entry: open DB, build Cobra root command, execute
+├── database_path.go         # CRYPTARE_DB_PATH lookup (default ./cryptare.db)
+├── database_path_test.go
+├── internal/                # single Go package `internal`
+│   ├── crypto.go            # KDF, AES-GCM file/dir encryption, key blobs, key export/import
+│   ├── compress.go          # gzip / tar.gz / zip create + extract; closeWithError helper
+│   ├── database.go          # GORM + SQLite, KeyModel, key CRUD
+│   ├── logic-cli.go         # Cobra commands, password/confirm prompts, output-name helpers
+│   ├── ui-dashboard.go      # Bubble Tea model types, messages, constructors, Init
+│   ├── logic-tui.go         # Bubble Tea Update/View, forms, vim mode, action commands
+│   └── *_test.go            # unit, CLI and TUI tests
+├── .github/workflows/       # ci.yml, cd.yml, docker.yml, security.yml
+├── .devcontainer/           # Ubuntu + Go + Neovim dev container
+├── Dockerfile               # CGO build (golang:1.26-alpine) → alpine:3.22 runtime
+├── Makefile                 # release tagging only: tag, push-tag, release
+├── intel/                   # engineering docs (this directory)
+├── AGENTS.md, README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
+├── LICENSE (Apache-2.0), NOTICE, CODEOWNERS (@jabbott-iii)
+└── .idea/ (tracked), .junie/ (untracked, empty)   # IDE / agent workspace files
+```
+
+## Components
+
+| Component | Key symbols | Notes |
+|---|---|---|
+| Entry | `main`, `databasePathFromEnv` | Opens the DB before any command runs, even `--help`. |
+| CLI | `NewRootCmd`, `new*Cmd`, `readPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. |
+| TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. |
+| Crypto | `EncryptFile`, `DecryptFile`, `encryptBytesWithAAD`, `encryptDirectory`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. |
+| Compression | `CompressFileWithFormat`, `DecompressFile`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip` | Rejects symlinks, special files and `..` traversal. |
+| Storage | `NewDatabase`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). |
+
+## Dependencies
+
+| Module | Version | Used for |
+|---|---|---|
+| `github.com/spf13/cobra` | v1.10.2 | CLI |
+| `github.com/charmbracelet/bubbletea` / `lipgloss` | v1.3.10 / v1.1.0 | TUI |
+| `gorm.io/gorm` + `gorm.io/driver/sqlite` | v1.31.2 / v1.6.0 | Storage, via `github.com/mattn/go-sqlite3` v1.14.52 (**CGO**) |
+| `golang.org/x/crypto` | v0.56.0 | `pbkdf2` only |
+
+## Component dependencies
+
+```mermaid
+flowchart TD
+  main["main.go<br/>databasePathFromEnv"] --> dbfile[("SQLite file<br/>cryptare.db")]
+  main --> root["NewRootCmd<br/>logic-cli.go"]
+  root -->|no subcommand| tui["TUI<br/>ui-dashboard.go + logic-tui.go"]
+  root --> cli["encrypt · decrypt · compress · decompress · keys"]
+  cli --> crypto["crypto.go"]
+  cli --> compress["compress.go"]
+  cli --> database["database.go"]
+  tui --> crypto
+  tui --> compress
+  tui --> database
+  crypto -->|"writeTarGz / extractTarGz"| compress
+  database --> dbfile
+```
+
+## Encryption data flow
+
+```mermaid
+flowchart LR
+  pw["password"] --> kdf["PBKDF2-HMAC-SHA256<br/>100k iterations, random 16-byte salt"] --> key["256-bit key"]
+  file["file bytes"] --> gcm1["AES-256-GCM<br/>random 12-byte nonce"]
+  key --> gcm1 --> out1["salt ‖ nonce ‖ ciphertext → *.enc"]
+  dir["directory"] --> tmp["plaintext tar.gz<br/>temp file in TMPDIR"] --> gcm2["AES-256-GCM<br/>AAD = directory magic"]
+  key --> gcm2 --> out2["magic ‖ salt ‖ nonce ‖ ciphertext → *.enc"]
+```
+
+Decryption reverses the flow. `DecryptFile` checks for the directory magic prefix
+first and restores the tree with `extractTarGz`; otherwise it writes one plaintext file.
+
+## Key management flow
+
+```mermaid
+flowchart LR
+  gen["keys generate"] --> rk["GenerateKey<br/>32 random bytes"] --> eb["EncryptKeyBlob<br/>(master password)"] --> row[("key_models row")]
+  row --> exp["keys export"] --> env["JSON KeyExport v1<br/>(holds encrypted blob)"] --> eb2["EncryptKeyBlob<br/>(export password)"] --> ckey["*.ckey"]
+  ckey --> imp["keys import"] --> dec["DecryptKeyBlob → JSON"] --> row
+```
+
+Stored keys are not used by any encrypt or decrypt path today (Q-002 in `notes.md`).
+
+## CI/CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | push/PR (all branches) | Ubuntu, Windows and macOS matrix: `go mod tidy` diff, `go vet`, golangci-lint v2.13.2, `go test` with coverage (Codecov), cross-compiles 3 binaries without running them |
+| `security.yml` | push/PR, weekly | CodeQL (Go, security-extended). gosec runs with `-no-fail`, but its SARIF output is never uploaded |
+| `docker.yml` | push/PR to `main` | `docker build`, then `docker run … --help` smoke test |
+| `cd.yml` | `v*` tags, manual | Builds 6 OS/arch targets with `CGO_ENABLED=0` (see BUG-001), writes `checksums.txt`, creates a GitHub Release |

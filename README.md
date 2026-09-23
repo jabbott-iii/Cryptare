@@ -1,6 +1,10 @@
 <img width="720" height="430" alt="cryptarev1" src="https://github.com/user-attachments/assets/b89d0d00-0d77-44b0-985d-a4d7ce831436" />
 
-## Features:
+# Cryptare
+
+Cryptare is a terminal tool for encrypting, decrypting, compressing and extracting files and directories. It combines a scriptable command-line interface with an interactive terminal UI and a small local store for password-protected keys. It is meant for people who want password-based file protection and archiving from the command line.
+
+## Features
 
 - **File Encryption & Decryption**
   - Encrypt files with AES-256-GCM
@@ -29,6 +33,67 @@
   - Terminal user interface for file and key management
   - Launches automatically when run without subcommands
 
+## Use cases
+
+- Protect a sensitive document before copying it to a USB drive or cloud storage: `cryptare encrypt ./tax-return.pdf`
+- Back up a project folder as one encrypted file, then restore it later: `cryptare encrypt ./project-dir --output ./project-dir-backup.enc`, then `cryptare decrypt ./project-dir-backup.enc --output ./restored-project-dir`
+- Package build output as a tar.gz or zip archive for sharing, and extract archives you receive: `cryptare compress ./build --format zip`, `cryptare decompress ./build-backup.tar.gz`
+- Use menus instead of flags: run `cryptare` (or `cryptare --vim` for vim-style keys)
+
+## Prerequisites
+
+- To build from source: Go 1.26 or newer, plus a C compiler (gcc or clang) with CGO enabled. The SQLite driver used for the key store requires CGO. On Windows this means a CGO-capable toolchain such as MinGW-w64.
+- Optional: Docker, to build and run the container image.
+
+## Installation
+
+### Build from source
+
+```bash
+git clone https://github.com/jabbott-iii/Cryptare.git
+cd Cryptare
+CGO_ENABLED=1 go build -o cryptare .
+sudo mv cryptare /usr/local/bin/cryptare   # optional: put it on your PATH
+```
+
+### Release archives
+
+Tagged releases publish these assets, built by `.github/workflows/cd.yml`, together with a `checksums.txt` file (SHA-256):
+
+| Platform | Asset |
+|---|---|
+| Linux x86-64 | `cryptare_linux_amd64.tar.gz` |
+| Linux ARM64 | `cryptare_linux_arm64.tar.gz` |
+| macOS Intel | `cryptare_darwin_amd64.tar.gz` |
+| macOS Apple silicon | `cryptare_darwin_arm64.tar.gz` |
+| Windows x86-64 | `cryptare_windows_amd64.zip` |
+| Windows ARM64 | `cryptare_windows_arm64.zip` |
+
+> ⚠️ **Known issue:** every release published so far (up to and including v1.0.0) was built with CGO disabled. Those binaries exit on every command with `go-sqlite3 requires cgo to work`. Build from source until a fixed release is available. See BUG-001 in [intel/notes.md](intel/notes.md).
+
+Once a working release is available, install it on Linux like this:
+
+```bash
+sha256sum --ignore-missing -c checksums.txt
+tar -xzf cryptare_linux_amd64.tar.gz
+chmod +x cryptare_linux_amd64
+sudo mv cryptare_linux_amd64 /usr/local/bin/cryptare
+```
+
+- macOS: use the matching `darwin` archive in the same way, and check its hash with `shasum -a 256`.
+- Windows: extract the zip, rename `cryptare_windows_amd64.exe` to `cryptare.exe`, and add it to your PATH.
+
+## Quick start
+
+```bash
+cryptare encrypt ./secret.txt        # prompts for a password; prints "Encrypted: ./secret.txt → ./secret.txt.enc"
+cryptare decrypt ./secret.txt.enc    # prompts for the password; prints "Decrypted: ./secret.txt.enc → ./secret.txt"
+cryptare                             # opens the interactive TUI
+```
+
+- Decryption writes to the output path without asking, replacing any existing file there.
+- ⚠️ **Known issue:** the interactive password prompt keeps only the text before the first space, and shows what you type. Until it is fixed, use a password without spaces at the prompt. A file you encrypted at the prompt with a multi-word passphrase can only be decrypted with its first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
+
 ## Core CLI capabilities
 
 Cryptare is organized into focused command groups:
@@ -36,7 +101,7 @@ Cryptare is organized into focused command groups:
 - cryptare encrypt — encrypt a file or directory
 - cryptare decrypt — decrypt a file or encrypted directory archive
 - cryptare compress — compress a file or directory
-- cryptare decompress — decompress a gzip file or tar.gz archive
+- cryptare decompress — decompress a gzip file or extract a tar.gz/zip archive
 - cryptare keys — manage encryption keys
 
 ### encrypt
@@ -68,7 +133,8 @@ Examples:
 - cryptare compress [path] — compress with gzip (default) or zip
 - cryptare compress [path] --output [path] — write to a custom output file or archive
 - cryptare compress [path] --format [gzip|zip] — select compression format
-- cryptare compress [path] --level [1-9] — set gzip compression level
+- cryptare compress [path] --level [1-9] — set the compression level (applies to gzip and zip)
+- zip is also selected automatically when --output ends in .zip
 
 Examples:
 - cryptare compress ./artifact.bin
@@ -117,44 +183,18 @@ Examples:
   - Forms start in insert mode so file paths and passwords can be typed normally.
   - Press `Esc` in a form to switch to normal mode, then use `j`/`k` to change fields, `h` to cancel, `l` or `Enter` to advance, and `i`/`a`/`o` to return to insert mode. `o` moves to the next field before re-entering insert mode.
 
-## Install:
+## Configuration
 
-Download the appropriate binary for your platform below and make it executable:
+| Setting | Default | Description |
+|---|---|---|
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. It is opened, and created if missing, on every run, including `--help`. |
+| `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
-Linux:
-```
-chmod +x cryptare-linux-amd64
-```
-```
-sudo mv cryptare-linux-amd64 /usr/local/bin/cryptare
-```
- or
-```
-chmod +x cryptare-linux-arm64
-```
-```
-sudo mv cryptare-linux-arm64 /usr/local/bin/cryptare
-```
-macOS:
-```
-chmod +x cryptare-macos-arm64
-```
-```
-sudo mv cryptare-macos-arm64 /usr/local/bin/cryptare
-```
-  or
-```
-chmod +x cryptare-macos-amd64
-```
-```
-sudo mv cryptare-macos-amd64 /usr/local/bin/cryptare
-```
-Windows:
-```
-Download cryptare-windows-amd64.exe and add it to your PATH as cryptare.
-```
+Command flags (`--output`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
 
 ## Docker
+
+The image builds Cryptare with CGO enabled for `linux/amd64`. It sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume.
 
 ### Build
 ```bash
@@ -180,3 +220,36 @@ docker run --rm -it \
 docker run --rm -it cryptare:latest --help
 docker run --rm -it -v ~/.cryptare:/app/data cryptare:latest keys list
 ```
+
+## Testing and quality checks
+
+Run these from the repository root (they mirror CI):
+
+```bash
+gofmt -s -l .          # lists files that need formatting; should print nothing
+go vet ./...
+golangci-lint run      # CI uses v2.13.2
+go test ./...
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
+
+## Project structure
+
+```text
+main.go, database_path.go   entry point and CRYPTARE_DB_PATH handling
+internal/crypto.go          AES-256-GCM encryption, key blobs, key export/import
+internal/compress.go        gzip, tar.gz and zip creation and extraction
+internal/database.go        SQLite key store (GORM)
+internal/logic-cli.go       Cobra commands
+internal/ui-dashboard.go,
+internal/logic-tui.go       Bubble Tea terminal UI
+intel/                      architecture, security, plans and repository map
+.github/workflows/          CI, CD, Docker and security workflows
+```
+
+[intel/map.md](intel/map.md) has the detailed map and diagrams.
+
+## Contributing and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Cryptare is licensed under the Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
