@@ -44,6 +44,11 @@ const (
 	directoryArtifactMagicV1 = "CRYPTARE-DIR-ENC\x00"
 )
 
+// ErrEmptyPassword is returned when an encryption operation is given an empty
+// password. Decryption still accepts one so that files, archives and key blobs
+// created before this check was added remain readable.
+var ErrEmptyPassword = errors.New("password must not be empty")
+
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
 // deriveKey derives a 32-byte AES key from a password and salt using PBKDF2-SHA256.
@@ -52,8 +57,13 @@ func deriveKey(password string, salt []byte) []byte {
 }
 
 // EncryptFile encrypts src with AES-256-GCM using password, writing to dst.
-// If dst is empty, the output path is src + ".enc".
+// If dst is empty, the output path is src + ".enc". An empty password is
+// rejected with ErrEmptyPassword.
 func EncryptFile(src, dst, password string) error {
+	if password == "" {
+		return ErrEmptyPassword
+	}
+
 	info, err := os.Lstat(src)
 	if err != nil {
 		return fmt.Errorf("lstat source path: %w", err)
@@ -285,7 +295,12 @@ func GenerateKey() ([]byte, error) {
 }
 
 // EncryptKeyBlob encrypts rawKey with masterPassword and returns a base64 blob.
+// An empty masterPassword is rejected with ErrEmptyPassword.
 func EncryptKeyBlob(rawKey []byte, masterPassword string) (string, error) {
+	if masterPassword == "" {
+		return "", ErrEmptyPassword
+	}
+
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)

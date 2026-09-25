@@ -129,3 +129,76 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   - end to end, the old binary in a pseudo-terminal crashed with
     `unhandled default case` after Left/Delete/Home/End in the Encrypt form; the fixed
     binary stayed up and exited cleanly on Ctrl+C.
+
+## 2026-09-24 — Empty passwords rejected for encryption (plan 1.2, SEC-001)
+
+- `internal/crypto.go`: new sentinel `ErrEmptyPassword`, following the `ErrKeyNotFound`
+  pattern. `EncryptFile` (files and directories) and `EncryptKeyBlob` (key generation,
+  and `ExportKeyToFile` through it) return it before doing any work. The check is in the
+  core layer, so the CLI and TUI both inherit it (`maint.md` §2).
+- Decryption is unchanged and still accepts an empty password, so artifacts created
+  before the fix stay readable. Through the TUI's Decrypt form, a blank password
+  recovers them.
+- New tests:
+  - `TestEncryptRejectsEmptyPassword` and `TestDecryptAcceptsLegacyEmptyPassword` in
+    `crypto_test.go`;
+  - `TestDashboardRejectsEmptyPassword` in `logic_tui_test.go`;
+  - `TestEncryptCmdRejectsEmptyInteractivePassword` in `logic_cli_test.go`, which
+    guards the prompt rewrite planned in 1.1.
+- Validation (Go 1.26.8, linux/amd64):
+  - the core and TUI tests failed before the fix and pass after it;
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` and golangci-lint v2.13.2 are clean;
+    `go test -race ./...` passes;
+  - end to end in a pseudo-terminal: the old binary encrypted a file with a blank
+    password; the fixed binary shows "password must not be empty" and writes nothing.
+- SEC-001 stays In Progress until the minimum-length policy (Q-004) is decided.
+
+## 2026-09-24 — Password prompt reads the full line, hidden (plan 1.1, SEC-002)
+
+- `internal/logic-cli.go` `readPassword`:
+  - it reads one whole line and strips only `\r`/`\n`, so spaces are kept;
+  - on a terminal it reads without echo through `github.com/charmbracelet/x/term`;
+  - with piped input it reads the first line;
+  - an empty line now reaches the core, which rejects it for encryption
+    (`ErrEmptyPassword`) and accepts it for decryption, so legacy empty-password files
+    can be decrypted from the CLI.
+- `go.mod`: `github.com/charmbracelet/x/term v0.2.2` moved from indirect to direct,
+  approved by the owner. The version and `go.sum` are unchanged.
+- New tests in `logic_cli_test.go`: `TestReadPassword` (7 cases),
+  `TestEncryptDecryptCmdMultiWordPromptPassword` and
+  `TestDecryptCmdPromptAcceptsEmptyPasswordForLegacyFiles`. They failed before the fix.
+- Validation (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go vet` (also cross-compiled for windows/amd64, darwin/arm64 and
+    linux/arm64) and golangci-lint v2.13.2 are clean;
+  - `go mod tidy` is stable; `go test -race ./...` passes;
+  - in a pseudo-terminal, the fixed binary hides a four-word passphrase, handles a
+    Backspace-corrected typo, and the file decrypts with the full passphrase only.
+- README: the known-issue note is replaced by the new behaviour, a migration note
+  (decrypt old multi-word files with the first word) and the Ctrl+C caveat.
+- Known regression: Ctrl+C at the hidden prompt leaves terminal echo off (BUG-012,
+  plan 1.1a). SEC-002 stays In Progress.
+
+## 2026-09-24 — Terminal restored on Ctrl+C at the password prompt (plan 1.1a, BUG-012)
+
+- `internal/logic-cli.go`: new `readTerminalPassword`, used by `readPassword` when
+  input is a terminal.
+  - It saves the terminal state and listens for `os.Interrupt` while the hidden read is
+    in progress. On Ctrl+C it restores the terminal, ends the prompt line, and exits
+    with status 130 (128 + SIGINT).
+  - The helper goroutine is owned by the call and ends when the read returns. This
+    meets `golang.md`'s rules for goroutines, which are allowed here because signal
+    handling requires one.
+- This fixes a problem introduced by plan 1.1 before it shipped: Ctrl+C at the hidden
+  prompt killed the process with echo still off.
+- New tests in `logic_cli_test.go`: `TestReadPasswordFromNonTerminalFile` (a real,
+  non-terminal file takes the line-reading path) and
+  `TestReadTerminalPasswordRejectsNonTerminal`.
+- Validation (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native, plus cross-compiled for
+    windows/amd64, darwin/arm64 and linux/arm64) and golangci-lint v2.13.2 are clean;
+    `go test -race ./...` passes;
+  - in a pseudo-terminal, Ctrl+C at the prompt: the build without the fix was killed by
+    the signal with echo left off; the fixed build exited 130 with echo restored and
+    wrote no file. Normal hidden entry still works.
+  - Not verified: Windows console behaviour; CI runs only the non-terminal tests there.
+- README: the Ctrl+C known-issue note was removed.

@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // TestNewRootCmd tests the NewRootCmd function to ensure it returns a valid root command.
@@ -644,5 +646,182 @@ func TestKeysDeleteCmdNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestEncryptCmdRejectsEmptyInteractivePassword guards SEC-001 on the CLI: an empty
+// answer at the password prompt must not produce an encrypted file.
+func TestEncryptCmdRejectsEmptyInteractivePassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(srcFile, []byte("test content"), 0o600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	db := newTestDatabase(t, false)
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"encrypt", srcFile})
+	rootCmd.SetIn(strings.NewReader("\n"))
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+
+	if err := rootCmd.Execute(); err == nil {
+		t.Fatal("encrypt with an empty password succeeded, want an error")
+	}
+	if _, err := os.Stat(srcFile + encExt); !os.IsNotExist(err) {
+		t.Fatalf("encrypted file created despite the empty password (stat err: %v)", err)
+	}
+}
+
+// TestReadPassword is a regression test for SEC-002: when input is not a terminal,
+// the prompt must keep the whole line, including spaces, and strip only the line ending.
+func TestReadPassword(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "multi-word passphrase", input: "correct horse battery staple\n", want: "correct horse battery staple"},
+		{name: "windows line ending", input: "pass word\r\n", want: "pass word"},
+		{name: "leading and trailing spaces kept", input: "  spaced out  \n", want: "  spaced out  "},
+		{name: "no trailing newline", input: "secret", want: "secret"},
+		{name: "only the first line is read", input: "first line\nsecond line\n", want: "first line"},
+		{name: "empty line", input: "\n", want: ""},
+		{name: "no input", input: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := &cobra.Command{}
+			cmd.SetIn(strings.NewReader(tt.input))
+			var prompt bytes.Buffer
+			cmd.SetErr(&prompt)
+
+			got, err := readPassword(cmd, "Enter password: ")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("readPassword() = %q, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("readPassword() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("readPassword() = %q, want %q", got, tt.want)
+			}
+			if prompt.String() != "Enter password: " {
+				t.Fatalf("prompt written = %q, want %q", prompt.String(), "Enter password: ")
+			}
+		})
+	}
+}
+
+// TestEncryptDecryptCmdMultiWordPromptPassword is a regression test for SEC-002: a
+// passphrase typed at the prompt must be used in full, not cut at the first space.
+func TestEncryptDecryptCmdMultiWordPromptPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "test.txt")
+	content := []byte("multi-word passphrase content")
+	if err := os.WriteFile(srcFile, content, 0o600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+	const passphrase = "correct horse battery staple"
+	db := newTestDatabase(t, false)
+
+	run := func(stdin string, args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(stdin))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	encFile := srcFile + encExt
+	if err := run(passphrase+"\n", "encrypt", srcFile); err != nil {
+		t.Fatalf("encrypt via prompt failed: %v", err)
+	}
+	if err := run("", "decrypt", encFile, "--output", filepath.Join(tmpDir, "first-word.txt"), "--password", "correct"); err == nil {
+		t.Fatal("decrypting with only the first word succeeded; the prompt truncated the passphrase")
+	}
+	decFile := filepath.Join(tmpDir, "decrypted.txt")
+	if err := run(passphrase+"\n", "decrypt", encFile, "--output", decFile); err != nil {
+		t.Fatalf("decrypt via prompt with the full passphrase failed: %v", err)
+	}
+	if got, err := os.ReadFile(decFile); err != nil || string(got) != string(content) {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, content)
+	}
+}
+
+// TestDecryptCmdPromptAcceptsEmptyPasswordForLegacyFiles checks that a file encrypted
+// with an empty password before SEC-001 was fixed can be decrypted from the CLI prompt.
+func TestDecryptCmdPromptAcceptsEmptyPasswordForLegacyFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := []byte("legacy content")
+	ciphertext, err := encryptBytes(content, "")
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	if err := os.WriteFile(encFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	decFile := filepath.Join(tmpDir, "legacy.txt")
+	rootCmd := NewRootCmd(newTestDatabase(t, false))
+	rootCmd.SetArgs([]string{"decrypt", encFile, "--output", decFile})
+	rootCmd.SetIn(strings.NewReader("\n"))
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("decrypt with an empty prompt password failed: %v", err)
+	}
+	if got, err := os.ReadFile(decFile); err != nil || string(got) != string(content) {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, content)
+	}
+}
+
+// TestReadPasswordFromNonTerminalFile checks that input from a real file that isn't a
+// terminal (as with shell redirection) is read as a plain line, not through the
+// hidden terminal prompt.
+func TestReadPasswordFromNonTerminalFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "password.txt")
+	if err := os.WriteFile(path, []byte("piped pass phrase\n"), 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open password file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	cmd := &cobra.Command{}
+	cmd.SetIn(f)
+	cmd.SetErr(&bytes.Buffer{})
+	got, err := readPassword(cmd, "Enter password: ")
+	if err != nil {
+		t.Fatalf("readPassword() error = %v", err)
+	}
+	if got != "piped pass phrase" {
+		t.Fatalf("readPassword() = %q, want %q", got, "piped pass phrase")
+	}
+}
+
+// TestReadTerminalPasswordRejectsNonTerminal checks that the hidden-input helper
+// fails cleanly, before installing its interrupt handler, when fd is not a terminal.
+func TestReadTerminalPasswordRejectsNonTerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "not-a-terminal")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	if _, err := readTerminalPassword(f.Fd(), &bytes.Buffer{}); err == nil {
+		t.Fatal("readTerminalPassword() on a regular file succeeded, want an error")
 	}
 }

@@ -75,8 +75,8 @@ These apply to all changes.
 
 | ID | Title | Severity | Status |
 |---|---|---|---|
-| SEC-001 | Empty passwords accepted for encryption and key protection | High | Open |
-| SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | Open |
+| SEC-001 | Empty passwords accepted for encryption and key protection | High | In Progress |
+| SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | Open |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Open |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
@@ -94,7 +94,20 @@ These apply to all changes.
 
 ### SEC-001 — Empty passwords accepted for encryption and key protection
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-24, uncommitted):** Remediation steps 1 and 2 are implemented
+  and validated.
+  - `EncryptFile` and `EncryptKeyBlob` return `ErrEmptyPassword`, which covers files,
+    directory archives, key generation and `ExportKeyToFile`. The CLI and TUI show
+    the error, and nothing is written.
+  - Decryption still accepts an empty password, so legacy artifacts stay readable.
+  - Tests: `TestEncryptRejectsEmptyPassword`, `TestDecryptAcceptsLegacyEmptyPassword`,
+    `TestDashboardRejectsEmptyPassword`, `TestEncryptCmdRejectsEmptyInteractivePassword`.
+    The core and TUI tests failed before the fix. End to end, the fixed TUI shows
+    "password must not be empty" and writes no file, and its Decrypt form still
+    recovers a file the old build encrypted with a blank password.
+  - Remaining: step 3, the minimum-length policy (Q-004). This item stays open
+    until that is decided and implemented.
 - **Affected component:**
   - `internal/logic-tui.go` `buildActionCmd` (encrypt, keys generate, keys export)
   - `internal/crypto.go` `EncryptFile`, `EncryptKeyBlob`, `ExportKeyToFile` (none of
@@ -118,7 +131,26 @@ These apply to all changes.
 
 ### SEC-002 — Interactive password prompt truncates at whitespace and echoes input
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-24, uncommitted):** Remediation steps 1, 2 and 4 are
+  implemented and validated.
+  - `readPassword` reads the whole line and strips only `\r`/`\n`. On a terminal it
+    reads without echo through `github.com/charmbracelet/x/term`, which is now a
+    direct dependency; `go.mod` moved one line and `go.sum` is unchanged.
+  - The README states the new behaviour and has the migration note.
+  - Tests: `TestReadPassword` (7 cases),
+    `TestEncryptDecryptCmdMultiWordPromptPassword` and
+    `TestDecryptCmdPromptAcceptsEmptyPasswordForLegacyFiles`. They failed before the
+    fix.
+  - Manual TTY check in a pseudo-terminal, with a four-word passphrase containing a
+    Backspace-corrected typo: the old binary echoed it and kept only the first word;
+    the fixed binary doesn't echo it, and the file decrypts with the full passphrase
+    but not with the first word.
+  - BUG-012 is fixed (plan 1.1a). This fix had introduced a problem: Ctrl+C at the
+    hidden prompt left terminal echo off. The prompt now restores the terminal and
+    exits with status 130; verified in a pseudo-terminal.
+  - Remaining: step 3 (confirmation on encrypt, tied to Q-004), and the migration
+    note in the next release's notes.
 - **Affected component:** `internal/logic-cli.go` `readPassword` (uses `fmt.Fscan`);
   used by `encrypt`, `decrypt` and the `keys` subcommands.
 - **Risk:**

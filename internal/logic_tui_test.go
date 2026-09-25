@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -744,5 +745,83 @@ func TestDashboardEnterOnUnknownScreenIsIgnored(t *testing.T) {
 	}
 	if got := next.(DashboardModel).screen; got != dashboardScreen(99) {
 		t.Fatalf("screen = %v, want unchanged", got)
+	}
+}
+
+// TestDashboardRejectsEmptyPassword is a regression test for SEC-001: submitting a
+// TUI form with the password left blank must fail with an error and change nothing.
+func TestDashboardRejectsEmptyPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "secret.txt")
+	if err := os.WriteFile(srcFile, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	// submit presses Enter through every field and runs the resulting command.
+	submit := func(m DashboardModel) (DashboardModel, actionResultMsg) {
+		t.Helper()
+		for {
+			next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+			m = next.(DashboardModel)
+			if cmd != nil {
+				result, ok := cmd().(actionResultMsg)
+				if !ok {
+					t.Fatalf("expected actionResultMsg")
+				}
+				return m, result
+			}
+		}
+	}
+
+	// Encrypt: file path typed, output and password left blank.
+	m := NewDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	m = typeString(m, srcFile)
+	m, result := submit(m)
+	if !errors.Is(result.err, ErrEmptyPassword) {
+		t.Fatalf("encrypt error = %v, want ErrEmptyPassword", result.err)
+	}
+	if _, err := os.Stat(srcFile + encExt); !os.IsNotExist(err) {
+		t.Fatalf("encrypted file created despite the empty password (stat err: %v)", err)
+	}
+	next, _ := m.Update(result)
+	if got := next.(DashboardModel); !got.isError || !strings.Contains(got.status, "password must not be empty") {
+		t.Fatalf("status = %q (isError %v), want the empty-password error", got.status, got.isError)
+	}
+
+	// Generate a key with a blank master password.
+	m.startForm(actionKeysGenerate, screenKeys)
+	_, result = submit(m)
+	if !errors.Is(result.err, ErrEmptyPassword) {
+		t.Fatalf("keys generate error = %v, want ErrEmptyPassword", result.err)
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 0 {
+		t.Fatalf("stored keys = %d (err %v), want 0", len(keys), err)
+	}
+
+	// Export an existing key with a blank password.
+	rawKey, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	blob, err := EncryptKeyBlob(rawKey, "masterpass")
+	if err != nil {
+		t.Fatalf("EncryptKeyBlob: %v", err)
+	}
+	if err := db.SaveKey(&KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: blob, CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	exportPath := filepath.Join(tmpDir, "exported.ckey")
+	m.startForm(actionKeysExport, screenKeys)
+	m = typeString(m, "0123456789abcdef")
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to output
+	m = typeString(next.(DashboardModel), exportPath)
+	_, result = submit(m)
+	if !errors.Is(result.err, ErrEmptyPassword) {
+		t.Fatalf("keys export error = %v, want ErrEmptyPassword", result.err)
+	}
+	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+		t.Fatalf("export file created despite the empty password (stat err: %v)", err)
 	}
 }

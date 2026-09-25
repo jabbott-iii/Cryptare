@@ -90,7 +90,8 @@ cryptare                             # opens the interactive TUI
 ```
 
 - Decryption writes to the output path without asking, replacing any existing file there.
-- ⚠️ **Known issue:** the interactive password prompt keeps only the text before the first space, and shows what you type. Until it is fixed, use a password without spaces at the prompt. A file you encrypted at the prompt with a multi-word passphrase can only be decrypted with its first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
+- The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
+- ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 
 ## Core CLI capabilities
 

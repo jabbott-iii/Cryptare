@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -414,16 +416,64 @@ func newKeysDeleteCmd(db *Database) *cobra.Command {
 
 //-----------------------------------------helpers------------------------------------------------------//
 
-// readPassword reads a password from the command's configured streams.
+// readPassword writes prompt to stderr and reads one line from the command's input,
+// keeping spaces and removing only the line ending. When the input is a terminal,
+// the line is read without echoing it.
 func readPassword(cmd *cobra.Command, prompt string) (string, error) {
 	if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
 		return "", fmt.Errorf("write password prompt: %w", err)
 	}
-	var pwd string
-	if _, err := fmt.Fscan(cmd.InOrStdin(), &pwd); err != nil {
+
+	in := cmd.InOrStdin()
+	if f, ok := in.(*os.File); ok && term.IsTerminal(f.Fd()) {
+		pwd, err := readTerminalPassword(f.Fd(), cmd.ErrOrStderr())
+		// Enter isn't echoed either, so end the prompt line before any further output.
+		if _, werr := fmt.Fprintln(cmd.ErrOrStderr()); err == nil && werr != nil {
+			err = werr
+		}
+		if err != nil {
+			return "", fmt.Errorf("read password: %w", err)
+		}
+		return string(pwd), nil
+	}
+
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return "", fmt.Errorf("read password: %w", err)
 	}
-	return pwd, nil
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// readTerminalPassword reads one line from the terminal fd without echo. Ctrl+C
+// would otherwise kill the process with echo still off, so while the read is in
+// progress an interrupt restores the terminal and exits with status 130
+// (128 + SIGINT), matching what the shell reports for an interrupted command.
+func readTerminalPassword(fd uintptr, out io.Writer) ([]byte, error) {
+	state, err := term.GetState(fd)
+	if err != nil {
+		return nil, fmt.Errorf("save terminal state: %w", err)
+	}
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(interrupt)
+		close(done)
+	}()
+
+	// Owned by this call: it ends when the read returns (done) or after handling Ctrl+C.
+	go func() {
+		select {
+		case <-interrupt:
+			_ = term.Restore(fd, state)
+			_, _ = fmt.Fprintln(out)
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+
+	return term.ReadPassword(fd)
 }
 
 func confirmAction(cmd *cobra.Command, prompt string) (bool, error) {

@@ -17,6 +17,8 @@ limitations under the License.
 package internal
 
 import (
+	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -470,5 +472,108 @@ func TestNewKeyID(t *testing.T) {
 	// IDs should be unique
 	if id1 == id2 {
 		t.Error("newKeyID generated identical IDs")
+	}
+}
+
+// TestEncryptRejectsEmptyPassword is a regression test for SEC-001: every encryption
+// path must refuse an empty password and write nothing.
+func TestEncryptRejectsEmptyPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	srcFile := filepath.Join(tmpDir, "secret.txt")
+	if err := os.WriteFile(srcFile, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	srcDir := filepath.Join(tmpDir, "secret-dir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "inner.txt"), []byte("inner"), 0o600); err != nil {
+		t.Fatalf("write inner file: %v", err)
+	}
+
+	for _, src := range []string{srcFile, srcDir} {
+		dst := src + encExt
+		if err := EncryptFile(src, dst, ""); !errors.Is(err, ErrEmptyPassword) {
+			t.Errorf("EncryptFile(%s) error = %v, want ErrEmptyPassword", src, err)
+		}
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Errorf("EncryptFile(%s) created %s despite the empty password", src, dst)
+		}
+	}
+
+	rawKey, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := EncryptKeyBlob(rawKey, ""); !errors.Is(err, ErrEmptyPassword) {
+		t.Errorf("EncryptKeyBlob error = %v, want ErrEmptyPassword", err)
+	}
+
+	exportPath := filepath.Join(tmpDir, "key.ckey")
+	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}
+	if err := ExportKeyToFile(km, "", exportPath); !errors.Is(err, ErrEmptyPassword) {
+		t.Errorf("ExportKeyToFile error = %v, want ErrEmptyPassword", err)
+	}
+	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+		t.Errorf("ExportKeyToFile created %s despite the empty password", exportPath)
+	}
+}
+
+// TestDecryptAcceptsLegacyEmptyPassword checks that files, directory archives and key
+// blobs encrypted with an empty password before SEC-001 was fixed still decrypt.
+func TestDecryptAcceptsLegacyEmptyPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Single file, written the way pre-fix builds did.
+	plaintext := []byte("legacy empty-password data")
+	ciphertext, err := encryptBytes(plaintext, "")
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	if err := os.WriteFile(encFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+	decFile := filepath.Join(tmpDir, "legacy.txt")
+	if err := DecryptFile(encFile, decFile, ""); err != nil {
+		t.Fatalf("DecryptFile(legacy file) error = %v", err)
+	}
+	if got, err := os.ReadFile(decFile); err != nil || string(got) != string(plaintext) {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, plaintext)
+	}
+
+	// Directory archive.
+	srcDir := filepath.Join(tmpDir, "legacy-dir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("create legacy directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "inner.txt"), []byte("inner"), 0o600); err != nil {
+		t.Fatalf("write inner file: %v", err)
+	}
+	dirArtifact := filepath.Join(tmpDir, "legacy-dir.enc")
+	if err := encryptDirectory(srcDir, dirArtifact, ""); err != nil {
+		t.Fatalf("encryptDirectory: %v", err)
+	}
+	restored := filepath.Join(tmpDir, "restored")
+	if err := DecryptFile(dirArtifact, restored, ""); err != nil {
+		t.Fatalf("DecryptFile(legacy directory) error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(restored, "inner.txt")); err != nil || string(got) != "inner" {
+		t.Fatalf("restored inner.txt = %q (err %v), want %q", got, err, "inner")
+	}
+
+	// Key blob (same salt ‖ nonce ‖ ciphertext layout as EncryptKeyBlob).
+	rawKey := []byte("0123456789abcdef0123456789abcdef")
+	blobBytes, err := encryptBytes(rawKey, "")
+	if err != nil {
+		t.Fatalf("encryptBytes(key): %v", err)
+	}
+	gotKey, err := DecryptKeyBlob(base64.StdEncoding.EncodeToString(blobBytes), "")
+	if err != nil {
+		t.Fatalf("DecryptKeyBlob(legacy blob) error = %v", err)
+	}
+	if string(gotKey) != string(rawKey) {
+		t.Fatalf("DecryptKeyBlob = %q, want %q", gotKey, rawKey)
 	}
 }

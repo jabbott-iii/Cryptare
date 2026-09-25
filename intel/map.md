@@ -45,6 +45,7 @@ Cryptare/
 |---|---|---|
 | `github.com/spf13/cobra` | v1.10.2 | CLI |
 | `github.com/charmbracelet/bubbletea` / `lipgloss` | v1.3.10 / v1.1.0 | TUI |
+| `github.com/charmbracelet/x/term` | v0.2.2 | Hidden password input at the CLI prompt |
 | `gorm.io/gorm` + `gorm.io/driver/sqlite` | v1.31.2 / v1.6.0 | Storage, via `github.com/mattn/go-sqlite3` v1.14.52 (**CGO**) |
 | `golang.org/x/crypto` | v0.56.0 | `pbkdf2` only |
 

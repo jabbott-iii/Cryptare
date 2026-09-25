@@ -6,14 +6,15 @@ Active implementation plans and follow-on work. IDs refer to
 Last updated: 2026-09-24
 
 Status: **In progress.**
-- Done: 0.1, 0.4, 1.4 and 3.6. The CI/CD rework shipped in v1.0.1 (`5286920`,
+- Done: 0.1, 0.4, 1.3 (`18ea97a`), 1.4 and 3.6. The CI/CD rework shipped in v1.0.1 (`5286920`,
   2026-09-24); see [Completed: CI/CD rework](#completed--cicd-rework-v101-2026-09-24).
 - In progress:
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README part waits until the owner pulls `3c80050`, a README edit made
     on GitHub.
-- Done, not yet committed: 1.3 (TUI crash on unhandled keys, 2026-09-24).
-- Next up: Phase 1 items 1.2, 1.1 and 1.5, and owner actions 0.2, 0.3 and 0.5.
+- Done, not yet committed (all 2026-09-24): 1.2 (empty passwords rejected), 1.1 (full-line
+  hidden password prompt) and 1.1a (terminal restored on Ctrl+C at that prompt).
+- Next up: 1.5, and owner actions 0.2, 0.3 and 0.5.
 
 ## Principles
 
@@ -73,9 +74,10 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs | Acceptance |
 |---|---|---|---|
-| 1.1 | Rewrite `readPassword`: read a full line, no echo on a TTY (`charmbracelet/x/term`) | SEC-002 | A multi-word passphrase round-trips via the prompt; a non-TTY test passes |
-| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
-| 1.3 | Replace the `panic("unhandled default case")` branches with no-ops or errors. **Done 2026-09-24 (uncommitted).** | BUG-002 | Tests send Left, Right, Delete, Home, End and Ctrl+U to forms without panicking |
+| 1.1 | Rewrite `readPassword`: read a full line, no echo on a TTY (`charmbracelet/x/term`) **Done 2026-09-24 (uncommitted)**, with owner approval for the `go.mod` change. | SEC-002 | A multi-word passphrase round-trips via the prompt; a non-TTY test passes |
+| 1.1a | Restore the terminal when Ctrl+C interrupts the hidden password prompt. This needs a signal handler and a short-lived goroutine, which `golang.md` allows only when required. **Done 2026-09-24 (uncommitted).** | BUG-012 | In a pseudo-terminal, echo is on again after Ctrl+C at the prompt; exit status 130 |
+| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24 (uncommitted).** The minimum-length policy is still open (Q-004). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
+| 1.3 | Replace the `panic("unhandled default case")` branches with no-ops or errors. **Done 2026-09-24** (`18ea97a`). | BUG-002 | Tests send Left, Right, Delete, Home, End and Ctrl+U to forms without panicking |
 | 1.4 | Fix release builds with a native CGO build per OS, and smoke-run each built binary in CD and CI. **Done** in v1.0.1 (2026-09-24). | BUG-001, Q-001 | CI runs each built binary; a new release tag produces working assets |
 | 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
 

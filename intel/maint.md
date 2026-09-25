@@ -39,8 +39,9 @@ Rules:
    and tested in both.
 3. **Data-protecting validation goes in core.** Checks such as non-empty passwords,
    overwrite protection and extraction limits belong in the core layer so both
-   interfaces get them. The TUI accepting empty passwords (SEC-001) is what happens
-   when this rule is missed.
+   interfaces get them. For example, `ErrEmptyPassword` is enforced in `crypto.go`, not
+   in the CLI or TUI (SEC-001: the TUI once accepted empty passwords because this rule
+   was missed).
 4. **One persistence type.** `*Database` is the only persistence type. The `Storage`
    interface is declared but callers don't use it. Either adopt it at the interface
    layer (for test doubles) or remove it, in a change dedicated to that.
@@ -89,8 +90,8 @@ These are observed in the codebase and required for new code:
   - `golang.org/x/crypto`, used for `pbkdf2`. This package is now a frozen wrapper
     around the standard library's `crypto/pbkdf2`.
 
-  The existing indirect dependency `github.com/charmbracelet/x/term` already provides
-  `ReadPassword` and `IsTerminal`.
+  `github.com/charmbracelet/x/term` (direct since 2026-09-24) provides `ReadPassword` and
+  `IsTerminal` for the CLI's hidden password prompt (`readPassword` in `logic-cli.go`).
 
 ## 5. Testing
 
