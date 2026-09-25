@@ -89,7 +89,10 @@ cryptare decrypt ./secret.txt.enc    # prompts for the password; prints "Decrypt
 cryptare                             # opens the interactive TUI
 ```
 
-- Decryption writes to the output path without asking, replacing any existing file there.
+- Commands don't overwrite anything by default:
+  - if the output file or folder already exists, the command stops; add `--force` to overwrite it;
+  - an output that is the input itself is always refused, even with `--force`, as is compressing a folder into an archive inside that folder;
+  - the TUI never overwrites, so choose a different output path there.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 
@@ -108,6 +111,7 @@ Cryptare is organized into focused command groups:
 
 - cryptare encrypt [path] — encrypt a file with AES-256-GCM or package a directory into a single encrypted archive
 - cryptare encrypt [path] --output [path] — write to a custom output file
+- cryptare encrypt [path] --force — overwrite the output if it already exists
 - cryptare encrypt [path] --password [value] — provide the encryption password non-interactively
 
 Examples:
@@ -120,6 +124,7 @@ Examples:
 
 - cryptare decrypt [path] — decrypt an AES-256-GCM encrypted file or restore an encrypted directory archive
 - cryptare decrypt [path] --output [path] — write to a custom output file or restore into a target directory
+- cryptare decrypt [path] --force — overwrite the output if it already exists
 - cryptare decrypt [path] --password [value] — provide the decryption password non-interactively
 
 Examples:
@@ -132,6 +137,7 @@ Examples:
 
 - cryptare compress [path] — compress with gzip (default) or zip
 - cryptare compress [path] --output [path] — write to a custom output file or archive
+- cryptare compress [path] --force — overwrite the output if it already exists
 - cryptare compress [path] --format [gzip|zip] — select compression format
 - cryptare compress [path] --level [1-9] — set the compression level (applies to gzip and zip)
 - zip is also selected automatically when --output ends in .zip
@@ -147,6 +153,7 @@ Examples:
 
 - cryptare decompress [archive] — decompress a gzip file or extract a tar.gz/zip archive
 - cryptare decompress [archive] --output [path] — write to a custom output file or extract to a directory
+- cryptare decompress [archive] --force — overwrite the output if it already exists
 
 Examples:
 - cryptare decompress ./artifact.bin.gz

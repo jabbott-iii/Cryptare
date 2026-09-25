@@ -202,3 +202,41 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     wrote no file. Normal hidden entry still works.
   - Not verified: Windows console behaviour; CI runs only the non-terminal tests there.
 - README: the Ctrl+C known-issue note was removed.
+
+## 2026-09-24 — Outputs never overwrite their input or an existing file by default (plan 1.5, BUG-003, BUG-004, BUG-013)
+
+- **Core (`compress.go`, `crypto.go`):**
+  - New sentinels: `ErrOutputExists`, `ErrSameInputOutput` and `ErrOutputInsideInput`.
+  - New `CheckOutputPath(src, dst, overwrite)`.
+  - `EncryptFile`, `DecryptFile`, `CompressFileWithFormat` and `DecompressFile` always
+    refuse an output that is their input. This compares the files themselves, so a
+    different spelling, a symlink or a hard link is caught too.
+  - Compressing a folder into an archive inside itself is refused (BUG-013, found while
+    doing this item).
+- **CLI:** `encrypt`, `decrypt`, `compress` and `decompress` resolve the output path
+  first. They refuse an existing output unless the new `--force` flag is given (long
+  form only, because `-f` is `compress --format`); the error suggests `--force`. The
+  check runs before the password prompt.
+- **TUI:** the same check without an overwrite option; the error suggests choosing a
+  different output path.
+- **Behaviour change:** decrypting `x.enc` while `x` still exists now stops instead of
+  silently replacing `x`. The README documents this and `--force`.
+- **New tests:**
+  - core: `TestCheckOutputPath` (7 cases plus symlink),
+    `TestOperationsRefuseToOverwriteTheirInput` (6 operations),
+    `TestCompressDirectoryRejectsOutputInsideInput`;
+  - CLI: `TestFileCmdsRefuseExistingOutput` (4 commands, with and without `--force`,
+    plus a default-output case), `TestCompressCmdRefusesSameInputOutputEvenWithForce`;
+  - TUI: `TestDashboardRefusesExistingOutput`.
+
+  All failed against the previous behaviour. There, compressing a 4,608-byte file onto
+  itself left 33 bytes.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native, plus windows/amd64 and
+    darwin/arm64) and golangci-lint v2.13.2 are clean; `go test -race ./...` passes,
+    including all existing tests; coverage 63.1%;
+  - with real binaries, the old build destroyed its input, replaced an edited
+    `note.txt` on decrypt and wrote a self-containing archive, all with exit 0; the new
+    build refuses each, and `--force` overwrites when asked.
+- **Remaining:** atomic writes (plan 2.11), an optional TUI overwrite choice (2.12), and
+  per-entry extraction safety under `--force` (SEC-008).

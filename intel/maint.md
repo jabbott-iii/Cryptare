@@ -77,6 +77,11 @@ These are observed in the codebase and required for new code:
 - Use `closeWithError` (in `compress.go`) for deferred `Close` on writers so close
   failures aren't lost.
 - Files the tool writes use mode `0o600`; directories it creates currently use `0o755`.
+- **Output safety.** Core operations refuse an output that is their own input
+  (`ErrSameInputOutput`), and compression refuses an archive inside the folder being
+  archived (`ErrOutputInsideInput`). Interfaces call `CheckOutputPath` before writing:
+  the CLI overwrites an existing output only with `--force`, and the TUI never does.
+  New commands that write files must follow the same rules.
 - Symlinks and non-regular files are rejected when reading directory trees, and path
   traversal (`..`) is rejected when extracting. Keep both behaviours.
 - Code is grouped with the existing `//----- section -----//` banner comments.

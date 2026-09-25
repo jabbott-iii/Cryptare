@@ -80,6 +80,9 @@ func EncryptFile(src, dst, password string) error {
 	if dst == "" {
 		dst = src + encExt
 	}
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
+	}
 
 	if statInfo.IsDir() {
 		return encryptDirectory(src, dst, password)
@@ -116,6 +119,9 @@ func DecryptFile(src, dst, password string) error {
 		} else {
 			dst = dst + ".dec"
 		}
+	}
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
 	}
 
 	if bytes.HasPrefix(data, []byte(directoryArtifactMagicV1)) {

@@ -44,6 +44,18 @@ const (
 	formatZip  compressFormat = "zip"
 )
 
+var (
+	// ErrOutputExists is returned by CheckOutputPath when the output already exists
+	// and overwriting was not requested.
+	ErrOutputExists = errors.New("output already exists")
+	// ErrSameInputOutput is returned when an operation's output is its own input;
+	// writing it would destroy the input before it has been read.
+	ErrSameInputOutput = errors.New("output is the same file as the input")
+	// ErrOutputInsideInput is returned when a directory would be archived into a file
+	// inside itself, which would archive its own partial output.
+	ErrOutputInsideInput = errors.New("output is inside the input directory")
+)
+
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
 // CompressFile compresses src at the given level (1–9), writing to dst.
@@ -71,6 +83,14 @@ func CompressFileWithFormat(src, dst, format string, level int) (err error) {
 
 	if dst == "" {
 		dst = defaultCompressOutput(src, info.IsDir(), selectedFormat)
+	}
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
+	}
+	if info.IsDir() {
+		if err := checkOutputOutsideDir(src, dst); err != nil {
+			return err
+		}
 	}
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -120,6 +140,9 @@ func DecompressFile(src, dst string) (err error) {
 		if dst == "" {
 			dst = defaultDecompressOutput(src)
 		}
+		if err := checkNotSameFile(src, dst); err != nil {
+			return err
+		}
 		return extractZip(src, dst)
 	}
 
@@ -137,6 +160,9 @@ func DecompressFile(src, dst string) (err error) {
 
 	if dst == "" {
 		dst = defaultDecompressOutput(src)
+	}
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
 	}
 
 	if isTarGzArchive(src, gz.Name) {
@@ -571,6 +597,66 @@ func extractZipSingleFile(file *zip.File, dst string) error {
 	}
 	if err := rc.Close(); err != nil {
 		return fmt.Errorf("close zip entry: %w", err)
+	}
+	return nil
+}
+
+//--------------------------------------------------output paths-----------------------------------------------------------------------------------------//
+
+// CheckOutputPath reports whether an operation reading src may write dst. It fails
+// with ErrSameInputOutput when dst is src itself, even when overwrite is true, and
+// with ErrOutputExists when dst already exists and overwrite is false. The CLI and
+// TUI call it before encrypting, decrypting, compressing or decompressing.
+func CheckOutputPath(src, dst string, overwrite bool) error {
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		if !overwrite {
+			return fmt.Errorf("%w: %s", ErrOutputExists, dst)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("check output path: %w", err)
+	}
+	return nil
+}
+
+// checkNotSameFile returns ErrSameInputOutput when dst names the same file as src,
+// including through a different spelling, a symlink or a hard link.
+func checkNotSameFile(src, dst string) error {
+	dstInfo, err := os.Stat(dst)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check output path: %w", err)
+	}
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("check input path: %w", err)
+	}
+	if os.SameFile(srcInfo, dstInfo) {
+		return fmt.Errorf("%w: %s", ErrSameInputOutput, dst)
+	}
+	return nil
+}
+
+// checkOutputOutsideDir returns ErrOutputInsideInput when dst lies inside srcDir.
+func checkOutputOutsideDir(srcDir, dst string) error {
+	absSrc, err := filepath.Abs(srcDir)
+	if err != nil {
+		return fmt.Errorf("resolve input path: %w", err)
+	}
+	absDst, err := filepath.Abs(dst)
+	if err != nil {
+		return fmt.Errorf("resolve output path: %w", err)
+	}
+	rel, err := filepath.Rel(absSrc, absDst)
+	if err != nil {
+		return nil // e.g. different Windows volumes: dst cannot be inside srcDir
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %s", ErrOutputInsideInput, dst)
 	}
 	return nil
 }

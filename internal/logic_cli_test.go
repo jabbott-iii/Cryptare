@@ -18,6 +18,7 @@ package internal
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -823,5 +824,96 @@ func TestReadTerminalPasswordRejectsNonTerminal(t *testing.T) {
 
 	if _, err := readTerminalPassword(f.Fd(), &bytes.Buffer{}); err == nil {
 		t.Fatal("readTerminalPassword() on a regular file succeeded, want an error")
+	}
+}
+
+// TestFileCmdsRefuseExistingOutput is a regression test for BUG-004: encrypt, decrypt,
+// compress and decompress must not replace an existing output unless --force is given.
+func TestFileCmdsRefuseExistingOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "data.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	enc := src + encExt
+	if err := EncryptFile(src, enc, "pw"); err != nil {
+		t.Fatalf("prepare encrypted file: %v", err)
+	}
+	gz := src + gzExt
+	if err := CompressFile(src, gz, -1); err != nil {
+		t.Fatalf("prepare gzip file: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	run := func(args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(""))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	cases := []struct {
+		name string
+		args func(out string) []string
+	}{
+		{"encrypt", func(out string) []string { return []string{"encrypt", src, "--output", out, "--password", "pw"} }},
+		{"decrypt", func(out string) []string { return []string{"decrypt", enc, "--output", out, "--password", "pw"} }},
+		{"compress", func(out string) []string { return []string{"compress", src, "--output", out} }},
+		{"decompress", func(out string) []string { return []string{"decompress", gz, "--output", out} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := filepath.Join(tmpDir, tc.name+".out")
+			if err := os.WriteFile(out, []byte("existing"), 0o600); err != nil {
+				t.Fatalf("write existing output: %v", err)
+			}
+
+			err := run(tc.args(out)...)
+			if !errors.Is(err, ErrOutputExists) || !strings.Contains(err.Error(), "--force") {
+				t.Fatalf("error = %v, want ErrOutputExists with a --force hint", err)
+			}
+			if got, _ := os.ReadFile(out); string(got) != "existing" {
+				t.Fatalf("existing output was modified to %q", got)
+			}
+
+			if err := run(append(tc.args(out), "--force")...); err != nil {
+				t.Fatalf("with --force: %v", err)
+			}
+			if got, _ := os.ReadFile(out); string(got) == "existing" {
+				t.Fatal("with --force the output was not replaced")
+			}
+		})
+	}
+
+	// Default output: decrypting data.txt.enc would write data.txt, which still exists.
+	if err := run("decrypt", enc, "--password", "pw"); !errors.Is(err, ErrOutputExists) {
+		t.Fatalf("decrypt to existing default output: error = %v, want ErrOutputExists", err)
+	}
+	if got, _ := os.ReadFile(src); string(got) != "payload" {
+		t.Fatalf("default output was modified to %q", got)
+	}
+}
+
+// TestCompressCmdRefusesSameInputOutputEvenWithForce is a regression test for
+// BUG-003: --force must not allow an output that is the input itself.
+func TestCompressCmdRefusesSameInputOutputEvenWithForce(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "data.bin")
+	if err := os.WriteFile(src, []byte("irreplaceable"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	rootCmd := NewRootCmd(newTestDatabase(t, false))
+	rootCmd.SetArgs([]string{"compress", src, "--output", src, "--force"})
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+
+	if err := rootCmd.Execute(); !errors.Is(err, ErrSameInputOutput) {
+		t.Fatalf("error = %v, want ErrSameInputOutput", err)
+	}
+	if got, _ := os.ReadFile(src); string(got) != "irreplaceable" {
+		t.Fatalf("source was modified to %q", got)
 	}
 }

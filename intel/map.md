@@ -33,10 +33,10 @@ Cryptare/
 | Component | Key symbols | Notes |
 |---|---|---|
 | Entry | `main`, `newRootCmd`, `version`, `databasePathFromEnv` | Opens the DB before any command runs, even `--help` and `--version`. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
-| CLI | `NewRootCmd`, `new*Cmd`, `readPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. |
+| CLI | `NewRootCmd`, `new*Cmd`, `readPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. | `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output.
 | TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. |
 | Crypto | `EncryptFile`, `DecryptFile`, `encryptBytesWithAAD`, `encryptDirectory`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. |
-| Compression | `CompressFileWithFormat`, `DecompressFile`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip` | Rejects symlinks, special files and `..` traversal. |
+| Compression | `CompressFileWithFormat`, `DecompressFile`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip`, `CheckOutputPath` | Rejects symlinks, special files and `..` traversal. | `CheckOutputPath` enforces the output-safety rules (`maint.md` §4).
 | Storage | `NewDatabase`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). |
 
 ## Dependencies

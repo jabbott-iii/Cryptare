@@ -63,6 +63,7 @@ func NewRootCmd(db *Database) *cobra.Command {
 
 func newEncryptCmd() *cobra.Command {
 	var output, password string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "encrypt [path]",
@@ -70,6 +71,13 @@ func newEncryptCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
+			dst := output
+			if dst == "" {
+				dst = src + encExt
+			}
+			if err := CheckOutputPath(src, dst, force); err != nil {
+				return withForceHint(err)
+			}
 			if password == "" {
 				var err error
 				password, err = readPassword(cmd, "Enter password: ")
@@ -77,12 +85,8 @@ func newEncryptCmd() *cobra.Command {
 					return err
 				}
 			}
-			if err := EncryptFile(src, output, password); err != nil {
+			if err := EncryptFile(src, dst, password); err != nil {
 				return err
-			}
-			dst := output
-			if dst == "" {
-				dst = src + encExt
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Encrypted: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -93,6 +97,7 @@ func newEncryptCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc)")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "encryption password")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
 }
 
@@ -100,6 +105,7 @@ func newEncryptCmd() *cobra.Command {
 
 func newDecryptCmd() *cobra.Command {
 	var output, password string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "decrypt [path]",
@@ -107,6 +113,13 @@ func newDecryptCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
+			dst := output
+			if dst == "" {
+				dst = deriveDecryptOutput(src)
+			}
+			if err := CheckOutputPath(src, dst, force); err != nil {
+				return withForceHint(err)
+			}
 			if password == "" {
 				var err error
 				password, err = readPassword(cmd, "Enter password: ")
@@ -114,12 +127,8 @@ func newDecryptCmd() *cobra.Command {
 					return err
 				}
 			}
-			if err := DecryptFile(src, output, password); err != nil {
+			if err := DecryptFile(src, dst, password); err != nil {
 				return err
-			}
-			dst := output
-			if dst == "" {
-				dst = deriveDecryptOutput(src)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -130,6 +139,7 @@ func newDecryptCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file or directory path")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "decryption password")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
 }
 
@@ -139,6 +149,7 @@ func newCompressCmd() *cobra.Command {
 	var output string
 	var level int
 	var format string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "compress [path]",
@@ -146,12 +157,18 @@ func newCompressCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
-			if err := CompressFileWithFormat(src, output, format, level); err != nil {
+			if _, err := resolveCompressFormat(format, output); err != nil {
 				return err
 			}
 			dst := output
 			if dst == "" {
 				dst = deriveCompressOutput(src, format)
+			}
+			if err := CheckOutputPath(src, dst, force); err != nil {
+				return withForceHint(err)
+			}
+			if err := CompressFileWithFormat(src, dst, format, level); err != nil {
+				return err
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -163,6 +180,7 @@ func newCompressCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output path (default: <file>.gz or <dir>.tar.gz for gzip, <path>.zip for zip)")
 	cmd.Flags().StringVarP(&format, "format", "f", "", "compression format: gzip or zip (default: gzip)")
 	cmd.Flags().IntVarP(&level, "level", "l", -1, "compression level 1-9 (default: -1 = default)")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
 }
 
@@ -170,6 +188,7 @@ func newCompressCmd() *cobra.Command {
 
 func newDecompressCmd() *cobra.Command {
 	var output string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "decompress [archive]",
@@ -177,12 +196,15 @@ func newDecompressCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
-			if err := DecompressFile(src, output); err != nil {
-				return err
-			}
 			dst := output
 			if dst == "" {
 				dst = deriveDecompressOutput(src)
+			}
+			if err := CheckOutputPath(src, dst, force); err != nil {
+				return withForceHint(err)
+			}
+			if err := DecompressFile(src, dst); err != nil {
+				return err
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decompressed: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -192,6 +214,7 @@ func newDecompressCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output path")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
 }
 
@@ -415,6 +438,14 @@ func newKeysDeleteCmd(db *Database) *cobra.Command {
 }
 
 //-----------------------------------------helpers------------------------------------------------------//
+
+// withForceHint tells CLI users how to overwrite an existing output on purpose.
+func withForceHint(err error) error {
+	if errors.Is(err, ErrOutputExists) {
+		return fmt.Errorf("%w (use --force to overwrite)", err)
+	}
+	return err
+}
 
 // readPassword writes prompt to stderr and reads one line from the command's input,
 // keeping spaces and removing only the line ending. When the input is a terminal,

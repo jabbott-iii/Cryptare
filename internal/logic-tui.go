@@ -539,24 +539,30 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 	switch action {
 	case actionEncrypt:
 		return func() tea.Msg {
-			if err := EncryptFile(file, output, password); err != nil {
-				return actionResultMsg{err: err}
-			}
 			dst := output
 			if dst == "" {
 				dst = file + encExt
+			}
+			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := EncryptFile(file, dst, password); err != nil {
+				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Encrypted: %s → %s", file, dst)}
 		}
 
 	case actionDecrypt:
 		return func() tea.Msg {
-			if err := DecryptFile(file, output, password); err != nil {
-				return actionResultMsg{err: err}
-			}
 			dst := output
 			if dst == "" {
 				dst = deriveDecryptOutput(file)
+			}
+			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := DecryptFile(file, dst, password); err != nil {
+				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decrypted: %s → %s", file, dst)}
 		}
@@ -571,24 +577,33 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				}
 				level = lv
 			}
-			if err := CompressFileWithFormat(file, output, format, level); err != nil {
+			if _, err := resolveCompressFormat(format, output); err != nil {
 				return actionResultMsg{err: err}
 			}
 			dst := output
 			if dst == "" {
 				dst = deriveCompressOutput(file, format)
 			}
+			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := CompressFileWithFormat(file, dst, format, level); err != nil {
+				return actionResultMsg{err: err}
+			}
 			return actionResultMsg{message: fmt.Sprintf("Compressed: %s → %s", file, dst)}
 		}
 
 	case actionDecompress:
 		return func() tea.Msg {
-			if err := DecompressFile(file, output); err != nil {
-				return actionResultMsg{err: err}
-			}
 			dst := output
 			if dst == "" {
 				dst = deriveDecompressOutput(file)
+			}
+			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := DecompressFile(file, dst); err != nil {
+				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decompressed: %s → %s", file, dst)}
 		}
@@ -676,4 +691,16 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			return actionResultMsg{err: fmt.Errorf("unsupported action %d", action)}
 		}
 	}
+}
+
+// checkTUIOutput applies CheckOutputPath for form actions. The TUI has no overwrite
+// option, so an existing output is refused with a hint to choose another path.
+func checkTUIOutput(src, dst string) error {
+	if err := CheckOutputPath(src, dst, false); err != nil {
+		if errors.Is(err, ErrOutputExists) {
+			return fmt.Errorf("%w; choose a different output path", err)
+		}
+		return err
+	}
+	return nil
 }

@@ -12,9 +12,12 @@ Status: **In progress.**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README part waits until the owner pulls `3c80050`, a README edit made
     on GitHub.
-- Done, not yet committed (all 2026-09-24): 1.2 (empty passwords rejected), 1.1 (full-line
-  hidden password prompt) and 1.1a (terminal restored on Ctrl+C at that prompt).
-- Next up: 1.5, and owner actions 0.2, 0.3 and 0.5.
+- Done and committed (`ed46150`): 1.2 (empty passwords rejected), 1.1 (full-line hidden
+  password prompt) and 1.1a (terminal restored on Ctrl+C at that prompt).
+- Done, not yet committed (2026-09-24): 1.5 (outputs never overwrite their input or an
+  existing file without `--force`).
+- Phase 1 is complete once 1.5 is committed. Next up: owner actions 0.2, 0.3 and 0.5,
+  then Phase 2 (2.11 finishes BUG-004).
 
 ## Principles
 
@@ -74,12 +77,12 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs | Acceptance |
 |---|---|---|---|
-| 1.1 | Rewrite `readPassword`: read a full line, no echo on a TTY (`charmbracelet/x/term`) **Done 2026-09-24 (uncommitted)**, with owner approval for the `go.mod` change. | SEC-002 | A multi-word passphrase round-trips via the prompt; a non-TTY test passes |
-| 1.1a | Restore the terminal when Ctrl+C interrupts the hidden password prompt. This needs a signal handler and a short-lived goroutine, which `golang.md` allows only when required. **Done 2026-09-24 (uncommitted).** | BUG-012 | In a pseudo-terminal, echo is on again after Ctrl+C at the prompt; exit status 130 |
-| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24 (uncommitted).** The minimum-length policy is still open (Q-004). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
+| 1.1 | Rewrite `readPassword`: read a full line, no echo on a TTY (`charmbracelet/x/term`) **Done 2026-09-24** (`ed46150`), with owner approval for the `go.mod` change. | SEC-002 | A multi-word passphrase round-trips via the prompt; a non-TTY test passes |
+| 1.1a | Restore the terminal when Ctrl+C interrupts the hidden password prompt. This needs a signal handler and a short-lived goroutine, which `golang.md` allows only when required. **Done 2026-09-24** (`ed46150`). | BUG-012 | In a pseudo-terminal, echo is on again after Ctrl+C at the prompt; exit status 130 |
+| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24** (`ed46150`). The minimum-length policy is still open (Q-004). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
 | 1.3 | Replace the `panic("unhandled default case")` branches with no-ops or errors. **Done 2026-09-24** (`18ea97a`). | BUG-002 | Tests send Left, Right, Delete, Home, End and Ctrl+U to forms without panicking |
 | 1.4 | Fix release builds with a native CGO build per OS, and smoke-run each built binary in CD and CI. **Done** in v1.0.1 (2026-09-24). | BUG-001, Q-001 | CI runs each built binary; a new release tag produces working assets |
-| 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
+| 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) **Done 2026-09-24 (uncommitted).** Also refuses compressing a folder into an archive inside itself (BUG-013). Atomic writes, the rest of BUG-004, moved to 2.11. | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
 
 ## Phase 2 — Hardening
 
@@ -95,6 +98,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 2.8 | Root-scoped opens when archiving | SEC-014 |
 | 2.9 | Fix case-insensitive extension handling and the export filename reporting | BUG-007, BUG-006 |
 | 2.10 | Gate TUI actions on `busy` | BUG-008 |
+| 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output | BUG-004 |
+| 2.12 | Optional: an overwrite choice in the TUI forms, which refuse existing outputs today | BUG-004 |
 
 ## Phase 3 — Formats and architecture
 

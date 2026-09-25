@@ -825,3 +825,40 @@ func TestDashboardRejectsEmptyPassword(t *testing.T) {
 		t.Fatalf("export file created despite the empty password (stat err: %v)", err)
 	}
 }
+
+// TestDashboardRefusesExistingOutput checks that TUI file actions refuse to replace
+// an existing output; the TUI has no overwrite option (BUG-004).
+func TestDashboardRefusesExistingOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "secret.txt")
+	if err := os.WriteFile(src, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	taken := filepath.Join(tmpDir, "taken.enc")
+	if err := os.WriteFile(taken, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write existing output: %v", err)
+	}
+
+	m := NewDashboardModel(newTestDatabase(t, false))
+	m.startForm(actionEncrypt, screenMain)
+	m = typeString(m, src)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
+	m = typeString(next.(DashboardModel), taken)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // password
+	m = typeString(next.(DashboardModel), "pw")
+	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a command for the encrypt submission")
+	}
+
+	result, ok := cmd().(actionResultMsg)
+	if !ok {
+		t.Fatal("expected actionResultMsg")
+	}
+	if !errors.Is(result.err, ErrOutputExists) {
+		t.Fatalf("error = %v, want ErrOutputExists", result.err)
+	}
+	if got, _ := os.ReadFile(taken); string(got) != "existing" {
+		t.Fatalf("existing output was modified to %q", got)
+	}
+}

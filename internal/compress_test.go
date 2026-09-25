@@ -19,8 +19,10 @@ package internal
 import (
 	"archive/zip"
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -433,5 +435,134 @@ func TestCompressZipDirectoryRoundTrip(t *testing.T) {
 		t.Fatalf("Expected empty directory not restored: %v", err)
 	} else if !info.IsDir() {
 		t.Fatalf("Restored empty path is not a directory")
+	}
+}
+
+// TestCheckOutputPath covers the output-path policy shared by the CLI and TUI.
+func TestCheckOutputPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "input.txt")
+	if err := os.WriteFile(src, []byte("input"), 0o600); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	existing := filepath.Join(tmpDir, "existing.out")
+	if err := os.WriteFile(existing, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write existing output: %v", err)
+	}
+	hardLink := filepath.Join(tmpDir, "hardlink.txt")
+	if err := os.Link(src, hardLink); err != nil {
+		t.Fatalf("create hard link: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		dst       string
+		overwrite bool
+		wantErr   error
+	}{
+		{name: "new output", dst: filepath.Join(tmpDir, "new.out")},
+		{name: "existing output refused", dst: existing, wantErr: ErrOutputExists},
+		{name: "existing output with overwrite", dst: existing, overwrite: true},
+		{name: "same path", dst: src, wantErr: ErrSameInputOutput},
+		{name: "same path even with overwrite", dst: src, overwrite: true, wantErr: ErrSameInputOutput},
+		{name: "same file, different spelling", dst: filepath.Join(tmpDir, ".", "input.txt"), overwrite: true, wantErr: ErrSameInputOutput},
+		{name: "hard link to the input", dst: hardLink, overwrite: true, wantErr: ErrSameInputOutput},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckOutputPath(src, tt.dst, tt.overwrite)
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("CheckOutputPath() error = %v, want nil", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("CheckOutputPath() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+
+	symlink := filepath.Join(tmpDir, "symlink.txt")
+	if err := os.Symlink(src, symlink); err != nil {
+		t.Logf("symlinks unavailable, skipping symlink case: %v", err)
+		return
+	}
+	if err := CheckOutputPath(src, symlink, true); !errors.Is(err, ErrSameInputOutput) {
+		t.Fatalf("CheckOutputPath(symlink to input) error = %v, want ErrSameInputOutput", err)
+	}
+}
+
+// TestOperationsRefuseToOverwriteTheirInput is a regression test for BUG-003: an
+// operation whose output is its own input must fail and leave the input untouched.
+func TestOperationsRefuseToOverwriteTheirInput(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := []byte(strings.Repeat("do not destroy me ", 256))
+
+	plain := filepath.Join(tmpDir, "plain.bin")
+	gz := filepath.Join(tmpDir, "data.gz")
+	enc := filepath.Join(tmpDir, "data.enc")
+	zipFile := filepath.Join(tmpDir, "data.zip")
+	if err := os.WriteFile(plain, content, 0o600); err != nil {
+		t.Fatalf("write plain: %v", err)
+	}
+	if err := CompressFile(plain, gz, -1); err != nil {
+		t.Fatalf("prepare gzip: %v", err)
+	}
+	if err := EncryptFile(plain, enc, "pw"); err != nil {
+		t.Fatalf("prepare encrypted file: %v", err)
+	}
+	if err := CompressFileWithFormat(plain, zipFile, "zip", -1); err != nil {
+		t.Fatalf("prepare zip: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		run  func(p string) error
+	}{
+		{"compress", plain, func(p string) error { return CompressFileWithFormat(p, p, "", -1) }},
+		{"compress zip", plain, func(p string) error { return CompressFileWithFormat(p, p, "zip", -1) }},
+		{"decompress gzip", gz, func(p string) error { return DecompressFile(p, p) }},
+		{"decompress zip", zipFile, func(p string) error { return DecompressFile(p, p) }},
+		{"encrypt", plain, func(p string) error { return EncryptFile(p, p, "pw") }},
+		{"decrypt", enc, func(p string) error { return DecryptFile(p, p, "pw") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.path, err)
+			}
+			if err := tc.run(tc.path); !errors.Is(err, ErrSameInputOutput) {
+				t.Errorf("error = %v, want ErrSameInputOutput", err)
+			}
+			after, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatalf("read %s after: %v", tc.path, err)
+			}
+			if string(after) != string(before) {
+				t.Errorf("%s was modified (%d bytes before, %d after)", tc.path, len(before), len(after))
+			}
+		})
+	}
+}
+
+// TestCompressDirectoryRejectsOutputInsideInput checks that a directory can't be
+// compressed into an archive inside itself, which would archive its own partial output.
+func TestCompressDirectoryRejectsOutputInsideInput(t *testing.T) {
+	srcDir := filepath.Join(t.TempDir(), "folder")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "file.txt"), []byte("data"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	for _, format := range []string{"gzip", "zip"} {
+		dst := filepath.Join(srcDir, "self."+format)
+		if err := CompressFileWithFormat(srcDir, dst, format, -1); !errors.Is(err, ErrOutputInsideInput) {
+			t.Errorf("%s: error = %v, want ErrOutputInsideInput", format, err)
+		}
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Errorf("%s: archive written inside the input folder (stat err: %v)", format, err)
+		}
 	}
 }

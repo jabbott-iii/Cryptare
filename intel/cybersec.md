@@ -82,7 +82,7 @@ These apply to all changes.
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Open |
 | SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Open |
-| SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Open |
+| SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | In Progress |
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Open |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | Open |
 | SEC-011 | Imported key metadata not validated before storage and display | Low | Open |
@@ -95,7 +95,7 @@ These apply to all changes.
 ### SEC-001 — Empty passwords accepted for encryption and key protection
 
 - **Status:** In Progress
-- **Progress (2026-09-24, uncommitted):** Remediation steps 1 and 2 are implemented
+- **Progress (2026-09-24, committed in `ed46150`):** Remediation steps 1 and 2 are implemented
   and validated.
   - `EncryptFile` and `EncryptKeyBlob` return `ErrEmptyPassword`, which covers files,
     directory archives, key generation and `ExportKeyToFile`. The CLI and TUI show
@@ -132,7 +132,7 @@ These apply to all changes.
 ### SEC-002 — Interactive password prompt truncates at whitespace and echoes input
 
 - **Status:** In Progress
-- **Progress (2026-09-24, uncommitted):** Remediation steps 1, 2 and 4 are
+- **Progress (2026-09-24, committed in `ed46150`):** Remediation steps 1, 2 and 4 are
   implemented and validated.
   - `readPassword` reads the whole line and strips only `\r`/`\n`. On a terminal it
     reads without echo through `github.com/charmbracelet/x/term`, which is now a
@@ -285,7 +285,15 @@ These apply to all changes.
 
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-24, uncommitted):** Part of step 2 is done.
+  - `decompress` and `decrypt` now refuse an output path that already exists unless
+    `--force` is given, and the TUI always refuses (plan 1.5, `CheckOutputPath`).
+  - By default, extraction therefore goes only into a new folder, which can't already
+    contain a planted symlink.
+  - Remaining: with `--force`, extraction into an existing folder still follows
+    symlinks and overwrites files. `os.Root` extraction (step 1), per-entry
+    overwrite checks and mode masking (step 3) are still needed.
 - **Affected component:** `internal/compress.go` `extractTarGz`, `extractZip`,
   `extractZipSingleFile`. The destination check is lexical only; `os.MkdirAll` and
   `os.OpenFile(…O_TRUNC…)` follow symlinks. gosec G703 flags the same code.
