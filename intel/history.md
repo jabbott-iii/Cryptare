@@ -86,3 +86,25 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   - The patch applies cleanly to the owner's current workflow files.
 - **Not run:** Windows and macOS runners, the Docker workflow (no Docker daemon was
   available), and GitHub-hosted runs.
+
+## 2026-09-24 — v1.0.1 released with working binaries (BUG-001 fixed)
+
+- The owner applied the workflow patch and committed the rework as `5286920`, tagged
+  `v1.0.1`. The owner reports that the CI, CD, Docker and Security workflows all
+  succeeded.
+- The release assets were verified independently:
+  - all five assets match `checksums.txt`;
+  - each binary's build info shows `CGO_ENABLED=1` and `main.version=v1.0.1`, with
+    the expected OS/architecture;
+  - none contains go-sqlite3's CGO-less stub message, which the v1.0.0 binary does;
+  - `cryptare_linux_amd64` passed `--version`, `keys generate`/`keys list`, and an
+    encrypt/decrypt round-trip.
+- Closed: BUG-001 and Q-001. Plan 0.4, 1.4 and 3.6 are done.
+- Still open:
+  - v1.0.0's broken assets remain published (Q-007);
+  - Windows arm64 is no longer built (W6);
+  - darwin/amd64 hasn't been run (W7);
+  - gosec alerts are not yet triaged (SEC-012).
+- Docs updated for the new pipeline (plan 4.9): `map.md` CI/CD table, `maint.md` §6,
+  and `CONTRIBUTING.md`. The README release table and the known-issue callout wait until
+  the owner pulls `3c80050` (a README edit made on GitHub).

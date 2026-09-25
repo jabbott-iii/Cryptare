@@ -73,8 +73,10 @@ golangci-lint run                                    # v2.13.2
 go test ./...                                        # add -race when a C toolchain is available
 ```
 
-CI runs on Ubuntu, Windows and macOS. On every push and pull request, CodeQL and gosec
-also run (`security.yml`). Pull requests to `main` get a Docker build smoke test
+CI runs on Ubuntu, Windows and macOS. After the checks above, it builds the binary with
+CGO and smoke-tests it: `--version`, `keys generate`/`keys list`, and an encrypt/decrypt
+round-trip. On every push and pull request, CodeQL and gosec also run
+(`security.yml`). Pull requests to `main` get a Docker build smoke test
 (`docker.yml`).
 
 ## Coding expectations

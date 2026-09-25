@@ -344,8 +344,9 @@ These apply to all changes.
   - gosec is pinned to v2.29.0;
   - `results.sarif` is uploaded with category `gosec`.
 
-  Remaining: merge the changes (fixes for plan items W1–W3 and W5 are ready as a validated patch that the owner applies), confirm that gosec alerts
-  appear in Code Scanning, triage them (step 3), and decide on govulncheck (step 5).
+  These changes shipped in `5286920` (tag v1.0.1), and the owner reports that the
+  Security workflow succeeded. Remaining: confirm that gosec alerts appear in Code
+  Scanning, triage them (step 3), and decide on govulncheck (step 5).
 - **Affected component:**
   - `.github/workflows/security.yml`: `securego/gosec@master` is unpinned, runs with
     `-no-fail`, and its SARIF output is never uploaded.

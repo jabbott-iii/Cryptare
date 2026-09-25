@@ -40,7 +40,7 @@ Last updated: 2026-09-24
 
 | ID | Defect | Evidence | Location |
 |---|---|---|---|
-| BUG-001 | Release binaries don't work: every command, including `--help`, exits with `go-sqlite3 requires cgo to work. This is a stub`. | Downloaded the v1.0.0 `cryptare_linux_amd64.tar.gz` (checksum matched `checksums.txt`) and ran it; a local `CGO_ENABLED=0` build behaves the same way. | `.github/workflows/cd.yml` (`CGO_ENABLED=0`); `ci.yml` cross-builds the same way and never runs the binaries |
+| BUG-001 | Release binaries don't work: every command, including `--help`, exits with `go-sqlite3 requires cgo to work. This is a stub`. **Fixed in v1.0.1 (2026-09-24):** every release target is built natively with CGO; the v1.0.1 assets were checked (build info, checksums, and a run of the linux/amd64 binary). The broken v1.0.0 assets are still published (Q-007). | Downloaded the v1.0.0 `cryptare_linux_amd64.tar.gz` (checksum matched `checksums.txt`) and ran it; a local `CGO_ENABLED=0` build behaves the same way. | `.github/workflows/cd.yml` (`CGO_ENABLED=0`); `ci.yml` cross-builds the same way and never runs the binaries |
 | BUG-002 | The TUI crashes (panics) when an unhandled key is pressed in a form: Left, Right, Delete, Home, End, Ctrl+U, and other key types not listed in the switch. | A probe called `updateForm` with each key type; each one panicked with `unhandled default case`. | `internal/logic-tui.go` `updateForm` default branch; similar `panic` defaults in `Update` and `buildActionCmd` |
 | BUG-003 | `compress <file> --output <same file>` destroys the source: the output is opened with `O_TRUNC` before the source is read. | Probe: a 4096-byte file became a gzip stream that decompresses to 0 bytes; no error was returned. | `internal/compress.go` `CompressFileWithFormat` |
 | BUG-004 | Existing outputs are overwritten silently, and writes are not atomic. Decrypting `x.enc` replaces an existing `x`; compress, decompress and extract truncate existing files; a failure mid-write leaves partial output. | Code review | `crypto.go` `DecryptFile`, `EncryptFile`; `compress.go` writers |
@@ -81,13 +81,13 @@ Last updated: 2026-09-24
 
 | ID | Question | Why it matters |
 |---|---|---|
-| Q-001 | How should releases handle CGO? (a) Build each target natively with CGO, using an OS matrix or a cross C toolchain (e.g. zig cc). (b) Switch to a pure-Go SQLite driver, which adds a new dependency. (c) Drop SQLite. **2026-09-24: option (a) chosen.** The staged `cd.yml` builds each target natively with CGO (static Linux binaries; darwin/amd64 cross-compiled on Apple silicon). Close this once the release pipeline passes validation (`plan.md`, Current work). | Blocks BUG-001, which means every published binary is unusable. |
+| Q-001 | How should releases handle CGO? (a) Build each target natively with CGO, using an OS matrix or a cross C toolchain (e.g. zig cc). (b) Switch to a pure-Go SQLite driver, which adds a new dependency. (c) Drop SQLite. **2026-09-24: option (a) chosen.** The staged `cd.yml` builds each target natively with CGO (static Linux binaries; darwin/amd64 cross-compiled on Apple silicon). **Closed 2026-09-24:** verified by the working v1.0.1 release. | Blocks BUG-001, which means every published binary is unusable. |
 | Q-002 | Should stored keys be usable for file encryption (e.g. `encrypt --key <id>`), or is the key store meant to stay standalone? | Decides the value of the key-management feature and shapes the format work (SEC-005). |
 | Q-003 | Should the default database move from `./cryptare.db` to a per-user location (e.g. `os.UserConfigDir()/cryptare/cryptare.db`)? How should existing `./cryptare.db` files be migrated? | SEC-010; a behaviour change for existing users. |
 | Q-004 | What password policy applies on encrypt: a minimum length, and confirmation (typing it twice)? | SEC-001/SEC-002; a typo on encrypt currently makes data unrecoverable. |
 | Q-005 | Should `cryptare.db` be purged from git history and force-pushed? | SEC-003; irreversible, so it is the owner's call. |
 | Q-006 | Was the `NOTICE` third-party list removed on purpose, to be regenerated? The file now ends mid-sentence. Where dependency attributions and license texts should live (NOTICE, or a bundled licenses file with the binaries) is a licensing decision for the owner. | Licensing hygiene. |
-| Q-007 | What should happen to the broken v1.0.0 release: mark it as broken, remove its assets, or supersede it with v1.0.1? | Users downloading v1.0.0 get non-working binaries. |
+| Q-007 | What should happen to the broken v1.0.0 release: mark it as broken, remove its assets, or supersede it with v1.0.1? v1.0.1 (working) is now available as the replacement. | Users downloading v1.0.0 get non-working binaries. |
 
 ## 5. Reproducing the validation locally
 

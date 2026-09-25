@@ -93,9 +93,11 @@ Stored keys are not used by any encrypt or decrypt path today (Q-002 in `notes.m
 
 ## CI/CD
 
+All third-party actions are pinned to full commit SHAs.
+
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push/PR (all branches) | Ubuntu, Windows and macOS matrix: `go mod tidy` diff, `go vet`, golangci-lint v2.13.2, `go test` with coverage (Codecov), cross-compiles 3 binaries without running them |
-| `security.yml` | push/PR, weekly | CodeQL (Go, security-extended). gosec runs with `-no-fail`, but its SARIF output is never uploaded |
-| `docker.yml` | push/PR to `main` | `docker build`, then `docker run … --help` smoke test |
-| `cd.yml` | `v*` tags, manual | Builds 6 OS/arch targets with `CGO_ENABLED=0` (see BUG-001), writes `checksums.txt`, creates a GitHub Release |
+| `ci.yml` | push/PR (all branches) | Ubuntu, Windows and macOS matrix: `go mod tidy` diff, `go vet`, golangci-lint v2.13.2, `go test` with coverage (Codecov). Then a native CGO build, smoke-tested with `--version`, `keys generate`/`keys list` and an encrypt/decrypt round-trip. |
+| `security.yml` | push/PR, weekly | CodeQL (Go, security-extended). gosec v2.29.0, with SARIF uploaded to Code Scanning (category `gosec`). |
+| `docker.yml` | push/PR to `main` | `docker build`, `--help`, then `keys generate`/`keys list` on a named volume |
+| `cd.yml` | `v*` tags, manual | Native CGO build per target on a matching runner: linux amd64/arm64 (static), darwin arm64, darwin amd64 (cross-compiled), windows amd64. Stamps `-X main.version=<tag>`, smoke-tests every target except darwin/amd64, packages `cryptare_<os>_<arch>` archives plus `checksums.txt`, and creates a GitHub Release on tags. |

@@ -113,12 +113,17 @@ These are observed in the codebase and required for new code:
 - **CGO is required.** The SQLite driver (`gorm.io/driver/sqlite`, which uses
   `github.com/mattn/go-sqlite3`) needs CGO. A `CGO_ENABLED=0` build compiles but fails
   at startup on every command, including `--help`, because `main.go` opens the DB
-  first. Every build or release pipeline must either enable CGO with a C toolchain for
-  each target or switch to a pure-Go SQLite driver. That decision is Q-001 in
-  `intel/notes.md`; the defect is BUG-001.
+  first (BUG-001, fixed in v1.0.1). Releases therefore build each target natively with
+  CGO (Q-001):
+  - Linux binaries are statically linked (tags
+    `sqlite_omit_load_extension,osusergo,netgo`; `-linkmode external -extldflags -static`).
+  - darwin/amd64 is cross-compiled on an Apple silicon runner.
+  - CI and CD smoke-run each built binary against a real database, so a CGO-less build
+    fails the pipeline instead of shipping. Keep those smoke steps.
 - **Releases** are cut by pushing a `vX.Y.Z` tag (`make release VERSION=vX.Y.Z`), which
   triggers `.github/workflows/cd.yml`. It publishes
-  `cryptare_<os>_<arch>.tar.gz`/`.zip` archives plus `checksums.txt`.
+  `cryptare_<os>_<arch>.tar.gz`/`.zip` archives for linux/amd64, linux/arm64,
+  darwin/amd64, darwin/arm64 and windows/amd64, plus `checksums.txt`.
 - **Version stamping:** `main.version` defaults to `dev`. Release builds set it with
   `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
