@@ -316,8 +316,6 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 3:
 					m.startForm(actionKeysDelete, screenKeys)
 				}
-			default:
-				panic("unhandled default case")
 			}
 
 		case "esc", "b":
@@ -413,7 +411,8 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
-		panic("unhandled default case")
+		// Keys the form doesn't use (arrows, Delete, Home/End, function keys, …) are ignored.
+		return m, nil
 	}
 }
 
@@ -673,6 +672,8 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			return actionResultMsg{message: fmt.Sprintf("Deleted key: %s", keyID), reload: true}
 		}
 	default:
-		panic("unhandled default case")
+		return func() tea.Msg {
+			return actionResultMsg{err: fmt.Errorf("unsupported action %d", action)}
+		}
 	}
 }

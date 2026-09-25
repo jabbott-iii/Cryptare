@@ -108,3 +108,24 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 - Docs updated for the new pipeline (plan 4.9): `map.md` CI/CD table, `maint.md` §6,
   and `CONTRIBUTING.md`. The README release table and the known-issue callout wait until
   the owner pulls `3c80050` (a README edit made on GitHub).
+
+## 2026-09-24 — TUI no longer crashes on unhandled keys (plan 1.3, BUG-002)
+
+- `internal/logic-tui.go`: removed the three `panic("unhandled default case")`
+  branches.
+  - `updateForm` now ignores keys a form doesn't use (arrows, Delete, Home/End, Page
+    Up/Down, Ctrl+U, function keys).
+  - `Update` no longer has an unreachable panicking default for the Enter key.
+  - `buildActionCmd` returns an `unsupported action` error message instead of panicking.
+- New tests in `internal/logic_tui_test.go`:
+  - `TestDashboardFormIgnoresUnhandledKeys` covers 9 keys in standard and vim modes
+    (18 cases);
+  - `TestDashboardUnknownActionReportsError`;
+  - `TestDashboardEnterOnUnknownScreenIsIgnored`.
+- Validation (Go 1.26.8, linux/amd64):
+  - the new test panicked before the fix and passes after it;
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` and golangci-lint v2.13.2 are clean;
+    `go test -race ./...` passes;
+  - end to end, the old binary in a pseudo-terminal crashed with
+    `unhandled default case` after Left/Delete/Home/End in the Encrypt form; the fixed
+    binary stayed up and exited cleanly on Ctrl+C.

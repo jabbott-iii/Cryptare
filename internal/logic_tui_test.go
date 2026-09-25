@@ -677,3 +677,72 @@ func TestDashboardKeysDeleteRequiresConfirmationPhrase(t *testing.T) {
 		t.Fatalf("expected key to remain after failed confirmation, got: %v", err)
 	}
 }
+
+// TestDashboardFormIgnoresUnhandledKeys is a regression test for BUG-002: keys a
+// form doesn't use (arrows, Delete, Home/End, …) must be ignored, not crash the TUI.
+func TestDashboardFormIgnoresUnhandledKeys(t *testing.T) {
+	keys := []tea.KeyType{
+		tea.KeyLeft, tea.KeyRight, tea.KeyDelete, tea.KeyHome, tea.KeyEnd,
+		tea.KeyPgUp, tea.KeyPgDown, tea.KeyCtrlU, tea.KeyF1,
+	}
+
+	for _, vim := range []bool{false, true} {
+		for _, key := range keys {
+			name := tea.Key{Type: key}.String()
+			if vim {
+				name = "vim/" + name
+			}
+			t.Run(name, func(t *testing.T) {
+				db := newTestDatabase(t, false)
+				m := NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: vim})
+				m.startForm(actionEncrypt, screenMain)
+				m = typeString(m, "abc")
+
+				next, cmd := m.Update(tea.KeyMsg{Type: key})
+				m = next.(DashboardModel)
+
+				if cmd != nil {
+					t.Fatalf("Update(%s) returned a command, want none", name)
+				}
+				if m.screen != screenForm {
+					t.Fatalf("screen = %v, want screenForm", m.screen)
+				}
+				if got := m.fieldValue(labelFilePath); got != "abc" {
+					t.Fatalf("fieldValue = %q, want %q", got, "abc")
+				}
+			})
+		}
+	}
+}
+
+// TestDashboardUnknownActionReportsError checks that submitting a form with no
+// valid action reports an error instead of panicking.
+func TestDashboardUnknownActionReportsError(t *testing.T) {
+	db := newTestDatabase(t, false)
+	m := NewDashboardModel(db)
+	m.action = actionNone
+
+	msg, ok := m.buildActionCmd()().(actionResultMsg)
+	if !ok {
+		t.Fatalf("buildActionCmd() message type = %T, want actionResultMsg", msg)
+	}
+	if msg.err == nil {
+		t.Fatal("buildActionCmd() error = nil, want an unsupported-action error")
+	}
+}
+
+// TestDashboardEnterOnUnknownScreenIsIgnored checks that Enter on a screen with no
+// menu is a no-op instead of a panic.
+func TestDashboardEnterOnUnknownScreenIsIgnored(t *testing.T) {
+	db := newTestDatabase(t, false)
+	m := NewDashboardModel(db)
+	m.screen = dashboardScreen(99)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter) returned a command, want none")
+	}
+	if got := next.(DashboardModel).screen; got != dashboardScreen(99) {
+		t.Fatalf("screen = %v, want unchanged", got)
+	}
+}
