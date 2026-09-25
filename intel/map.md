@@ -9,6 +9,7 @@ Cryptare/
 ├── main.go                  # entry: open DB, build Cobra root command, execute
 ├── database_path.go         # CRYPTARE_DB_PATH lookup (default ./cryptare.db)
 ├── database_path_test.go
+├── version_test.go          # --version flag test
 ├── internal/                # single Go package `internal`
 │   ├── crypto.go            # KDF, AES-GCM file/dir encryption, key blobs, key export/import
 │   ├── compress.go          # gzip / tar.gz / zip create + extract; closeWithError helper
@@ -31,7 +32,7 @@ Cryptare/
 
 | Component | Key symbols | Notes |
 |---|---|---|
-| Entry | `main`, `databasePathFromEnv` | Opens the DB before any command runs, even `--help`. |
+| Entry | `main`, `newRootCmd`, `version`, `databasePathFromEnv` | Opens the DB before any command runs, even `--help` and `--version`. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
 | CLI | `NewRootCmd`, `new*Cmd`, `readPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. |
 | TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. |
 | Crypto | `EncryptFile`, `DecryptFile`, `encryptBytesWithAAD`, `encryptDirectory`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. |

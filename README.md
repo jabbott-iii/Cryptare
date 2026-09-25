@@ -103,6 +103,7 @@ Cryptare is organized into focused command groups:
 - cryptare compress — compress a file or directory
 - cryptare decompress — decompress a gzip file or extract a tar.gz/zip archive
 - cryptare keys — manage encryption keys
+- cryptare --version (or -v) — print the version: release builds report their tag, local builds report `dev`
 
 ### encrypt
 

@@ -119,9 +119,10 @@ These are observed in the codebase and required for new code:
 - **Releases** are cut by pushing a `vX.Y.Z` tag (`make release VERSION=vX.Y.Z`), which
   triggers `.github/workflows/cd.yml`. It publishes
   `cryptare_<os>_<arch>.tar.gz`/`.zip` archives plus `checksums.txt`.
-- **Version stamping:** `cd.yml` passes `-X main.version=…` to the linker, but no
-  `version` variable exists in package `main`, so the flag has no effect. Add the
-  variable (and a `--version` flag) before relying on it.
+- **Version stamping:** `main.version` defaults to `dev`. Release builds set it with
+  `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
+  `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
+  because the release workflow depends on it.
 - **Docker:** the `Dockerfile` builds with CGO for `linux/amd64` only (`GOARCH=amd64`).
 
 ## 7. Change checklist

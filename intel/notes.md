@@ -3,7 +3,7 @@
 Durable engineering notes and unresolved technical questions. Security issues are
 tracked in [`cybersec.md`](cybersec.md), and work sequencing in [`plan.md`](plan.md).
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## 1. Baseline snapshot (2026-09-23)
 
@@ -48,7 +48,7 @@ Last updated: 2026-09-23
 | BUG-006 | `keys export` without `--output` reports a filename built from a second `time.Now()` call, which can differ from the file actually written. | Code review | `logic-cli.go` `newKeysExportCmd`; `logic-tui.go` export action; `crypto.go` `ExportKeyToFile` |
 | BUG-007 | Extension handling is inconsistent. `.zip` detection ignores case, but `.gz`/`.tgz`/`.tar.gz` detection and default output naming are case-sensitive. For example, `FOO.ZIP` extracts to `FOO.ZIP.dec/`, and an uppercase `.TAR.GZ` without a `.tar` gzip header name is written out as a raw tar file. | Code review | `compress.go` `DecompressFile`, `defaultDecompressOutput`, `isTarGzArchive` |
 | BUG-008 | `DashboardModel.busy` is set but never checked, so a second TUI action can be started while one is still running. | Code review | `ui-dashboard.go`, `logic-tui.go` |
-| BUG-009 | `-ldflags -X main.version=…` in CD has no effect (no such variable), and there is no `--version` flag. | `go version -m` on a probe build; `cryptare --version` → `unknown flag` | `main.go`, `cd.yml` |
+| BUG-009 | `-ldflags -X main.version=…` in CD has no effect (no such variable), and there is no `--version` flag. **Fixed 2026-09-24 (uncommitted):** `main.version` (default `dev`) and `--version`/`-v`; see plan 3.6. | `go version -m` on a probe build; `cryptare --version` → `unknown flag` | `main.go`, `cd.yml` |
 | BUG-010 | Encryption and decryption read whole files into memory, so memory use grows with file size and large inputs can exhaust RAM. | Code review (`os.ReadFile`) | `crypto.go` |
 | BUG-011 | `keys export` doesn't check that the export password matches the key's master password, and `keys import` doesn't check that the inner blob decrypts. A `.ckey` can therefore need two different passwords to be usable. | Code review | `crypto.go` `ExportKeyToFile`, `ImportKeyFromFile` |
 
@@ -63,8 +63,9 @@ Last updated: 2026-09-23
 - **Dead code.** The `Storage` interface is declared but unused.
 - **Stale comment.** `ImportKeyFromFile` says "Parse minimal JSON manually to avoid
   import cycle", but it uses `encoding/json`.
-- **Leftovers from another project.** `docker.yml` names its image `munus:<sha>`, and
-  `database_path_test.go` uses `tasks.db`. Both are cosmetic.
+- **Leftovers from another project.** `database_path_test.go` uses `tasks.db`
+  (cosmetic). The Munus names in the workflows, including the `munus:<sha>` image in
+  `docker.yml`, are fixed in the 2026-09-24 workflow patch (plan W3).
 - **IDE files.** `.idea/` is tracked (`.gitignore` has `# .idea/` commented out).
   `.junie/plans/` is an empty, untracked agent workspace.
 - **README drift.** The previous install section named `cryptare-<os>-<arch>`
@@ -80,7 +81,7 @@ Last updated: 2026-09-23
 
 | ID | Question | Why it matters |
 |---|---|---|
-| Q-001 | How should releases handle CGO? (a) Build each target natively with CGO, using an OS matrix or a cross C toolchain (e.g. zig cc). (b) Switch to a pure-Go SQLite driver, which adds a new dependency. (c) Drop SQLite. | Blocks BUG-001, which means every published binary is unusable. |
+| Q-001 | How should releases handle CGO? (a) Build each target natively with CGO, using an OS matrix or a cross C toolchain (e.g. zig cc). (b) Switch to a pure-Go SQLite driver, which adds a new dependency. (c) Drop SQLite. **2026-09-24: option (a) chosen.** The staged `cd.yml` builds each target natively with CGO (static Linux binaries; darwin/amd64 cross-compiled on Apple silicon). Close this once the release pipeline passes validation (`plan.md`, Current work). | Blocks BUG-001, which means every published binary is unusable. |
 | Q-002 | Should stored keys be usable for file encryption (e.g. `encrypt --key <id>`), or is the key store meant to stay standalone? | Decides the value of the key-management feature and shapes the format work (SEC-005). |
 | Q-003 | Should the default database move from `./cryptare.db` to a per-user location (e.g. `os.UserConfigDir()/cryptare/cryptare.db`)? How should existing `./cryptare.db` files be migrated? | SEC-010; a behaviour change for existing users. |
 | Q-004 | What password policy applies on encrypt: a minimum length, and confirmation (typing it twice)? | SEC-001/SEC-002; a typo on encrypt currently makes data unrecoverable. |

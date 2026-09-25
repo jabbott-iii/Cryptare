@@ -9,9 +9,10 @@ Before making changes, read:
 3. `intel/plan.md` — active implementation plans and follow-on work.
 4. `intel/cybersec.md`— security requirements, identified security issues,
   remediation items, and the status of security fixes.
-5. `intel/maint.md` — authoritative architecture and maintainability guidance.
+5. `intel/maint.md`— authoritative architecture and maintainability guidance.
 6. `intel/map.md`— repository structure map, component descriptions, and relevant
   technical diagrams
+7. `intel/golang.md`— authoritative guidance on Go language usage.
 
 ## Instruction Precedence
 - Follow all applicable platform, organization, and account-level instructions.

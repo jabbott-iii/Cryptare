@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 ## 1. Security requirements
 
@@ -86,7 +86,7 @@ These apply to all changes.
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Open |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | Open |
 | SEC-011 | Imported key metadata not validated before storage and display | Low | Open |
-| SEC-012 | CI security-scan results discarded; actions not pinned | Low | Open |
+| SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | Open |
 
@@ -336,7 +336,16 @@ These apply to all changes.
 
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-24):** Staged, uncommitted workflow changes cover remediation
+  steps 1, 2 and 4, and were verified:
+  - all 9 third-party actions are pinned to full commit SHAs, each matching its release
+    tag on GitHub;
+  - gosec is pinned to v2.29.0;
+  - `results.sarif` is uploaded with category `gosec`.
+
+  Remaining: merge the changes (fixes for plan items W1–W3 and W5 are ready as a validated patch that the owner applies), confirm that gosec alerts
+  appear in Code Scanning, triage them (step 3), and decide on govulncheck (step 5).
 - **Affected component:**
   - `.github/workflows/security.yml`: `securego/gosec@master` is unpinned, runs with
     `-no-fail`, and its SARIF output is never uploaded.

@@ -18,14 +18,22 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      IMAGE_NAME: munus:${{ github.sha }}
+      IMAGE_NAME: cryptare:${{ github.sha }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Build Docker image
         run: docker build --tag "$IMAGE_NAME" --file Dockerfile .
 
       - name: Smoke test CLI help
         run: docker run --rm "$IMAGE_NAME" --help
+
+      # Exercises the SQLite key store on the image's data volume
+      # (the Dockerfile sets CRYPTARE_DB_PATH=/app/data/cryptare.db).
+      - name: Smoke test database access
+        run: |
+          docker volume create cryptare-smoke
+          docker run --rm -v cryptare-smoke:/app/data "$IMAGE_NAME" keys generate --password docker-smoke
+          docker run --rm -v cryptare-smoke:/app/data "$IMAGE_NAME" keys list | grep -q "AES-256-GCM"

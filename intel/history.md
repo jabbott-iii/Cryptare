@@ -45,3 +45,44 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   - added a known-issue note about the non-working release binaries (BUG-001) and the
     interactive password prompt (SEC-002).
 - No code, tests, configuration, CI, dependencies or git history were changed.
+
+## 2026-09-24 — `--version` flag (plan 3.6, BUG-009)
+
+- Added `var version = "dev"` and a `newRootCmd` helper in package `main`. The helper
+  sets Cobra's `Version` field, so `cryptare --version` / `-v` prints
+  `cryptare version <value>`.
+- This makes the existing `-ldflags "-X main.version=<tag>"` in `cd.yml` take effect.
+  It resolves W4 of the CI/CD rework, so the staged smoke tests can call `--version`.
+- New test: `version_test.go`.
+- Docs updated: `README.md`, `intel/maint.md` §6, `intel/map.md`, `intel/notes.md`
+  (BUG-009), `intel/plan.md` (3.6, W4).
+- `internal.NewRootCmd` is unchanged, and no dependency changed (Cobra was already a
+  direct requirement).
+
+## 2026-09-24 — CI/CD rework fixes W1–W3 and W5 (delivered as a patch)
+
+- **Why a patch:** the owner approved the CI changes, but `.github/workflows/` is
+  write-protected for the assistant's remote tools on this machine. The fixes were
+  therefore delivered as `cryptare-workflow-fixes.patch`, and the owner applies it.
+- **W1:** the smoke tests in `ci.yml`, `cd.yml` and `docker.yml` now run Cryptare
+  commands:
+  - `--version` (in CD it must print the release tag);
+  - `keys generate` followed by `keys list | grep AES-256-GCM`;
+  - an encrypt → decrypt → `cmp` round-trip (CI and CD).
+- **W2:** `MUNUS_DB_PATH` → `CRYPTARE_DB_PATH`.
+- **W3:** `munus` names → `cryptare`: release binaries and archives, the CI binary, the
+  Docker image tag and the smoke volume.
+- **W5:** the `docker.yml` comment no longer claims the image runs as non-root. The
+  image itself is unchanged (SEC-013, plan 4.2).
+- **Validation** (analysis environment, Go 1.26.8, linux/amd64):
+  - actionlint 1.7.12 is clean; no `munus` references remain.
+  - The steps were extracted from the YAML and run against real builds:
+    - the CI smoke step passes with CGO and fails with CGO disabled (BUG-001's
+      failure mode);
+    - the CD build step produces a statically linked `dist/cryptare_linux_amd64`;
+    - the CD smoke step passes with tag `v1.0.1` and fails when the version stamp
+      doesn't match;
+    - release packaging produces `cryptare_<os>_<arch>` archives and `checksums.txt`.
+  - The patch applies cleanly to the owner's current workflow files.
+- **Not run:** Windows and macOS runners, the Docker workflow (no Docker daemon was
+  available), and GitHub-hosted runs.

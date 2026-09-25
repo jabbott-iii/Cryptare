@@ -21,7 +21,12 @@ import (
 	"os"
 
 	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/spf13/cobra"
 )
+
+// version is reported by --version. Release builds set it with
+// -ldflags "-X main.version=<tag>" (see .github/workflows/cd.yml).
+var version = "dev"
 
 func main() {
 
@@ -31,8 +36,16 @@ func main() {
 		log.Fatalf("failed to initialize database: %v", err)
 	}
 
-	rootCmd := internal.NewRootCmd(db)
+	rootCmd := newRootCmd(db)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// newRootCmd returns the CLI root command with the build version attached;
+// a non-empty Version makes Cobra register the --version flag.
+func newRootCmd(db *internal.Database) *cobra.Command {
+	cmd := internal.NewRootCmd(db)
+	cmd.Version = version
+	return cmd
 }
