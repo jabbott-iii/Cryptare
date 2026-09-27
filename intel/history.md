@@ -513,3 +513,20 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     the database 0600 on `keys list`, and tightened an existing 0644 database. The
     TUI opened the key screen and created the database 0600.
 - SEC-010 stays In Progress for step 3, a per-user default path (Q-003, plan 3.5).
+
+## 2026-09-27 — Windows CI failure on `d683739` fixed (test only)
+
+- CI #130 on `d683739` failed on `windows-latest` in "Run tests with coverage"; Ubuntu
+  and macOS passed. The log needs a GitHub sign-in, so the cause was found locally.
+- **Cause:** the new `TestFileCommandsDoNotCreateDatabase` (plan 2.5) ran `keys list`,
+  which opened `cryptare.db` in the test's temporary folder, and never closed it.
+  Windows can't delete an open file, so removing the temporary folder at the end of
+  the test fails there. `maint.md` §5 already requires test databases to be closed
+  for this reason. On Linux a probe of `/proc/self/fd` after the test showed the
+  handle still open on the deleted `cryptare.db`.
+- **Fix:** the test wraps `databaseOpener()` and closes every database it opened in a
+  `t.Cleanup` that runs before the folder is removed. No product code changed.
+- **Validation:** the same probe, run after both test packages, found no handle left
+  open in any test temporary folder. `gofmt -s`, `go vet` (including windows/amd64),
+  golangci-lint and `go test -race ./...` pass. Not verified on Windows itself;
+  confirm with the next CI run.

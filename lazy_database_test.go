@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/jabbott-iii/Cryptare/internal"
 )
 
 // TestFileCommandsDoNotCreateDatabase is a regression test for SEC-010 and BUG-005:
@@ -38,8 +40,25 @@ func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
 	}
 	const password = "correct horse battery staple"
 
+	// Close any database the keys commands open, before the temporary folder is
+	// removed: Windows can't delete a file that is still open.
+	var opened []*internal.Database
+	t.Cleanup(func() {
+		for _, db := range opened {
+			if sqlDB, err := db.Conn().DB(); err == nil {
+				_ = sqlDB.Close()
+			}
+		}
+	})
+	open := databaseOpener()
 	run := func(args ...string) error {
-		cmd := newRootCmd(databaseOpener())
+		cmd := newRootCmd(func() (*internal.Database, error) {
+			db, err := open()
+			if db != nil {
+				opened = append(opened, db)
+			}
+			return db, err
+		})
 		var out bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&out)
