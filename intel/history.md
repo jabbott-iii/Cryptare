@@ -240,3 +240,42 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     build refuses each, and `--force` overwrites when asked.
 - **Remaining:** atomic writes (plan 2.11), an optional TUI overwrite choice (2.12), and
   per-entry extraction safety under `--force` (SEC-008).
+
+## 2026-09-26 — v1.1.0 released; owner decisions recorded
+
+- **v1.1.0** was tagged on 2026-09-25 on `c47a94f`. It contains plan items 1.1, 1.1a,
+  1.2, 1.3 and 1.5, which completes Phase 1. Verified: the `checksums.txt` entry for
+  `cryptare_linux_amd64` matches; the binary reports `cryptare version v1.1.0`, refuses
+  an input-as-output, and offers `--force`.
+- **Owner decisions:**
+  - the key protected by the master password from the committed database is
+    discarded (plan 0.2; SEC-003 step 2);
+  - v1.0.0 stays as it is now that v1.1.0 is out (plan 0.3; Q-007 closed);
+  - stored keys should be usable for file encryption (Q-002 = yes; plan 3.4
+    approved);
+  - the password policy (Q-004) is still undecided.
+
+## 2026-09-26 — Atomic writes for single-file outputs (plan 2.11, BUG-004)
+
+- `internal/compress.go`: new `atomicFile` helpers — `createAtomicFile`, `Commit`,
+  `Abort` — and `writeFileAtomic`.
+  - Output is written to a hidden `.<name>.*.tmp` file (mode 0600) in the destination
+    folder, synced, then renamed over the destination.
+  - Compression now writes through this. The gzip body moved into a new `writeGzip`
+    helper so that the stream is finalised before the rename.
+  - Single-file gzip decompression uses it too.
+- `internal/crypto.go`: `EncryptFile` (file and directory artifacts), `DecryptFile`
+  (single file) and `ExportKeyToFile` use `writeFileAtomic` instead of `os.WriteFile`.
+- Archive extraction (tar.gz and zip, including a single-file zip) still writes in
+  place, keeping the archive's permissions. It moves to plan 2.2.
+- **New tests:** `TestFailedDecompressLeavesNoPartialOutput`,
+  `TestFailedCompressLeavesNoPartialOutput` (gzip and zip) and `TestWriteFileAtomic`.
+  The first two failed before the change, leaving partial outputs behind.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native, plus windows/amd64 and
+    darwin/arm64) and golangci-lint v2.13.2 are clean; `go test -race ./...` passes;
+    coverage 63.8%;
+  - with real binaries, a failed `decompress --force` of a truncated gzip replaced an
+    existing file with 49,961 bytes of partial data under v1.1.0; the new build leaves
+    it intact. Round trips still work, outputs are mode 0600, and no temporary files
+    are left.

@@ -98,7 +98,7 @@ func EncryptFile(src, dst, password string) error {
 		return err
 	}
 
-	if err := os.WriteFile(dst, ciphertext, 0o600); err != nil {
+	if err := writeFileAtomic(dst, ciphertext); err != nil {
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
@@ -137,7 +137,7 @@ func DecryptFile(src, dst, password string) error {
 		return err
 	}
 
-	if err := os.WriteFile(dst, plaintext, 0o600); err != nil {
+	if err := writeFileAtomic(dst, plaintext); err != nil {
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
@@ -230,7 +230,7 @@ func encryptDirectory(src, dst, password string) error {
 	payload := make([]byte, 0, len(directoryArtifactMagicV1)+len(ciphertext))
 	payload = append(payload, directoryArtifactMagicV1...)
 	payload = append(payload, ciphertext...)
-	if err := os.WriteFile(dst, payload, 0o600); err != nil {
+	if err := writeFileAtomic(dst, payload); err != nil {
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
@@ -407,7 +407,10 @@ func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
 		path = fmt.Sprintf("%s-%d.ckey", km.KeyID, time.Now().Unix())
 	}
 
-	return os.WriteFile(path, []byte(blob), 0o600)
+	if err := writeFileAtomic(path, []byte(blob)); err != nil {
+		return fmt.Errorf("write export file: %w", err)
+	}
+	return nil
 }
 
 // ImportKeyFromFile reads an export file and returns a KeyModel (not yet persisted).

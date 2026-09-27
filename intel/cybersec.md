@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-09-24
+Last updated: 2026-09-26
 
 ## 1. Security requirements
 
@@ -77,7 +77,7 @@ These apply to all changes.
 |---|---|---|---|
 | SEC-001 | Empty passwords accepted for encryption and key protection | High | In Progress |
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
-| SEC-003 | Encrypted key material committed to the public repository | Medium | Open |
+| SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Open |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Open |
@@ -181,7 +181,14 @@ These apply to all changes.
 
 ### SEC-003 — Encrypted key material committed to the public repository
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-26):**
+  - Step 1 is done: the removal was pushed on 2026-09-23, and `origin/main` no longer
+    tracks the file.
+  - Step 2 is done: the owner discarded the key.
+  - Step 3 is in place (`*.db` in `.gitignore`).
+  - Remaining: step 4, the history-purge decision (Q-005), and the optional CI check
+    (step 5).
 - **Affected component:** `cryptare.db` in git history.
   - First added in `d185a94` (2026-09-01) with no rows.
   - Holds one live `key_models` row in `06bda0b`.
@@ -286,7 +293,7 @@ These apply to all changes.
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
 - **Status:** In Progress
-- **Progress (2026-09-24, uncommitted):** Part of step 2 is done.
+- **Progress (2026-09-24, `c47a94f`, v1.1.0):** Part of step 2 is done.
   - `decompress` and `decrypt` now refuse an output path that already exists unless
     `--force` is given, and the TUI always refuses (plan 1.5, `CheckOutputPath`).
   - By default, extraction therefore goes only into a new folder, which can't already

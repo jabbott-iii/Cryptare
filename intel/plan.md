@@ -3,21 +3,25 @@
 Active implementation plans and follow-on work. IDs refer to
 [`cybersec.md`](cybersec.md) (SEC-…) and [`notes.md`](notes.md) (BUG-…, Q-…).
 
-Last updated: 2026-09-24
+Last updated: 2026-09-26
 
 Status: **In progress.**
-- Done: 0.1, 0.4, 1.3 (`18ea97a`), 1.4 and 3.6. The CI/CD rework shipped in v1.0.1 (`5286920`,
-  2026-09-24); see [Completed: CI/CD rework](#completed--cicd-rework-v101-2026-09-24).
-- In progress:
+- **Released:**
+  - v1.0.1 (`5286920`): the CI/CD rework; see
+    [Completed: CI/CD rework](#completed--cicd-rework-v101-2026-09-24).
+  - v1.1.0 (`c47a94f`, tagged 2026-09-25): 1.1, 1.1a, 1.2, 1.3 and 1.5. Phase 1 is
+    complete.
+- **Owner decisions (2026-09-26):**
+  - 0.2 and 0.3 are done.
+  - Stored keys should be usable (Q-002 = yes), so 3.4 is approved.
+  - The password policy (Q-004) is still open.
+- **Done, not yet committed:** 2.11 (atomic writes for single-file outputs,
+  2026-09-26).
+- **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
-  - 4.9: the README part waits until the owner pulls `3c80050`, a README edit made
-    on GitHub.
-- Done and committed (`ed46150`): 1.2 (empty passwords rejected), 1.1 (full-line hidden
-  password prompt) and 1.1a (terminal restored on Ctrl+C at that prompt).
-- Done, not yet committed (2026-09-24): 1.5 (outputs never overwrite their input or an
-  existing file without `--force`).
-- Phase 1 is complete once 1.5 is committed. Next up: owner actions 0.2, 0.3 and 0.5,
-  then Phase 2 (2.11 finishes BUG-004).
+  - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
+- **Next up:** the rest of Phase 2 (2.1–2.10), then Phase 3. Usable stored keys (3.4)
+  depend on the versioned file format (3.1).
 
 ## Principles
 
@@ -34,10 +38,10 @@ Status: **In progress.**
 | # | Action | Refs | Done when | Status |
 |---|---|---|---|---|
 | 0.1 | Push `aa27461` (removes `cryptare.db`); decide on purging history | SEC-003, Q-005 | `origin/main` no longer tracks `cryptare.db` | **Done** (pushed 2026-09-23; verified 2026-09-24). Purging history (Q-005) is still undecided. |
-| 0.2 | Stop using the master password that was used with the committed DB; discard that key | SEC-003 | Owner confirms | Open |
-| 0.3 | Mark the v1.0.0 release as broken, or pull its assets | BUG-001, Q-007 | Release page updated | Open. v1.0.1 is now available as a working replacement. |
+| 0.2 | Stop using the master password that was used with the committed DB; discard that key | SEC-003 | Owner confirms | **Done** (2026-09-26): the owner discarded the key. |
+| 0.3 | Mark the v1.0.0 release as broken, or pull its assets | BUG-001, Q-007 | Release page updated | **Done** (2026-09-26): v1.1.0 is released and verified. The owner decided to leave v1.0.0 as it is. |
 | 0.4 | Decide the CGO/release strategy | Q-001 | Decision recorded in `notes.md` | **Done:** a native CGO build per OS, verified by the v1.0.1 release (2026-09-24). |
-| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | Open |
+| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | **Partly done** (2026-09-26): stored keys should be usable (Q-002 = yes). The password policy (Q-004) is still open. |
 
 ## Completed — CI/CD rework (v1.0.1, 2026-09-24)
 
@@ -82,14 +86,14 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24** (`ed46150`). The minimum-length policy is still open (Q-004). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
 | 1.3 | Replace the `panic("unhandled default case")` branches with no-ops or errors. **Done 2026-09-24** (`18ea97a`). | BUG-002 | Tests send Left, Right, Delete, Home, End and Ctrl+U to forms without panicking |
 | 1.4 | Fix release builds with a native CGO build per OS, and smoke-run each built binary in CD and CI. **Done** in v1.0.1 (2026-09-24). | BUG-001, Q-001 | CI runs each built binary; a new release tag produces working assets |
-| 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) **Done 2026-09-24 (uncommitted).** Also refuses compressing a folder into an archive inside itself (BUG-013). Atomic writes, the rest of BUG-004, moved to 2.11. | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
+| 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) **Done 2026-09-24** (`c47a94f`, v1.1.0). Also refuses compressing a folder into an archive inside itself (BUG-013). Atomic writes, the rest of BUG-004, moved to 2.11. | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
 
 ## Phase 2 — Hardening
 
 | # | Change | Refs |
 |---|---|---|
 | 2.1 | Extraction size and entry limits, with clean-up on abort | SEC-007 |
-| 2.2 | Extract via `os.Root`; mask archive modes | SEC-008 |
+| 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions | SEC-008 |
 | 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext) | SEC-006 |
 | 2.4 | Enable SQLite `secure_delete`; align README wording | SEC-009 |
 | 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600 | SEC-010, BUG-005 |
@@ -98,7 +102,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 2.8 | Root-scoped opens when archiving | SEC-014 |
 | 2.9 | Fix case-insensitive extension handling and the export filename reporting | BUG-007, BUG-006 |
 | 2.10 | Gate TUI actions on `busy` | BUG-008 |
-| 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output | BUG-004 |
+| 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output. **Done 2026-09-26 (uncommitted)** for single-file outputs (encrypt, decrypt, compress, gzip decompress, key export). Archive extraction moves to 2.2. | BUG-004 |
 | 2.12 | Optional: an overwrite choice in the TUI forms, which refuse existing outputs today | BUG-004 |
 
 ## Phase 3 — Formats and architecture
@@ -108,7 +112,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2` | SEC-005 |
 | 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1) | BUG-010 |
 | 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
-| 3.4 | Wire stored keys into encrypt/decrypt, if Q-002 = yes | Q-002, BUG-011 |
+| 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
 | 3.5 | Per-user default DB path plus migration, if Q-003 = yes | Q-003 |
 | 3.6 | `main.version` variable and a `--version` flag. **Done** (2026-09-24, shipped in v1.0.1). It was moved ahead of 1.4 for W4. | BUG-009, W4 |
 

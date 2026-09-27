@@ -92,7 +92,8 @@ cryptare                             # opens the interactive TUI
 - Commands don't overwrite anything by default:
   - if the output file or folder already exists, the command stops; add `--force` to overwrite it;
   - an output that is the input itself is always refused, even with `--force`, as is compressing a folder into an archive inside that folder;
-  - the TUI never overwrites, so choose a different output path there.
+  - the TUI never overwrites, so choose a different output path there;
+  - a command that fails part-way leaves no partial output file, and a file it was replacing with `--force` is kept. Extracting a tar.gz or zip archive is the exception for now.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 

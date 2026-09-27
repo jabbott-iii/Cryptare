@@ -22,6 +22,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -564,5 +565,157 @@ func TestCompressDirectoryRejectsOutputInsideInput(t *testing.T) {
 		if _, err := os.Stat(dst); !os.IsNotExist(err) {
 			t.Errorf("%s: archive written inside the input folder (stat err: %v)", format, err)
 		}
+	}
+}
+
+// tempLeftovers lists hidden temporary files (".<name>.*.tmp") left in dir.
+func tempLeftovers(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", dir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") && strings.HasSuffix(e.Name(), ".tmp") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// TestFailedDecompressLeavesNoPartialOutput is a regression test for BUG-004: a
+// decompression that fails part-way must not leave a partial output, and must not
+// damage an existing output it was allowed to replace.
+func TestFailedDecompressLeavesNoPartialOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "random.bin")
+	data := make([]byte, 64*1024)
+	for i := range data {
+		data[i] = byte(i*7919 + i/13) // varied, poorly compressible content
+	}
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	gz := src + gzExt
+	if err := CompressFile(src, gz, -1); err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	info, err := os.Stat(gz)
+	if err != nil {
+		t.Fatalf("stat gzip: %v", err)
+	}
+	if err := os.Truncate(gz, info.Size()/2); err != nil {
+		t.Fatalf("truncate gzip: %v", err)
+	}
+
+	newOut := filepath.Join(tmpDir, "new-output.bin")
+	if err := DecompressFile(gz, newOut); err == nil {
+		t.Fatal("DecompressFile of a truncated gzip succeeded, want an error")
+	}
+	if _, err := os.Stat(newOut); !os.IsNotExist(err) {
+		t.Fatalf("partial output left behind (stat err: %v)", err)
+	}
+
+	existing := filepath.Join(tmpDir, "existing.bin")
+	if err := os.WriteFile(existing, []byte("previous contents"), 0o600); err != nil {
+		t.Fatalf("write existing output: %v", err)
+	}
+	if err := DecompressFile(gz, existing); err == nil {
+		t.Fatal("DecompressFile of a truncated gzip succeeded, want an error")
+	}
+	if got, _ := os.ReadFile(existing); string(got) != "previous contents" {
+		t.Fatalf("existing output damaged by a failed run: %d bytes", len(got))
+	}
+	if left := tempLeftovers(t, tmpDir); len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
+	}
+}
+
+// TestFailedCompressLeavesNoPartialOutput is a regression test for BUG-004: when
+// compressing a folder fails part-way (here on a symlink, which is refused), no
+// partial archive may be left and an existing archive must survive.
+func TestFailedCompressLeavesNoPartialOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "folder")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte(strings.Repeat("data ", 1000)), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(srcDir, "a.txt"), filepath.Join(srcDir, "z-link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	for _, format := range []string{"gzip", "zip"} {
+		t.Run(format, func(t *testing.T) {
+			newOut := filepath.Join(tmpDir, "new."+format)
+			if err := CompressFileWithFormat(srcDir, newOut, format, -1); err == nil {
+				t.Fatal("compressing a folder with a symlink succeeded, want an error")
+			}
+			if _, err := os.Stat(newOut); !os.IsNotExist(err) {
+				t.Fatalf("partial archive left behind (stat err: %v)", err)
+			}
+
+			existing := filepath.Join(tmpDir, "existing."+format)
+			if err := os.WriteFile(existing, []byte("previous archive"), 0o600); err != nil {
+				t.Fatalf("write existing output: %v", err)
+			}
+			if err := CompressFileWithFormat(srcDir, existing, format, -1); err == nil {
+				t.Fatal("compressing a folder with a symlink succeeded, want an error")
+			}
+			if got, _ := os.ReadFile(existing); string(got) != "previous archive" {
+				t.Fatalf("existing archive damaged by a failed run: %d bytes", len(got))
+			}
+			if left := tempLeftovers(t, tmpDir); len(left) != 0 {
+				t.Fatalf("temporary files left behind: %v", left)
+			}
+		})
+	}
+}
+
+// TestWriteFileAtomic checks the write-then-rename helper used for single-file outputs.
+func TestWriteFileAtomic(t *testing.T) {
+	tmpDir := t.TempDir()
+	dst := filepath.Join(tmpDir, "out.bin")
+
+	if err := writeFileAtomic(dst, []byte("first")); err != nil {
+		t.Fatalf("writeFileAtomic() error = %v", err)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "first" {
+		t.Fatalf("content = %q, want %q", got, "first")
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(dst); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %v (err %v), want 0600", info.Mode().Perm(), err)
+		}
+	}
+
+	if err := writeFileAtomic(dst, []byte("second")); err != nil {
+		t.Fatalf("writeFileAtomic() replace error = %v", err)
+	}
+	if got, _ := os.ReadFile(dst); string(got) != "second" {
+		t.Fatalf("content after replace = %q, want %q", got, "second")
+	}
+
+	// An aborted write leaves the existing file as it was and removes the temp file.
+	f, err := createAtomicFile(dst)
+	if err != nil {
+		t.Fatalf("createAtomicFile() error = %v", err)
+	}
+	if _, err := f.Write([]byte("never committed")); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	f.Abort()
+	if got, _ := os.ReadFile(dst); string(got) != "second" {
+		t.Fatalf("content after abort = %q, want %q", got, "second")
+	}
+	if left := tempLeftovers(t, tmpDir); len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
+	}
+
+	if err := writeFileAtomic(filepath.Join(tmpDir, "missing-dir", "out.bin"), []byte("x")); err == nil {
+		t.Fatal("writeFileAtomic() into a missing folder succeeded, want an error")
 	}
 }

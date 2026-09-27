@@ -93,20 +93,30 @@ func CompressFileWithFormat(src, dst, format string, level int) (err error) {
 		}
 	}
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	out, err := createAtomicFile(dst)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
-	defer closeWithError(&err, out, "close output file")
+	defer out.Abort()
 
 	if selectedFormat == formatZip {
-		if err := writeZip(out, src, info, level); err != nil {
-			return err
-		}
-		return nil
+		err = writeZip(out, src, info, level)
+	} else {
+		err = writeGzip(out, src, info, level)
 	}
+	if err != nil {
+		return err
+	}
+	if err := out.Commit(); err != nil {
+		return fmt.Errorf("finalise output file: %w", err)
+	}
+	return nil
+}
 
-	gz, err := gzip.NewWriterLevel(out, level)
+// writeGzip writes src to w as gzip: a tar.gz stream for a directory, plain gzip for
+// a file. The gzip stream is finalised before it returns.
+func writeGzip(w io.Writer, src string, info fs.FileInfo, level int) (err error) {
+	gz, err := gzip.NewWriterLevel(w, level)
 	if err != nil {
 		return fmt.Errorf("create gzip writer: %w", err)
 	}
@@ -172,14 +182,17 @@ func DecompressFile(src, dst string) (err error) {
 		return nil
 	}
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	out, err := createAtomicFile(dst)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
-	defer closeWithError(&err, out, "close output file")
+	defer out.Abort()
 
 	if _, err := io.Copy(out, gz); err != nil {
 		return fmt.Errorf("decompress data: %w", err)
+	}
+	if err := out.Commit(); err != nil {
+		return fmt.Errorf("finalise output file: %w", err)
 	}
 	return nil
 }
@@ -659,6 +672,63 @@ func checkOutputOutsideDir(srcDir, dst string) error {
 		return fmt.Errorf("%w: %s", ErrOutputInsideInput, dst)
 	}
 	return nil
+}
+
+// atomicFile is an output written to a hidden temporary file next to its destination
+// and renamed into place by Commit, so the destination is either left as it was or
+// fully written, never partially.
+type atomicFile struct {
+	*os.File
+	dst       string
+	committed bool
+}
+
+// createAtomicFile starts an atomic write of dst. The temporary file has mode 0600,
+// the mode the tool uses for all single-file outputs.
+func createAtomicFile(dst string) (*atomicFile, error) {
+	f, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*.tmp")
+	if err != nil {
+		return nil, err
+	}
+	return &atomicFile{File: f, dst: dst}, nil
+}
+
+// Commit flushes the temporary file to disk and renames it to the destination,
+// replacing any file already there.
+func (a *atomicFile) Commit() error {
+	if err := a.Sync(); err != nil {
+		return err
+	}
+	if err := a.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(a.Name(), a.dst); err != nil {
+		return err
+	}
+	a.committed = true
+	return nil
+}
+
+// Abort removes the temporary file unless Commit succeeded. It is safe to defer.
+func (a *atomicFile) Abort() {
+	if a.committed {
+		return
+	}
+	_ = a.Close()
+	_ = os.Remove(a.Name())
+}
+
+// writeFileAtomic writes data to dst through a temporary file and a rename.
+func writeFileAtomic(dst string, data []byte) error {
+	f, err := createAtomicFile(dst)
+	if err != nil {
+		return err
+	}
+	defer f.Abort()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	return f.Commit()
 }
 
 func closeWithError(target *error, closer io.Closer, message string) {

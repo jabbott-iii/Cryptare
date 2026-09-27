@@ -82,6 +82,16 @@ These are observed in the codebase and required for new code:
   archived (`ErrOutputInsideInput`). Interfaces call `CheckOutputPath` before writing:
   the CLI overwrites an existing output only with `--force`, and the TUI never does.
   New commands that write files must follow the same rules.
+- **Atomic single-file writes.** Write single-file outputs with `writeFileAtomic` or
+  `createAtomicFile` + `Commit` (in `compress.go`). They write a hidden temporary file
+  next to the destination and then rename it, so a failed run leaves the destination
+  untouched. Consequences:
+  - a replaced output becomes a new 0600 file;
+  - a symlink at the output path is replaced, not written through;
+  - a killed process (power loss, `kill -9`) can leave a hidden `.<name>.*.tmp` file
+    (mode 0600) behind.
+
+  Archive extraction is not atomic yet (plan 2.2).
 - Symlinks and non-regular files are rejected when reading directory trees, and path
   traversal (`..`) is rejected when extracting. Keep both behaviours.
 - Code is grouped with the existing `//----- section -----//` banner comments.
