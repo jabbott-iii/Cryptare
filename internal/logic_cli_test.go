@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1347,5 +1348,155 @@ func TestKeysCmdReportsDatabaseOpenError(t *testing.T) {
 		if !errors.Is(err, openErr) || !strings.Contains(err.Error(), "open key database") {
 			t.Errorf("%v: error = %v, want the open error with context", args, err)
 		}
+	}
+}
+
+// TestReadPasswordFile checks how --password-file reads its file: the first line, with
+// spaces kept and only the line ending removed, as for a password piped to the prompt.
+func TestReadPasswordFile(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name    string
+		content *string // nil: the file doesn't exist
+		want    string
+		wantErr string
+	}{
+		{name: "passphrase with spaces", content: ptr("correct horse battery staple\n"), want: "correct horse battery staple"},
+		{name: "windows line ending", content: ptr("pass word here\r\n"), want: "pass word here"},
+		{name: "only the first line", content: ptr("first line\nsecond line\n"), want: "first line"},
+		{name: "no trailing newline", content: ptr("  spaced  "), want: "  spaced  "},
+		{name: "empty first line", content: ptr("\nsecond\n"), want: ""},
+		{name: "empty file", content: ptr(""), wantErr: "is empty"},
+		{name: "first line too long", content: ptr(strings.Repeat("x", maxPasswordFileSize+1)), wantErr: "too long"},
+		{name: "missing file", wantErr: "open password file"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, fmt.Sprintf("pw%d.txt", i))
+			if tt.content != nil {
+				if err := os.WriteFile(path, []byte(*tt.content), 0o600); err != nil {
+					t.Fatalf("write password file: %v", err)
+				}
+			}
+			got, err := readPasswordFile(path)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("readPasswordFile() = %q, %v; want an error containing %q", got, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("readPasswordFile() = %q, %v; want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// TestPasswordFileFlag is a regression test for SEC-004: every command that takes
+// --password also takes --password-file, which keeps the secret out of the process
+// arguments and prints no warning.
+func TestPasswordFileFlag(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	pwFile := filepath.Join(dir, "pw.txt")
+	if err := os.WriteFile(pwFile, []byte(testPassword+"\r\n"), 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	run := func(args ...string) (string, error) {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(""))
+		var out, errOut bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&errOut)
+		err := rootCmd.Execute()
+		return errOut.String(), err
+	}
+	check := func(args ...string) {
+		t.Helper()
+		stderr, err := run(args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if strings.Contains(stderr, "warning") {
+			t.Fatalf("%v printed a warning: %q", args, stderr)
+		}
+	}
+
+	check("encrypt", src, "--password-file", pwFile)
+	check("decrypt", src+encExt, "--output", filepath.Join(dir, "plain.txt"), "--password-file", pwFile)
+	if got, err := os.ReadFile(filepath.Join(dir, "plain.txt")); err != nil || string(got) != "payload" {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, "payload")
+	}
+	// The file's password is the one used: the same passphrase via --password decrypts.
+	if _, err := run("decrypt", src+encExt, "--output", filepath.Join(dir, "plain2.txt"), "--password", testPassword); err != nil {
+		t.Fatalf("decrypt with the same passphrase via --password: %v", err)
+	}
+
+	check("keys", "generate", "--password-file", pwFile)
+	keys, err := db.ListKeys()
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("stored keys = %d (err %v), want 1", len(keys), err)
+	}
+	exportPath := filepath.Join(dir, "key.ckey")
+	check("keys", "export", keys[0].KeyID, "--output", exportPath, "--password-file", pwFile)
+	if err := db.DeleteKey(keys[0].KeyID); err != nil {
+		t.Fatalf("DeleteKey: %v", err)
+	}
+	check("keys", "import", exportPath, "--password-file", pwFile)
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+		t.Fatalf("keys after import = %d (err %v), want 1", len(keys), err)
+	}
+
+	// The policy still applies to a password from a file.
+	weakFile := filepath.Join(dir, "weak.txt")
+	if err := os.WriteFile(weakFile, []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatalf("write weak password file: %v", err)
+	}
+	if _, err := run("encrypt", src, "--output", filepath.Join(dir, "weak.enc"), "--password-file", weakFile); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("encrypt with a weak password file: error = %v, want ErrWeakPassword", err)
+	}
+
+	// --password and --password-file can't be combined.
+	if _, err := run("encrypt", src, "--output", filepath.Join(dir, "both.enc"), "--password", testPassword, "--password-file", pwFile); err == nil {
+		t.Fatal("encrypt with both --password and --password-file succeeded, want an error")
+	}
+	// A missing password file is an error, not a fallback to the prompt.
+	if _, err := run("encrypt", src, "--output", filepath.Join(dir, "missing.enc"), "--password-file", filepath.Join(dir, "nope.txt")); err == nil {
+		t.Fatal("encrypt with a missing password file succeeded, want an error")
+	}
+}
+
+// TestPasswordFlagWarns is a regression test for SEC-004 step 3: --password still works
+// but prints a warning on stderr that suggests the alternatives.
+func TestPasswordFlagWarns(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	rootCmd := NewRootCmd(newTestDatabase(t, false))
+	rootCmd.SetArgs([]string{"encrypt", src, "--password", testPassword})
+	var out, errOut bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("encrypt with --password: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "warning: --password") || !strings.Contains(errOut.String(), "--password-file") {
+		t.Fatalf("stderr = %q, want a warning that suggests --password-file", errOut.String())
+	}
+	if strings.Contains(out.String(), "warning") {
+		t.Fatalf("warning written to stdout: %q", out.String())
+	}
+	if strings.Contains(errOut.String(), testPassword) {
+		t.Fatal("the warning repeats the password")
 	}
 }

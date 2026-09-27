@@ -116,6 +116,10 @@ These are observed in the codebase and required for new code:
   with `readNewPassword` (terminal input only) and the TUI with a "Confirm password"
   field and `checkTUINewPassword`. New commands or forms that set a password must do
   the same.
+- **Password input.** Commands that take a password register it with
+  `passwordFlags.register` and read it with `passwordFlags.get`, which handles
+  `--password-file` and the `--password` warning. They fall back to `readPassword`, or
+  to `readNewPassword` when the password protects new data (SEC-004).
 - Symlinks and non-regular files are rejected when reading directory trees, and path
   traversal (`..`) is rejected when extracting, before the `os.Root` check. Keep these
   checks. An absolute entry name is extracted inside the output folder.

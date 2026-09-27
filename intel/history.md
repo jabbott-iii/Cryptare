@@ -530,3 +530,42 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   open in any test temporary folder. `gofmt -s`, `go vet` (including windows/amd64),
   golangci-lint and `go test -race ./...` pass. Not verified on Windows itself;
   confirm with the next CI run.
+
+## 2026-09-27 — CI green on `a5edc91`; SEC-006, SEC-008 and SEC-009 closed
+
+- The owner committed the Windows test fix as `a5edc91` and reports every workflow
+  green. That run is the first CI for `d751967` (plan 2.2) and `d683739` (plans
+  2.3–2.5) on all three operating systems.
+- Closed: SEC-006 (no plaintext temp file), SEC-008 (extraction hardening) and
+  SEC-009 (secure delete).
+- Still open:
+  - SEC-002: the release-notes item;
+  - SEC-010: a per-user default path (Q-003);
+  - the rest of the register.
+
+## 2026-09-27 — `--password-file` and a warning for `--password` (plan 2.6, SEC-004)
+
+- **Owner decisions:**
+  - add `--password-file` only; piped input already covers stdin;
+  - `--password` always prints a warning, with no way to switch it off.
+- `internal/logic-cli.go`:
+  - new `passwordFlags` (`register`, `get`), used by `encrypt`, `decrypt`,
+    `keys generate`, `keys export` and `keys import`. It adds `--password-file`,
+    mutually exclusive with `--password`, which is kept for compatibility;
+  - new `readPasswordFile`: the first line of the file, at most 64 KiB, spaces kept
+    and only the line ending removed;
+  - `--password` prints `passwordFlagWarning` on stderr;
+  - the prompts are unchanged when neither flag is given.
+- `README.md`: new flag lines; the examples use `--password-file`; a scripting note
+  on keeping passwords off the command line; an upgrade note about the warning.
+- **Tests:** `TestReadPasswordFile`, `TestPasswordFileFlag` and `TestPasswordFlagWarns`
+  failed against the previous code and pass now.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 72.9% total coverage;
+  - gosec: 12 findings (one new G304 on the password-file path);
+  - a real binary: file and piped input work without a warning, `--password` warns,
+    and combining the two flags is refused.
+- **Follow-up (optional, W11):** move the CI, CD and Docker smoke tests to
+  `--password-file`.

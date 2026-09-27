@@ -84,12 +84,12 @@ These apply to all changes.
 | SEC-001 | Empty passwords accepted for encryption and key protection | High | Closed |
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
-| SEC-004 | Passwords accepted as command-line arguments | Medium | Open |
+| SEC-004 | Passwords accepted as command-line arguments | Medium | In Progress |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
-| SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | In Progress |
+| SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Closed |
 | SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Closed |
-| SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | In Progress |
-| SEC-009 | Deleted keys remain recoverable from the database file | Low | In Progress |
+| SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Closed |
+| SEC-009 | Deleted keys remain recoverable from the database file | Low | Closed |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | In Progress |
 | SEC-011 | Imported key metadata not validated before storage and display | Low | Open |
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
@@ -265,7 +265,32 @@ These apply to all changes.
 
 ### SEC-004 — Passwords accepted as command-line arguments
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.6):** all four remediation steps are
+  implemented and validated. The owner chose `--password-file`, with piped input as
+  the stdin route (it already worked), and a warning that can't be switched off.
+  - `passwordFlags` in `logic-cli.go` registers `--password`/`-p` (kept, step 1) and
+    the new `--password-file` on `encrypt`, `decrypt`, `keys generate`, `keys export`
+    and `keys import`. The two flags are mutually exclusive.
+  - `readPasswordFile` reads the first line (at most 64 KiB), keeps spaces and
+    removes only the line ending, like piped input. An empty or missing file is an
+    error, not a fallback to the prompt. The password policy still applies.
+  - `--password` prints a one-line warning on stderr (step 3). The warning doesn't
+    repeat the password.
+  - The README examples use `--password-file` and the prompt, and explain piping
+    (step 4).
+  - Tests: `TestReadPasswordFile` (8 cases), `TestPasswordFileFlag` (all five commands
+    round-trip, no warning; weak password refused; both flags refused; missing file
+    refused) and `TestPasswordFlagWarns`. All failed against the previous code.
+  - With a real binary: `--password-file` encrypted with nothing on stderr, piped
+    input decrypted, `--password` worked and printed the warning, and combining the
+    flags was refused.
+  - gosec reports one new G304 (`os.Open` on the user's password-file path), the same
+    class as the other file-path findings.
+  - Not changed: the CI, CD and Docker smoke tests still use `--password`, so their
+    logs show the warning. Switching them to `--password-file` is optional W11 (a CI
+    change).
+  - Close after the change is committed and CI passes.
 - **Affected component:** `--password/-p` on `encrypt`, `decrypt`, `keys generate`,
   `keys export` and `keys import` (`internal/logic-cli.go`); the README examples.
 - **Risk:** Command-line arguments are visible to other local users (`ps`,
@@ -303,8 +328,8 @@ These apply to all changes.
 
 ### SEC-006 — Directory encryption stages plaintext in the system temp directory
 
-- **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.3):** the remediation is implemented and
+- **Status:** Closed (2026-09-27)
+- **Progress (2026-09-27, `d683739`; plan 2.3):** the remediation is implemented and
   validated.
   - `buildDirectoryArchive` in `crypto.go` builds the tar.gz in a `bytes.Buffer` and
     replaces `createDirectoryArchiveTempFile`. The archive bytes and the
@@ -320,7 +345,7 @@ These apply to all changes.
   - Still true: the plaintext archive is held in process memory until encryption
     finishes, as before. Go can't reliably wipe it. Streaming, chunked encryption
     (plan 3.2, with SEC-005) would limit this.
-  - Close after the change is committed and CI passes.
+  - Committed in `d683739`; CI passed on `a5edc91` (after a test-only Windows fix); closed 2026-09-27.
 - **Affected component:** `internal/crypto.go` `createDirectoryArchiveTempFile`
   (`os.CreateTemp("", "cryptare-dir-*.tar.gz")`) and `encryptDirectory`.
 - **Risk:**
@@ -336,7 +361,7 @@ These apply to all changes.
   stream into an authenticated chunked format (with SEC-005).
 - **Validation:** A test asserting that no files are created in `TMPDIR` during
   directory encryption, with the existing round-trip tests still passing.
-- **Resolution:** —
+- **Resolution:** Fixed in `d683739` (plan 2.3): directory archives are built in memory, so no plaintext is written to the temp folder. Validated by `TestEncryptDirectoryWritesNoTempPlaintext`, the `strace` check and green CI on `a5edc91` (Ubuntu, macOS and Windows). The in-memory copy remains until streaming encryption (plan 3.2). Closed 2026-09-27.
 
 ### SEC-007 — Unbounded decompression and extraction (decompression bomb)
 
@@ -387,7 +412,7 @@ These apply to all changes.
 
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
-- **Status:** In Progress
+- **Status:** Closed (2026-09-27)
 - **Progress (2026-09-27, `d751967`; plan 2.2):** steps 1 and 3 are implemented and
   validated, so all remediation steps are done. The owner chose owner-only
   permissions.
@@ -409,7 +434,7 @@ These apply to all changes.
     script still runs) and extracted the read-only folder.
   - gosec no longer reports G703 on extraction (three findings).
   - The whole internal test suite also passes as a non-root user.
-  - Close once CI passes on `d751967`.
+  - CI passed on `a5edc91`, which includes `d751967`; closed 2026-09-27.
 - **Progress (2026-09-27, `b415ffc`; plans 2.1 and 2.2):** extraction now always
   writes into a new, empty folder with mode 0700 (`extractToDir`), which is renamed
   to the output only when extraction succeeds. Archives can't contain symlinks, and
@@ -446,12 +471,12 @@ These apply to all changes.
   3. Mask archive-supplied modes.
 - **Validation:** A regression test (symlink in the destination) that fails before the
   fix and passes after it; G703 findings on extraction reviewed.
-- **Resolution:** —
+- **Resolution:** Fixed in `b415ffc` (extraction into a new temporary folder, plan 2.1) and `d751967` (`os.Root` and owner-only permissions, plan 2.2). All three remediation steps are done and validated, including the symlink regression test; gosec no longer reports G703 on extraction; CI is green on `a5edc91`. Closed 2026-09-27.
 
 ### SEC-009 — Deleted keys remain recoverable from the database file
 
-- **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.4):** remediation steps 1, 3 and 4 are
+- **Status:** Closed (2026-09-27)
+- **Progress (2026-09-27, `d683739`; plan 2.4):** remediation steps 1, 3 and 4 are
   implemented and validated. Step 2 (`VACUUM`) was considered and not adopted.
   - `NewDatabase` opens SQLite with go-sqlite3's `_secure_delete=on` DSN parameter
     (`withSecureDelete`). The driver applies it to every pooled connection; a single
@@ -476,7 +501,7 @@ These apply to all changes.
       unlinked, not wiped, at commit, so a filesystem-level forensic tool might still
       find it, as with any deleted file (for example on SSDs);
     - earlier copies (backups, git history, SEC-003) are unaffected.
-  - Close after the change is committed and CI passes.
+  - Committed in `d683739`; CI passed on `a5edc91`; closed 2026-09-27.
 - **Affected component:** `internal/database.go` `NewDatabase` (SQLite `secure_delete`
   is off) and `DeleteKey`; the README statement that deleted keys "cannot be
   recovered".
@@ -495,12 +520,12 @@ These apply to all changes.
   4. Align the README wording with the result.
 - **Validation:** A test asserting that the database file bytes do not contain a
   deleted blob.
-- **Resolution:** —
+- **Resolution:** Fixed in `d683739` (plan 2.4): SQLite `secure_delete` on every connection, validated by `TestDeleteKeyWipesBlobFromFile`, a real-binary check and green CI on `a5edc91`. Not covered, as recorded above: keys deleted by v1.1.0 or earlier (optional plan 2.4a), filesystem-level remnants of the unlinked journal, and earlier copies. Closed 2026-09-27.
 
 ### SEC-010 — Database created world-readable in the current directory on every run
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.5):** steps 1 and 2 are implemented and
+- **Progress (2026-09-27, `d683739`; plan 2.5):** steps 1 and 2 are implemented and
   validated. Step 3, a per-user default path, is still an owner decision (Q-003,
   plan 3.5), so this item stays open.
   - `main.go` passes `databaseOpener()` to `NewRootCmdLazy`. The opener runs at most

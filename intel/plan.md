@@ -21,14 +21,17 @@ Status: **In progress.**
   - `b415ffc`: 0.5 (the default password policy, with the W9 workflow patch) and 2.1
     (extraction limits, with the atomic-extraction part of 2.2). CI, Docker and
     Security all passed, so SEC-001 and SEC-007 are closed;
-  - `d751967`: the rest of 2.2 (`os.Root` extraction and owner-only permissions).
-- **Done, not yet committed (2026-09-27):** 2.3 (directory-encryption archive built
-  in memory), 2.4 (SQLite secure delete) and 2.5 (database opened only when needed,
-  created 0600).
+  - `d751967`: the rest of 2.2 (`os.Root` extraction and owner-only permissions);
+  - `d683739`: 2.3 (directory-encryption archive built in memory), 2.4 (SQLite secure
+    delete) and 2.5 (database opened only when needed, created 0600);
+  - `a5edc91`: a test-only fix for Windows CI. CI, Docker and Security are green, so
+    SEC-006, SEC-008 and SEC-009 are closed.
+- **Done, not yet committed:** 2.6, `--password-file` and the `--password` warning
+  (2026-09-27).
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** 2.6–2.10, then Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
+- **Next up:** 2.7–2.10, then Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
 
 ## Principles
 
@@ -85,6 +88,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | W8 | Check the Codecov dashboard: with `fail_ci_if_error: false`, a missing `CODECOV_TOKEN` wouldn't fail CI. | `ci.yml`, repo settings |
 | W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner and committed with the policy change (`b415ffc`).** | `ci.yml`, `cd.yml`, `docker.yml` |
 | W10 | CI annotations on 2026-09-27: several pinned actions target Node.js 20, which GitHub now forces onto Node.js 24; `github/codeql-action` v3 must move to v4 before its December 2026 deprecation; `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Update the pinned SHAs (needs owner approval as a CI change). | `ci.yml`, `cd.yml`, `docker.yml`, `security.yml` |
+| W11 | Optional: switch the CI, CD and Docker smoke tests from `--password` to `--password-file`, so they exercise it and their logs lose the new warning. A CI change, so it needs owner approval. | `ci.yml`, `cd.yml`, `docker.yml` |
 
 ## Phase 1 — Correctness and critical security (small PRs)
 
@@ -103,11 +107,11 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 |---|---|---|
 | 2.1 | Extraction size and entry limits, with clean-up on abort. **Done 2026-09-27 (`b415ffc`).** Owner decisions: defaults of 10 GiB of output and 100,000 entries per run; `--max-size` and `--max-entries` on `decompress` and `decrypt` (0 = no limit); the TUI uses the defaults; the limits also apply to encrypted folders; clean-up through a temporary folder (below). | SEC-007 |
 | 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions. **Atomic extraction done 2026-09-27 (`b415ffc`, with 2.1):** `extractToDir` extracts into a new hidden 0700 folder and renames it into place, replacing an existing output with `--force` instead of merging into it; a single-file zip goes through a temporary file (0600). This also removes the planted-symlink risk. **`os.Root` and permissions done 2026-09-27 (`d751967`):** entries are written through an `os.Root` on the extraction folder; the owner chose owner-only permissions, so folders are 0700 and files 0600, or 0700 when marked executable. | SEC-008, BUG-014 |
-| 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext). **Done 2026-09-27 (uncommitted):** `buildDirectoryArchive` replaces the temp file; the format is unchanged. | SEC-006 |
-| 2.4 | Enable SQLite `secure_delete`; align README wording. **Done 2026-09-27 (uncommitted):** `_secure_delete=on` on every connection; README updated. | SEC-009 |
+| 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext). **Done 2026-09-27 (`d683739`):** `buildDirectoryArchive` replaces the temp file; the format is unchanged. | SEC-006 |
+| 2.4 | Enable SQLite `secure_delete`; align README wording. **Done 2026-09-27 (`d683739`):** `_secure_delete=on` on every connection; README updated. | SEC-009 |
 | 2.4a | Optional: clear keys deleted by older versions with a one-time `VACUUM` when the database has free pages, run with `temp_store=MEMORY` so no copy lands in the temp folder. Needs an owner decision. | SEC-009 |
-| 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600. **Done 2026-09-27 (uncommitted):** `NewRootCmdLazy` with a once-only `DatabaseOpener`; `prepareDatabaseFile` creates it 0600, and (owner decision) tightens an existing database to 0600. | SEC-010, BUG-005 |
-| 2.6 | Add `--password-file` / `--password-stdin`; warn when `--password` is used; update README examples | SEC-004 |
+| 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600. **Done 2026-09-27 (`d683739`):** `NewRootCmdLazy` with a once-only `DatabaseOpener`; `prepareDatabaseFile` creates it 0600, and (owner decision) tightens an existing database to 0600. | SEC-010, BUG-005 |
+| 2.6 | Add `--password-file` / `--password-stdin`; warn when `--password` is used; update README examples. **Done 2026-09-27 (uncommitted).** Owner decisions: `--password-file` only (piped input already covers stdin), and the warning always shows. | SEC-004 |
 | 2.7 | Validate imported key metadata | SEC-011 |
 | 2.8 | Root-scoped opens when archiving | SEC-014 |
 | 2.9 | Fix case-insensitive extension handling and the export filename reporting | BUG-007, BUG-006 |

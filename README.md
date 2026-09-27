@@ -101,11 +101,13 @@ cryptare                             # opens the interactive TUI
 - New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
 - When you type a new password in a terminal or the TUI, you're asked to type it again to confirm it. Piped input is read once.
 - Decrypting and importing accept any password, so files and keys protected with a shorter password before this rule existed still open.
+- In scripts, keep passwords off the command line: use `--password-file` (the first line of a file, ideally one only you can read) or pipe the password in (`cryptare encrypt ./secret.txt < pw.txt`). `--password` still works but prints a warning, because other users can see command-line arguments and your shell saves them in its history.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 - ⚠️ **Upgrading from v1.1.0 or earlier:**
   - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. To export a key whose master password is shorter, choose an export password of 15 or more characters;
   - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
   - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
+  - `--password` now prints a warning on stderr; switch scripts to `--password-file` or piped input;
   - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above).
 
 ## Core CLI capabilities
@@ -124,27 +126,29 @@ Cryptare is organized into focused command groups:
 - cryptare encrypt [path] — encrypt a file with AES-256-GCM or package a directory into a single encrypted archive
 - cryptare encrypt [path] --output [path] — write to a custom output file
 - cryptare encrypt [path] --force — overwrite the output if it already exists
-- cryptare encrypt [path] --password [value] — provide the encryption password non-interactively
+- cryptare encrypt [path] --password-file [file] — read the encryption password from the first line of a file
+- cryptare encrypt [path] --password [value] — provide the password on the command line (prints a warning; prefer --password-file)
 
 Examples:
 - cryptare encrypt ./secret.txt
 - cryptare encrypt ./secret.txt --output ./secret.txt.enc
 - cryptare encrypt ./project-dir --output ./project-dir-backup.enc
-- cryptare encrypt ./secret.txt --password "correct horse battery staple"
+- cryptare encrypt ./secret.txt --password-file ~/.config/cryptare/pw.txt
 
 ### decrypt
 
 - cryptare decrypt [path] — decrypt an AES-256-GCM encrypted file or restore an encrypted directory archive
 - cryptare decrypt [path] --output [path] — write to a custom output file or restore into a target directory
 - cryptare decrypt [path] --force — overwrite the output if it already exists
-- cryptare decrypt [path] --password [value] — provide the decryption password non-interactively
+- cryptare decrypt [path] --password-file [file] — read the decryption password from the first line of a file
+- cryptare decrypt [path] --password [value] — provide the password on the command line (prints a warning; prefer --password-file)
 - cryptare decrypt [path] --max-size [size] --max-entries [n] — change the extraction limits for an encrypted folder (defaults 10 GiB and 100,000; 0 means no limit)
 
 Examples:
 - cryptare decrypt ./secret.txt.enc
 - cryptare decrypt ./secret.txt.enc --output ./secret.txt
 - cryptare decrypt ./project-dir-backup.enc --output ./restored-project-dir
-- cryptare decrypt ./secret.txt.enc --password "correct horse battery staple"
+- cryptare decrypt ./secret.txt.enc --password-file ~/.config/cryptare/pw.txt
 
 ### compress
 
@@ -186,10 +190,11 @@ Examples:
 - cryptare keys delete [key-id] — delete a stored encryption key (irreversible)
 - cryptare keys delete [key-id] --yes — delete non-interactively (automation)
 - cryptare keys delete [key-id] --force — delete non-interactively (automation)
+- `generate`, `export` and `import` also take `--password-file [file]` (or `--password [value]`, which prints a warning)
 
 Examples:
 - cryptare keys list
-- cryptare keys generate --password "master password"
+- cryptare keys generate --password-file ~/.config/cryptare/master.txt
 - cryptare keys export key-123 --output key-123.ckey
 - cryptare keys import ./key-123.ckey
 - cryptare keys delete key-123
@@ -213,7 +218,7 @@ Examples:
 | `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you). An existing key store that others can read is set to 0600 when it is opened. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
-Command flags (`--output`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
+Command flags (`--output`, `--password-file`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
 
 ## Docker
 

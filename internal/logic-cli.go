@@ -80,7 +80,8 @@ func NewRootCmdLazy(open DatabaseOpener) *cobra.Command {
 //-----------------------------------------encrypt------------------------------------------------------//
 
 func newEncryptCmd() *cobra.Command {
-	var output, password string
+	var output string
+	var pw passwordFlags
 	var force bool
 
 	cmd := &cobra.Command{
@@ -96,8 +97,11 @@ func newEncryptCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			if password == "" {
-				var err error
+			password, given, err := pw.get(cmd)
+			if err != nil {
+				return err
+			}
+			if !given {
 				password, err = readNewPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
@@ -114,7 +118,7 @@ func newEncryptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc)")
-	cmd.Flags().StringVarP(&password, "password", "p", "", "encryption password")
+	pw.register(cmd, "encryption password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
 }
@@ -122,7 +126,8 @@ func newEncryptCmd() *cobra.Command {
 //-----------------------------------------decrypt------------------------------------------------------//
 
 func newDecryptCmd() *cobra.Command {
-	var output, password string
+	var output string
+	var pw passwordFlags
 	var force bool
 	var limitFlags extractLimitFlags
 
@@ -143,7 +148,11 @@ func newDecryptCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			if password == "" {
+			password, given, err := pw.get(cmd)
+			if err != nil {
+				return err
+			}
+			if !given {
 				password, err = readPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
@@ -160,7 +169,7 @@ func newDecryptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file or directory path")
-	cmd.Flags().StringVarP(&password, "password", "p", "", "decryption password")
+	pw.register(cmd, "decryption password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	limitFlags.register(cmd)
 	return cmd
@@ -301,7 +310,7 @@ func newKeysListCmd(open DatabaseOpener) *cobra.Command {
 }
 
 func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
-	var password string
+	var pw passwordFlags
 
 	cmd := &cobra.Command{
 		Use:   "generate",
@@ -311,7 +320,11 @@ func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if password == "" {
+			password, given, err := pw.get(cmd)
+			if err != nil {
+				return err
+			}
+			if !given {
 				password, err = readNewPassword(cmd, "Enter master password to protect key: ")
 				if err != nil {
 					return err
@@ -351,12 +364,13 @@ func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&password, "password", "p", "", "master password for key protection")
+	pw.register(cmd, "master password for key protection")
 	return cmd
 }
 
 func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
-	var output, password string
+	var output string
+	var pw passwordFlags
 
 	cmd := &cobra.Command{
 		Use:   "export [key-id]",
@@ -374,7 +388,11 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 				return fmt.Errorf("key not found: %w", err)
 			}
 
-			if password == "" {
+			password, given, err := pw.get(cmd)
+			if err != nil {
+				return err
+			}
+			if !given {
 				password, err = readNewPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
@@ -396,12 +414,12 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <key-id>-<timestamp>.ckey)")
-	cmd.Flags().StringVarP(&password, "password", "p", "", "master password for export encryption")
+	pw.register(cmd, "master password for export encryption")
 	return cmd
 }
 
 func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
-	var password string
+	var pw passwordFlags
 
 	cmd := &cobra.Command{
 		Use:   "import [file]",
@@ -414,7 +432,11 @@ func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 			}
 			path := args[0]
 
-			if password == "" {
+			password, given, err := pw.get(cmd)
+			if err != nil {
+				return err
+			}
+			if !given {
 				password, err = readPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
@@ -437,7 +459,7 @@ func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&password, "password", "p", "", "master password used when key was exported")
+	pw.register(cmd, "master password used when key was exported")
 	return cmd
 }
 
@@ -552,6 +574,67 @@ func openOnce(open DatabaseOpener) DatabaseOpener {
 		}
 		return db, nil
 	})
+}
+
+// passwordFlags holds a command's --password and --password-file flags (SEC-004).
+type passwordFlags struct {
+	value string
+	file  string
+}
+
+// passwordFlagWarning is printed whenever --password is used.
+const passwordFlagWarning = "warning: --password can be seen by other users and is saved in shell history; " +
+	"use the prompt, piped input or --password-file instead"
+
+func (p *passwordFlags) register(cmd *cobra.Command, usage string) {
+	cmd.Flags().StringVarP(&p.value, "password", "p", "", usage+" (visible to other users; prefer --password-file)")
+	cmd.Flags().StringVar(&p.file, "password-file", "", "read the password from the first line of this file")
+	cmd.MarkFlagsMutuallyExclusive("password", "password-file")
+}
+
+// get returns the password given by --password-file or --password. given is false when
+// neither flag was set, and the caller then prompts. --password prints a warning to
+// stderr, because command-line arguments are visible to other users.
+func (p *passwordFlags) get(cmd *cobra.Command) (password string, given bool, err error) {
+	if p.file != "" {
+		password, err := readPasswordFile(p.file)
+		if err != nil {
+			return "", false, err
+		}
+		return password, true, nil
+	}
+	if p.value == "" {
+		return "", false, nil
+	}
+	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), passwordFlagWarning); err != nil {
+		return "", false, fmt.Errorf("write warning: %w", err)
+	}
+	return p.value, true, nil
+}
+
+// maxPasswordFileSize is the most that is read from a password file.
+const maxPasswordFileSize = 64 << 10
+
+// readPasswordFile returns the first line of the file at path, keeping spaces and
+// removing only the line ending, the same way a password piped to the prompt is read.
+func readPasswordFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open password file: %w", err)
+	}
+	defer func() { _ = f.Close() }() // read-only: a close error can't lose data
+
+	line, err := bufio.NewReader(io.LimitReader(f, maxPasswordFileSize)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read password file: %w", err)
+	}
+	switch {
+	case line == "":
+		return "", fmt.Errorf("password file %s is empty", path)
+	case !strings.HasSuffix(line, "\n") && len(line) == maxPasswordFileSize:
+		return "", fmt.Errorf("password file %s: first line is too long (over %s)", path, formatSize(maxPasswordFileSize))
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }
 
 // withLimitHint tells CLI users how to change the extraction limits.
