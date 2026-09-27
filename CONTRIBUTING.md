@@ -42,9 +42,9 @@ go build -o cryptare .
 CRYPTARE_DB_PATH="$HOME/.cryptare-dev.db" ./cryptare --help
 ```
 
-Every run opens (and creates, if missing) the SQLite key store at `CRYPTARE_DB_PATH`,
-or at `./cryptare.db` when the variable is unset. `*.db` is git-ignored. **Never commit
-a database file.**
+The `keys` commands and the TUI open (and create, if missing) the SQLite key store at
+`CRYPTARE_DB_PATH`, or at `./cryptare.db` when the variable is unset. Other commands
+don't touch it. `*.db` is git-ignored. **Never commit a database file.**
 
 ## Workflow
 

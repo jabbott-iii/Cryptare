@@ -6,10 +6,11 @@ Last updated: 2026-09-27. Architecture rules live in [`maint.md`](maint.md).
 
 ```text
 Cryptare/
-├── main.go                  # entry: open DB, build Cobra root command, execute
+├── main.go                  # entry: build Cobra root command with a lazy DB opener, execute
 ├── database_path.go         # CRYPTARE_DB_PATH lookup (default ./cryptare.db)
 ├── database_path_test.go
 ├── version_test.go          # --version flag test
+├── lazy_database_test.go    # only keys commands open (and create) the DB
 ├── internal/                # single Go package `internal`
 │   ├── crypto.go            # KDF, AES-GCM file/dir encryption, key blobs, key export/import
 │   ├── compress.go          # gzip / tar.gz / zip create + extract; closeWithError helper
@@ -32,12 +33,12 @@ Cryptare/
 
 | Component | Key symbols | Notes |
 |---|---|---|
-| Entry | `main`, `newRootCmd`, `version`, `databasePathFromEnv` | Opens the DB before any command runs, even `--help` and `--version`. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
-| CLI | `NewRootCmd`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. |
+| Entry | `main`, `newRootCmd`, `databaseOpener`, `version`, `databasePathFromEnv` | Passes a lazy opener; the DB is opened only by the `keys` commands and the TUI. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
+| CLI | `NewRootCmd`, `NewRootCmdLazy`, `DatabaseOpener`, `openOnce`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. |
 | TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd`, `checkTUINewPassword` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. Forms that set a password have a "Confirm password" field. |
-| Crypto | `EncryptFile`, `DecryptFile`, `DecryptFileWithLimits`, `encryptBytesWithAAD`, `encryptDirectory`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile`, `CheckPasswordPolicy` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. `CheckPasswordPolicy` guards every path that sets a new password (`maint.md` §4). |
+| Crypto | `EncryptFile`, `DecryptFile`, `DecryptFileWithLimits`, `encryptBytesWithAAD`, `encryptDirectory`, `buildDirectoryArchive`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile`, `CheckPasswordPolicy` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. `CheckPasswordPolicy` guards every path that sets a new password (`maint.md` §4). |
 | Compression | `CompressFileWithFormat`, `DecompressFile`, `DecompressFileWithLimits`, `ExtractLimits`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip`, `extractToDir`, `CheckOutputPath`, `writeFileAtomic` | Rejects symlinks, special files and `..` traversal. `CheckOutputPath` enforces the output-safety rules (`maint.md` §4). Extraction runs under `ExtractLimits` into a temporary folder (`extractToDir`), writes through an `os.Root`, and sets owner-only permissions (`extractDirMode`, `extractFileMode`). |
-| Storage | `NewDatabase`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). |
+| Storage | `NewDatabase`, `prepareDatabaseFile`, `withSecureDelete`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). Connections open with SQLite `secure_delete` on, so deleted rows are overwritten. The file is created 0600, and an existing one is tightened to 0600. |
 
 ## Dependencies
 
@@ -53,7 +54,7 @@ Cryptare/
 
 ```mermaid
 flowchart TD
-  main["main.go<br/>databasePathFromEnv"] --> dbfile[("SQLite file<br/>cryptare.db")]
+  main["main.go<br/>databasePathFromEnv"] -->|"opened only by keys and the TUI"| dbfile[("SQLite file<br/>cryptare.db")]
   main --> root["NewRootCmd<br/>logic-cli.go"]
   root -->|no subcommand| tui["TUI<br/>ui-dashboard.go + logic-tui.go"]
   root --> cli["encrypt · decrypt · compress · decompress · keys"]
@@ -74,7 +75,7 @@ flowchart LR
   pw["password"] --> kdf["PBKDF2-HMAC-SHA256<br/>100k iterations, random 16-byte salt"] --> key["256-bit key"]
   file["file bytes"] --> gcm1["AES-256-GCM<br/>random 12-byte nonce"]
   key --> gcm1 --> out1["salt ‖ nonce ‖ ciphertext → *.enc"]
-  dir["directory"] --> tmp["plaintext tar.gz<br/>temp file in TMPDIR"] --> gcm2["AES-256-GCM<br/>AAD = directory magic"]
+  dir["directory"] --> tmp["plaintext tar.gz<br/>in memory (buildDirectoryArchive)"] --> gcm2["AES-256-GCM<br/>AAD = directory magic"]
   key --> gcm2 --> out2["magic ‖ salt ‖ nonce ‖ ciphertext → *.enc"]
 ```
 

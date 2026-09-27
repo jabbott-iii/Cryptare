@@ -421,3 +421,95 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     folder, a 0666 file and a 0775 script unchanged and failed on a 0500 folder. The
     new build produced 0700, 0600 and 0700, the script still ran, and the read-only
     folder was extracted.
+
+## 2026-09-27 — CI green on `b415ffc`; SEC-001 and SEC-007 closed
+
+- The owner committed plan 2.2 as `d751967`.
+- GitHub Actions on `b415ffc` all succeeded: CI #129 (Ubuntu, macOS and Windows,
+  including the smoke tests with the lengthened passwords), Docker #11 and
+  Security #134 (CodeQL and gosec).
+- SEC-001 (password policy) and SEC-007 (extraction limits) are closed. SEC-002 stays
+  open for its release-notes item. SEC-008 closes once CI passes on `d751967`.
+- The run annotations show upcoming CI maintenance, recorded as plan W10:
+  - actions that target Node.js 20 are being forced onto Node.js 24;
+  - `github/codeql-action` v3 is deprecated in December 2026;
+  - `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19.
+
+## 2026-09-27 — Directory encryption without a plaintext temp file (plan 2.3, SEC-006)
+
+- `internal/crypto.go`: `buildDirectoryArchive` builds the directory's tar.gz in a
+  `bytes.Buffer`. It replaces `createDirectoryArchiveTempFile`, which wrote a
+  plaintext `cryptare-dir-*.tar.gz` to `$TMPDIR` and read it back. The archive and the
+  encrypted-folder format are unchanged, and memory use is about the same, because
+  the old code also read the whole archive into memory.
+- **Test:** `TestEncryptDirectoryWritesNoTempPlaintext` sets `TMPDIR`, `TMP` and `TEMP`
+  to a missing folder. It failed against `d751967` and passes now.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 71.6% total coverage;
+  - gosec: 10 findings, down from 11;
+  - `strace` on real binaries: `d751967` opened `$TMPDIR/cryptare-dir-….tar.gz` for
+    writing and the new build didn't. Each build decrypted the other's artifact to an
+    identical tree. With a missing `TMPDIR` the old build failed and the new one
+    succeeded.
+
+## 2026-09-27 — SQLite secure delete for the key store (plan 2.4, SEC-009)
+
+- `internal/database.go`: `NewDatabase` opens the database through `withSecureDelete`,
+  which adds go-sqlite3's `_secure_delete=on` parameter (with `&` when the path
+  already has URI parameters). The driver applies it to every pooled connection.
+- `README.md`: the key-deletion warning now says what is overwritten and what isn't
+  (earlier copies, and keys deleted by v1.1.0 or earlier).
+- **Tests:** `TestDeleteKeyWipesBlobFromFile` failed against the previous code (the
+  deleted blob was still in the file and the setting was off) and passes now. New:
+  `TestWithSecureDelete`.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 71.7% total coverage; the internal suite also
+    passes as a non-root user;
+  - gosec: 10 findings, unchanged;
+  - with real binaries, after `keys delete` the previous build left the blob in
+    `cryptare.db` and the new build didn't.
+- `VACUUM` was not adopted. A one-time clean-up of keys deleted by older versions is
+  recorded as optional plan item 2.4a.
+
+## 2026-09-27 — Key database opened only when needed, and created 0600 (plan 2.5, SEC-010, BUG-005)
+
+- **Owner decision:** an existing database that others can read is set to 0600 when
+  Cryptare opens it.
+- `main.go`: no longer opens the database up front. `databaseOpener()` is passed to
+  the new `newRootCmd(open)`, and the `log` import is gone.
+- `internal/logic-cli.go`:
+  - new `DatabaseOpener` type and `NewRootCmdLazy`. `NewRootCmd(db)` wraps it for
+    tests;
+  - `openOnce` (using `sync.OnceValues`) runs the opener at most once and adds "open
+    key database" to its errors;
+  - the `keys` subcommands and the TUI open the database first thing in `RunE`.
+- `internal/database.go`: `prepareDatabaseFile` creates a new database file with mode
+  0600 before SQLite opens it. It tightens an existing database, or its
+  `-journal`/`-wal`/`-shm` file, to 0600 when others can read it, and ignores files
+  owned by someone else. In-memory and `file:` URI paths, and Windows, are skipped.
+- **Docs:** README (Configuration), CONTRIBUTING (build and run), `maint.md` (rule 5
+  and §6).
+  - Note for §6: a CGO-less build now fails only on `keys` commands and the TUI, so
+    the CI/CD smoke tests' `keys generate`/`keys list` steps are what catch BUG-001
+    regressions. Keep them.
+- **Tests:**
+  - failed against the previous code: `TestRootCmdOpensDatabaseOnlyForKeys`,
+    `TestNewDatabaseCreatesPrivateFile`, `TestNewDatabaseTightensExistingFile`;
+  - new: `TestFileCommandsDoNotCreateDatabase` (`main` package) and
+    `TestKeysCmdReportsDatabaseOpenError`;
+  - the version test now fails if `--version` opens the database.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 72.5% total coverage. Both test packages also
+    pass as a non-root user;
+  - gosec: 11 findings (one new G304 on the configured database path);
+  - real binaries: the previous build created a 0644 `cryptare.db` on `--help`,
+    `encrypt` and `compress`. The new build created none for those commands, created
+    the database 0600 on `keys list`, and tightened an existing 0644 database. The
+    TUI opened the key screen and created the database 0600.
+- SEC-010 stays In Progress for step 3, a per-user default path (Q-003, plan 3.5).

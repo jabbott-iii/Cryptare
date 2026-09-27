@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,16 +36,31 @@ import (
 
 //-----------------------------------------core---------------------------------------------------------//
 
-// NewRootCmd is the cryptare application entry point.
+// DatabaseOpener opens the key database. The CLI calls it only for the commands that
+// use the key store, so other commands never create the database file (SEC-010).
+type DatabaseOpener func() (*Database, error)
+
+// NewRootCmd is the cryptare application entry point, using an already-open database.
 func NewRootCmd(db *Database) *cobra.Command {
+	return NewRootCmdLazy(func() (*Database, error) { return db, nil })
+}
+
+// NewRootCmdLazy builds the root command around open, which is called at most once,
+// and only by the keys commands and the TUI.
+func NewRootCmdLazy(open DatabaseOpener) *cobra.Command {
 	var vim bool
+	openDB := openOnce(open)
 
 	cmd := &cobra.Command{
 		Use:   "cryptare",
 		Short: "A file encryption and management tool",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := openDB()
+			if err != nil {
+				return err
+			}
 			p := tea.NewProgram(NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: vim}), tea.WithAltScreen())
-			_, err := p.Run()
+			_, err = p.Run()
 			return err
 		},
 	}
@@ -54,7 +70,7 @@ func NewRootCmd(db *Database) *cobra.Command {
 		newDecryptCmd(),
 		newCompressCmd(),
 		newDecompressCmd(),
-		newKeysCmd(db),
+		newKeysCmd(openDB),
 	)
 	cmd.Flags().BoolVar(&vim, "vim", false, "enable vim keybindings in the TUI")
 
@@ -233,28 +249,32 @@ func newDecompressCmd() *cobra.Command {
 
 //-----------------------------------------keys---------------------------------------------------------//
 
-func newKeysCmd(db *Database) *cobra.Command {
+func newKeysCmd(open DatabaseOpener) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keys",
 		Short: "Manage encryption keys",
 	}
 
 	cmd.AddCommand(
-		newKeysListCmd(db),
-		newKeysGenerateCmd(db),
-		newKeysExportCmd(db),
-		newKeysImportCmd(db),
-		newKeysDeleteCmd(db),
+		newKeysListCmd(open),
+		newKeysGenerateCmd(open),
+		newKeysExportCmd(open),
+		newKeysImportCmd(open),
+		newKeysDeleteCmd(open),
 	)
 
 	return cmd
 }
 
-func newKeysListCmd(db *Database) *cobra.Command {
+func newKeysListCmd(open DatabaseOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List stored encryption keys",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := open()
+			if err != nil {
+				return err
+			}
 			keys, err := db.ListKeys()
 			if err != nil {
 				return fmt.Errorf("list keys: %w", err)
@@ -280,15 +300,18 @@ func newKeysListCmd(db *Database) *cobra.Command {
 	}
 }
 
-func newKeysGenerateCmd(db *Database) *cobra.Command {
+func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
 	var password string
 
 	cmd := &cobra.Command{
 		Use:   "generate",
 		Short: "Generate and store a new random encryption key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := open()
+			if err != nil {
+				return err
+			}
 			if password == "" {
-				var err error
 				password, err = readNewPassword(cmd, "Enter master password to protect key: ")
 				if err != nil {
 					return err
@@ -332,7 +355,7 @@ func newKeysGenerateCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
-func newKeysExportCmd(db *Database) *cobra.Command {
+func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 	var output, password string
 
 	cmd := &cobra.Command{
@@ -340,6 +363,10 @@ func newKeysExportCmd(db *Database) *cobra.Command {
 		Short: "Export an encrypted key to a file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := open()
+			if err != nil {
+				return err
+			}
 			keyID := args[0]
 
 			km, err := db.GetKey(keyID)
@@ -373,7 +400,7 @@ func newKeysExportCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
-func newKeysImportCmd(db *Database) *cobra.Command {
+func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 	var password string
 
 	cmd := &cobra.Command{
@@ -381,10 +408,13 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 		Short: "Import an encrypted key from a file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := open()
+			if err != nil {
+				return err
+			}
 			path := args[0]
 
 			if password == "" {
-				var err error
 				password, err = readPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
@@ -411,7 +441,7 @@ func newKeysImportCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
-func newKeysDeleteCmd(db *Database) *cobra.Command {
+func newKeysDeleteCmd(open DatabaseOpener) *cobra.Command {
 	var yes bool
 
 	cmd := &cobra.Command{
@@ -419,6 +449,10 @@ func newKeysDeleteCmd(db *Database) *cobra.Command {
 		Short: "Delete a stored encryption key (irreversible)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := open()
+			if err != nil {
+				return err
+			}
 			keyID := args[0]
 
 			if !yes {
@@ -507,6 +541,17 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("size %q is too large", s)
 	}
 	return n * unit, nil
+}
+
+// openOnce wraps open so that it runs at most once, adding context to its error.
+func openOnce(open DatabaseOpener) DatabaseOpener {
+	return sync.OnceValues(func() (*Database, error) {
+		db, err := open()
+		if err != nil {
+			return nil, fmt.Errorf("open key database: %w", err)
+		}
+		return db, nil
+	})
 }
 
 // withLimitHint tells CLI users how to change the extraction limits.

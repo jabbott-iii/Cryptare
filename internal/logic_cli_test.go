@@ -1275,3 +1275,77 @@ func TestExtractLimitFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestRootCmdOpensDatabaseOnlyForKeys is a regression test for BUG-005 and SEC-010: the
+// database opener passed to NewRootCmdLazy is called by the keys commands only.
+func TestRootCmdOpensDatabaseOnlyForKeys(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	db := newTestDatabase(t, false)
+	opened := 0
+	open := func() (*Database, error) {
+		opened++
+		return db, nil
+	}
+	run := func(args ...string) error {
+		rootCmd := NewRootCmdLazy(open)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(""))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	for _, args := range [][]string{
+		{"--help"},
+		{"encrypt", src, "--password", testPassword},
+		{"decrypt", src + encExt, "--output", filepath.Join(dir, "plain.txt"), "--password", testPassword},
+		{"compress", src},
+		{"decompress", src + gzExt, "--output", filepath.Join(dir, "unpacked.txt")},
+		{"keys", "--help"},
+	} {
+		if err := run(args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	if opened != 0 {
+		t.Fatalf("file commands opened the database %d times, want 0", opened)
+	}
+
+	if err := run("keys", "generate", "--password", testPassword); err != nil {
+		t.Fatalf("keys generate: %v", err)
+	}
+	if err := run("keys", "list"); err != nil {
+		t.Fatalf("keys list: %v", err)
+	}
+	if opened != 2 {
+		t.Fatalf("keys commands opened the database %d times, want 2", opened)
+	}
+}
+
+// TestKeysCmdReportsDatabaseOpenError checks that a keys command fails cleanly, with
+// context, when the key database can't be opened.
+func TestKeysCmdReportsDatabaseOpenError(t *testing.T) {
+	openErr := errors.New("disk on fire")
+	for _, args := range [][]string{
+		{"keys", "list"},
+		{"keys", "generate", "--password", testPassword},
+		{"keys", "export", "0123456789abcdef", "--password", testPassword},
+		{"keys", "import", "missing.ckey", "--password", testPassword},
+		{"keys", "delete", "0123456789abcdef", "--yes"},
+	} {
+		rootCmd := NewRootCmdLazy(func() (*Database, error) { return nil, openErr })
+		rootCmd.SetArgs(args)
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		err := rootCmd.Execute()
+		if !errors.Is(err, openErr) || !strings.Contains(err.Error(), "open key database") {
+			t.Errorf("%v: error = %v, want the open error with context", args, err)
+		}
+	}
+}

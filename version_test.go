@@ -19,6 +19,8 @@ package main
 import (
 	"bytes"
 	"testing"
+
+	"github.com/jabbott-iii/Cryptare/internal"
 )
 
 func TestNewRootCmdReportsVersion(t *testing.T) {
@@ -28,8 +30,11 @@ func TestNewRootCmdReportsVersion(t *testing.T) {
 
 	for _, flag := range []string{"--version", "-v"} {
 		t.Run(flag, func(t *testing.T) {
-			// The version flag is handled before any command runs, so no database is needed.
-			cmd := newRootCmd(nil)
+			// The version flag is handled before any command runs, so no database is opened.
+			cmd := newRootCmd(func() (*internal.Database, error) {
+				t.Fatal("--version opened the key database")
+				return nil, nil
+			})
 			var out bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&out)

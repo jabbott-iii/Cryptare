@@ -195,7 +195,7 @@ Examples:
 - cryptare keys delete key-123
 - cryptare keys delete key-123 --yes
 
-⚠️ Key deletion is permanent. Once deleted, the stored key cannot be recovered.
+⚠️ Key deletion is permanent. Deleting a key removes it and overwrites its encrypted data in the database file, so it can't be recovered from that file. Copies made earlier (backups, synced folders, git history) are not affected, and keys deleted with v1.1.0 or earlier may still be recoverable from the file until SQLite reuses that space.
 
 ### Interactive TUI
 
@@ -210,7 +210,7 @@ Examples:
 
 | Setting | Default | Description |
 |---|---|---|
-| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. It is opened, and created if missing, on every run, including `--help`. |
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you). An existing key store that others can read is set to 0600 when it is opened. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
 Command flags (`--output`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).

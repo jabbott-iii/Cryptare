@@ -23,7 +23,7 @@ It has no network surface: there is no HTTP server and nothing calls a remote se
 
 | Layer | Files | Responsibility | May depend on |
 |---|---|---|---|
-| Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare.db` in the current directory), open the DB, run the root command | `internal` |
+| Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare.db` in the current directory), build the root command with a lazy database opener, run it | `internal` |
 | Interfaces | `internal/logic-cli.go` (Cobra); `internal/ui-dashboard.go` + `internal/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
 | Core operations | `internal/crypto.go`, `internal/compress.go` | Encryption formats, key blobs, key export/import, archive creation/extraction | stdlib, `golang.org/x/crypto` |
 | Storage | `internal/database.go` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
@@ -45,9 +45,11 @@ Rules:
 4. **One persistence type.** `*Database` is the only persistence type. The `Storage`
    interface is declared but callers don't use it. Either adopt it at the interface
    layer (for test doubles) or remove it, in a change dedicated to that.
-5. **Only key commands and the TUI need the database.** Today `main.go` opens (and
-   creates) it for every command. Don't add new dependencies on the DB from
-   file-only commands.
+5. **Only key commands and the TUI need the database.** `main.go` passes a
+   `DatabaseOpener` to `NewRootCmdLazy`, and only the `keys` commands and the TUI call
+   it, at most once per run (SEC-010). Don't add new dependencies on the DB from
+   file-only commands. `NewDatabase` creates the file with mode 0600 and tightens an
+   existing one.
 
 ## 3. On-disk formats (compatibility contract)
 
@@ -150,9 +152,11 @@ These are observed in the codebase and required for new code:
 ## 6. Build and release
 
 - **CGO is required.** The SQLite driver (`gorm.io/driver/sqlite`, which uses
-  `github.com/mattn/go-sqlite3`) needs CGO. A `CGO_ENABLED=0` build compiles but fails
-  at startup on every command, including `--help`, because `main.go` opens the DB
-  first (BUG-001, fixed in v1.0.1). Releases therefore build each target natively with
+  `github.com/mattn/go-sqlite3`) needs CGO. A `CGO_ENABLED=0` build compiles but can't
+  open the database (BUG-001, fixed in v1.0.1). Since the database is opened lazily
+  (plan 2.5), such a build still runs `--help` and the file commands and fails only on
+  `keys` commands and the TUI, so the smoke tests' `keys generate`/`keys list` steps
+  are what catch it. Releases therefore build each target natively with
   CGO (Q-001):
   - Linux binaries are statically linked (tags
     `sqlite_omit_load_extension,osusergo,netgo`; `-linkmode external -extldflags -static`).

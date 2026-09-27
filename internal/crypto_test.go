@@ -726,3 +726,40 @@ func TestDecryptAcceptsLegacyShortPassword(t *testing.T) {
 		t.Fatalf("imported key = %+v, want the legacy key", km)
 	}
 }
+
+// TestEncryptDirectoryWritesNoTempPlaintext is a regression test for SEC-006: encrypting
+// a directory must not stage a plaintext archive in the system temp directory. With
+// the temp directory unusable, encryption still succeeds and round-trips.
+func TestEncryptDirectoryWritesNoTempPlaintext(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "secret-dir")
+	if err := os.MkdirAll(filepath.Join(srcDir, "nested"), 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "nested", "secret.txt"), []byte("top secret"), 0o600); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	// Point every platform's temp-directory variable at a path that doesn't exist, so
+	// any attempt to create a temporary file there fails.
+	missing := filepath.Join(tmpDir, "no-such-temp-dir")
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, missing)
+	}
+
+	enc := filepath.Join(tmpDir, "secret-dir.enc")
+	if err := EncryptFile(srcDir, enc, testPassword); err != nil {
+		t.Fatalf("EncryptFile(directory) with an unusable temp directory: %v", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("temp directory was created (stat err: %v)", err)
+	}
+
+	restored := filepath.Join(tmpDir, "restored")
+	if err := DecryptFile(enc, restored, testPassword); err != nil {
+		t.Fatalf("DecryptFile: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(restored, "nested", "secret.txt")); err != nil || string(got) != "top secret" {
+		t.Fatalf("restored content = %q (err %v), want %q", got, err, "top secret")
+	}
+}

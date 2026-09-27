@@ -261,15 +261,9 @@ func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, erro
 }
 
 func encryptDirectory(src, dst, password string) error {
-	archivePath, cleanup, err := createDirectoryArchiveTempFile(src)
+	plaintext, err := buildDirectoryArchive(src)
 	if err != nil {
 		return err
-	}
-	defer cleanup()
-
-	plaintext, err := os.ReadFile(archivePath)
-	if err != nil {
-		return fmt.Errorf("read temporary directory archive: %w", err)
 	}
 
 	ciphertext, err := encryptBytesWithAAD(plaintext, password, []byte(directoryArtifactMagicV1))
@@ -286,43 +280,32 @@ func encryptDirectory(src, dst, password string) error {
 	return nil
 }
 
-func createDirectoryArchiveTempFile(src string) (archivePath string, cleanup func(), err error) {
+// buildDirectoryArchive returns a tar.gz of the directory tree at src. It is built in
+// memory, so no plaintext copy of the directory is written to disk (SEC-006); the
+// whole archive has to be in memory for encryption anyway.
+func buildDirectoryArchive(src string) ([]byte, error) {
 	info, err := os.Lstat(src)
 	if err != nil {
-		return "", nil, fmt.Errorf("lstat source path: %w", err)
+		return nil, fmt.Errorf("lstat source path: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return "", nil, fmt.Errorf("encrypt directory: symlinks are not supported (%s)", src)
+		return nil, fmt.Errorf("encrypt directory: symlinks are not supported (%s)", src)
 	}
 
-	tmpFile, err := os.CreateTemp("", "cryptare-dir-*.tar.gz")
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
 	if err != nil {
-		return "", nil, fmt.Errorf("create temporary directory archive: %w", err)
+		return nil, fmt.Errorf("create gzip writer: %w", err)
 	}
-	archivePath = tmpFile.Name()
-	archiveCleanup := func() {
-		_ = os.Remove(archivePath)
-	}
-	defer func() {
-		if err != nil {
-			archiveCleanup()
-		}
-	}()
-	defer closeWithError(&err, tmpFile, "close temporary directory archive")
-
-	gz, err := gzip.NewWriterLevel(tmpFile, gzip.DefaultCompression)
-	if err != nil {
-		return "", nil, fmt.Errorf("create gzip writer: %w", err)
-	}
-	defer closeWithError(&err, gz, "finalise gzip")
 	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
 
-	_, err = writeTarGz(gz, src)
-	if err != nil {
-		return "", nil, err
+	if _, err := writeTarGz(gz, src); err != nil {
+		return nil, err
 	}
-
-	return archivePath, archiveCleanup, nil
+	if err := gz.Close(); err != nil {
+		return nil, fmt.Errorf("finalise gzip: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // restoreDirectoryArchive extracts the decrypted tar.gz of an encrypted directory

@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"log"
 	"os"
 
 	"github.com/jabbott-iii/Cryptare/internal"
@@ -29,23 +28,26 @@ import (
 var version = "dev"
 
 func main() {
-
-	// sqlite db creation / use
-	db, err := internal.NewDatabase(databasePathFromEnv())
-	if err != nil {
-		log.Fatalf("failed to initialize database: %v", err)
-	}
-
-	rootCmd := newRootCmd(db)
+	rootCmd := newRootCmd(databaseOpener())
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
+// databaseOpener opens the key database at CRYPTARE_DB_PATH (default ./cryptare.db).
+// The CLI calls it only for the keys commands and the TUI, so other commands never
+// create the database file.
+func databaseOpener() internal.DatabaseOpener {
+	path := databasePathFromEnv()
+	return func() (*internal.Database, error) {
+		return internal.NewDatabase(path)
+	}
+}
+
 // newRootCmd returns the CLI root command with the build version attached;
 // a non-empty Version makes Cobra register the --version flag.
-func newRootCmd(db *internal.Database) *cobra.Command {
-	cmd := internal.NewRootCmd(db)
+func newRootCmd(open internal.DatabaseOpener) *cobra.Command {
+	cmd := internal.NewRootCmdLazy(open)
 	cmd.Version = version
 	return cmd
 }

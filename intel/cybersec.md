@@ -81,16 +81,16 @@ These apply to all changes.
 
 | ID | Title | Severity | Status |
 |---|---|---|---|
-| SEC-001 | Empty passwords accepted for encryption and key protection | High | In Progress |
+| SEC-001 | Empty passwords accepted for encryption and key protection | High | Closed |
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Open |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
-| SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Open |
-| SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | In Progress |
+| SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | In Progress |
+| SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Closed |
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | In Progress |
-| SEC-009 | Deleted keys remain recoverable from the database file | Low | Open |
-| SEC-010 | Database created world-readable in the current directory on every run | Low | Open |
+| SEC-009 | Deleted keys remain recoverable from the database file | Low | In Progress |
+| SEC-010 | Database created world-readable in the current directory on every run | Low | In Progress |
 | SEC-011 | Imported key metadata not validated before storage and display | Low | Open |
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
@@ -100,7 +100,7 @@ These apply to all changes.
 
 ### SEC-001 — Empty passwords accepted for encryption and key protection
 
-- **Status:** In Progress
+- **Status:** Closed (2026-09-27)
 - **Progress (2026-09-24, committed in `ed46150`):** Remediation steps 1 and 2 are implemented
   and validated.
   - `EncryptFile` and `EncryptKeyBlob` return `ErrEmptyPassword`, which covers files,
@@ -139,7 +139,7 @@ These apply to all changes.
   - The CI, CD and Docker smoke tests used passwords shorter than 15 characters. The
     workflow patch `cryptare-password-policy-workflows.patch` lengthens them (plan W9);
     the owner has applied it.
-  - Close once CI passes on `b415ffc` with the patched workflows.
+  - CI passed on `b415ffc` with the patched workflows; closed 2026-09-27.
 - **Affected component:**
   - `internal/logic-tui.go` `buildActionCmd` (encrypt, keys generate, keys export)
   - `internal/crypto.go` `EncryptFile`, `EncryptKeyBlob`, `ExportKeyToFile` (none of
@@ -159,7 +159,7 @@ These apply to all changes.
   3. Decide the minimum-length policy (Q-004 in `notes.md`).
 - **Validation:** Core, CLI and TUI tests that assert rejection on each encryption
   path, plus a test that legacy empty-password artifacts still decrypt.
-- **Resolution:** —
+- **Resolution:** Fixed in `ed46150` (empty passwords, v1.1.0) and `b415ffc` (password policy, 2026-09-27). Validated by the tests and end-to-end checks above, and by green CI on `b415ffc`: CI #129 (Ubuntu, macOS and Windows, including the smoke tests with the new passwords), Docker #11 and Security #134. Closed 2026-09-27.
 
 ### SEC-002 — Interactive password prompt truncates at whitespace and echoes input
 
@@ -303,7 +303,24 @@ These apply to all changes.
 
 ### SEC-006 — Directory encryption stages plaintext in the system temp directory
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.3):** the remediation is implemented and
+  validated.
+  - `buildDirectoryArchive` in `crypto.go` builds the tar.gz in a `bytes.Buffer` and
+    replaces `createDirectoryArchiveTempFile`. The archive bytes and the
+    `.enc` format are unchanged.
+  - `TestEncryptDirectoryWritesNoTempPlaintext` points `TMPDIR`, `TMP` and `TEMP` at a
+    missing folder. The previous code failed with "create temporary directory
+    archive"; the new code encrypts and round-trips.
+  - With `strace`, the previous build (`d751967`) opened
+    `$TMPDIR/cryptare-dir-….tar.gz` for writing. The new build writes only the
+    output's own temporary file (ciphertext) and the key database. Artifacts made by
+    either build decrypt with the other to identical trees.
+  - gosec reports one fewer G304 finding.
+  - Still true: the plaintext archive is held in process memory until encryption
+    finishes, as before. Go can't reliably wipe it. Streaming, chunked encryption
+    (plan 3.2, with SEC-005) would limit this.
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/crypto.go` `createDirectoryArchiveTempFile`
   (`os.CreateTemp("", "cryptare-dir-*.tar.gz")`) and `encryptDirectory`.
 - **Risk:**
@@ -323,7 +340,7 @@ These apply to all changes.
 
 ### SEC-007 — Unbounded decompression and extraction (decompression bomb)
 
-- **Status:** In Progress
+- **Status:** Closed (2026-09-27)
 - **Progress (2026-09-27, `b415ffc`; plan 2.1):** all three remediation steps are
   implemented and validated. The owner approved the defaults (10 GiB and 100,000
   entries), the flags, cleanup through a temporary folder, and applying the limits
@@ -352,7 +369,7 @@ These apply to all changes.
     `--max-size 100MB`, and with the default entry limit), left nothing behind, and
     extracted them fully with the limits raised. The TUI showed the hint.
   - gosec no longer reports G110 (it did at four places).
-  - Close once CI passes on `b415ffc`.
+  - CI passed on `b415ffc`; closed 2026-09-27.
 - **Affected component:** `internal/compress.go` `DecompressFile`, `extractTarGz`,
   `extractZip`, `extractZipSingleFile`. gosec G110 fires at `compress.go` lines 155,
   416, 498 and 551.
@@ -366,12 +383,12 @@ These apply to all changes.
   3. Abort and remove partial output when a limit is hit.
 - **Validation:** Tests with synthetic high-ratio archives. G110 is resolved or
   explicitly justified.
-- **Resolution:** —
+- **Resolution:** Fixed in `b415ffc` (2026-09-27). Validated by the tests and real-binary checks above, gosec no longer reporting G110, and green CI on `b415ffc` (CI #129, Docker #11, Security #134). Closed 2026-09-27.
 
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.2):** steps 1 and 3 are implemented and
+- **Progress (2026-09-27, `d751967`; plan 2.2):** steps 1 and 3 are implemented and
   validated, so all remediation steps are done. The owner chose owner-only
   permissions.
   - `extractTarGz` and `extractZipEntries` write through an `os.Root` opened on the
@@ -392,7 +409,7 @@ These apply to all changes.
     script still runs) and extracted the read-only folder.
   - gosec no longer reports G703 on extraction (three findings).
   - The whole internal test suite also passes as a non-root user.
-  - Close after the change is committed and CI passes.
+  - Close once CI passes on `d751967`.
 - **Progress (2026-09-27, `b415ffc`; plans 2.1 and 2.2):** extraction now always
   writes into a new, empty folder with mode 0700 (`extractToDir`), which is renamed
   to the output only when extraction succeeds. Archives can't contain symlinks, and
@@ -433,7 +450,33 @@ These apply to all changes.
 
 ### SEC-009 — Deleted keys remain recoverable from the database file
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.4):** remediation steps 1, 3 and 4 are
+  implemented and validated. Step 2 (`VACUUM`) was considered and not adopted.
+  - `NewDatabase` opens SQLite with go-sqlite3's `_secure_delete=on` DSN parameter
+    (`withSecureDelete`). The driver applies it to every pooled connection; a single
+    `PRAGMA` would only reach one.
+  - `TestDeleteKeyWipesBlobFromFile` saves two keys, deletes one, and checks that its
+    blob is gone from the database file and from any journal or WAL file. It also
+    checks `PRAGMA secure_delete` on three pooled connections at once. It failed
+    against the previous code (blob still in the file; setting off).
+    `TestWithSecureDelete` covers paths that already carry URI parameters.
+  - With real binaries, after `keys delete` the previous build left the blob in
+    `cryptare.db` and the new build didn't. No journal or WAL file is left either way:
+    the default rollback journal is removed at commit.
+  - The README now describes what deletion does and doesn't cover.
+  - Why no `VACUUM`: with secure delete on, new deletions are already zeroed. A
+    `VACUUM` would only clear keys deleted by older versions, and it builds a
+    temporary copy of the whole database, by default in the temp folder (compare
+    SEC-006). Offered as an optional follow-up (plan 2.4a).
+  - Not covered:
+    - keys deleted with v1.1.0 or earlier stay in free pages until SQLite reuses
+      them;
+    - during the delete, the rollback journal briefly holds the original page. It is
+      unlinked, not wiped, at commit, so a filesystem-level forensic tool might still
+      find it, as with any deleted file (for example on SSDs);
+    - earlier copies (backups, git history, SEC-003) are unaffected.
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/database.go` `NewDatabase` (SQLite `secure_delete`
   is off) and `DeleteKey`; the README statement that deleted keys "cannot be
   recovered".
@@ -456,7 +499,32 @@ These apply to all changes.
 
 ### SEC-010 — Database created world-readable in the current directory on every run
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.5):** steps 1 and 2 are implemented and
+  validated. Step 3, a per-user default path, is still an owner decision (Q-003,
+  plan 3.5), so this item stays open.
+  - `main.go` passes `databaseOpener()` to `NewRootCmdLazy`. The opener runs at most
+    once (`openOnce`, with `sync.OnceValues`) and only from the `keys` commands and
+    the TUI. Open errors read "open key database: …".
+  - `prepareDatabaseFile` creates a new database with mode 0600 (`O_EXCL`) before
+    SQLite opens it, and SQLite gives its journal files the same mode. Owner
+    decision: an existing database, or a leftover journal, that others can read is
+    set to 0600 when opened. Files owned by someone else are left alone; Windows is
+    skipped.
+  - Tests that failed against the previous code: `TestRootCmdOpensDatabaseOnlyForKeys`
+    (the file commands opened it 6 times), `TestNewDatabaseCreatesPrivateFile` (0644)
+    and `TestNewDatabaseTightensExistingFile` (0644 for the database and its
+    journal). New: `TestFileCommandsDoNotCreateDatabase` (`main` package, built the way
+    `main` builds it) and `TestKeysCmdReportsDatabaseOpenError`. The version test now
+    fails if `--version` opens the database.
+  - With real binaries under umask 022, the previous build created a 0644
+    `cryptare.db` on `--help`, `encrypt` and `compress`, and left an existing 0644
+    database unchanged. The new build created nothing for those commands, created the
+    database 0600 on `keys list`, and tightened an existing 0644 file to 0600. The TUI
+    still opens it (0600), and `compress` works even with an unusable database path.
+  - gosec reports one new G304 (`os.OpenFile` on the configured database path in
+    `prepareDatabaseFile`). The path comes from the user's own `CRYPTARE_DB_PATH`,
+    the same class as the other G304 findings.
 - **Affected component:** `main.go`, `database_path.go` (default `cryptare.db`) and
   `internal/database.go` `NewDatabase`.
 - **Risk:** Every invocation, including `--help`, `encrypt` and `compress`, creates

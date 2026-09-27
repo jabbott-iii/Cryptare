@@ -20,6 +20,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"runtime"
+	"strings"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -35,12 +39,17 @@ type Database struct {
 }
 
 // NewDatabase opens (or creates) the sqlite file and runs schema migrations.
+// Every connection has SQLite's secure_delete on, so a deleted key's encrypted blob
+// is overwritten in the file instead of being left in free space (SEC-009).
 func NewDatabase(path string) (*Database, error) {
 	if path == "" {
 		path = "cryptare.db"
 	}
+	if err := prepareDatabaseFile(path); err != nil {
+		return nil, err
+	}
 
-	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	conn, err := gorm.Open(sqlite.Open(withSecureDelete(path)), &gorm.Config{})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -52,6 +61,59 @@ func NewDatabase(path string) (*Database, error) {
 	}
 
 	return &Database{conn: conn}, nil
+}
+
+// prepareDatabaseFile makes the key database private to its owner (SEC-010). A new
+// file is created with mode 0600 before SQLite opens it; SQLite gives its journal
+// files the same mode. An existing database, or a journal left next to it, that others
+// can read is set to 0600. Files owned by someone else are left as they are.
+// In-memory databases and SQLite URI paths are left to SQLite.
+func prepareDatabaseFile(path string) error {
+	if path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("create database file: %w", err)
+		}
+		return nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("create database file: %w", err)
+	}
+	if runtime.GOOS == "windows" {
+		return nil // Unix permission bits don't apply
+	}
+
+	for _, p := range []string{path, path + "-journal", path + "-wal", path + "-shm"} {
+		info, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("check database file: %w", err)
+		}
+		if info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("restrict database file permissions: %w", err)
+		}
+	}
+	return nil
+}
+
+// withSecureDelete adds go-sqlite3's _secure_delete=on parameter to a database path.
+// The driver applies it to each new connection, which a one-off PRAGMA would not do
+// for a connection pool.
+func withSecureDelete(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "_secure_delete=on"
 }
 
 // Conn exposes the raw gorm handle for advanced queries/transactions.

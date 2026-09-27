@@ -17,8 +17,12 @@ limitations under the License.
 package internal
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -307,5 +311,165 @@ func TestKeyModelUniqueConstraint(t *testing.T) {
 
 	if count != 1 {
 		t.Errorf("Expected 1 key with ID %q, got %d", keyID, count)
+	}
+}
+
+// TestDeleteKeyWipesBlobFromFile is a regression test for SEC-009: once a key is
+// deleted, its encrypted blob must no longer be readable from the database file or
+// its journal.
+func TestDeleteKeyWipesBlobFromFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.db")
+	db, err := NewDatabase(path)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	sqlDB, err := db.Conn().DB()
+	if err != nil {
+		t.Fatalf("sql handle: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	marker := []byte(strings.Repeat("SEC009-deleted-blob-marker-", 8))
+	for _, km := range []*KeyModel{
+		{KeyID: "keep", Algorithm: "AES-256-GCM", EncryptedBlob: "still-stored", CreatedAt_: 1},
+		{KeyID: "gone", Algorithm: "AES-256-GCM", EncryptedBlob: string(marker), CreatedAt_: 1},
+	} {
+		if err := db.SaveKey(km); err != nil {
+			t.Fatalf("SaveKey(%s): %v", km.KeyID, err)
+		}
+	}
+	if data, err := os.ReadFile(path); err != nil || !bytes.Contains(data, marker) {
+		t.Fatalf("test setup: blob not found in the database file (err %v)", err)
+	}
+
+	if err := db.DeleteKey("gone"); err != nil {
+		t.Fatalf("DeleteKey: %v", err)
+	}
+	for _, p := range []string{path, path + "-journal", path + "-wal"} {
+		data, err := os.ReadFile(p)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		if bytes.Contains(data, marker) {
+			t.Errorf("deleted key's blob is still readable in %s", filepath.Base(p))
+		}
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 1 || keys[0].KeyID != "keep" {
+		t.Fatalf("remaining keys = %+v (err %v), want only %q", keys, err, "keep")
+	}
+
+	// secure_delete is a per-connection setting, so check several pooled connections,
+	// held open at the same time so that each is a separate connection.
+	for i := range 3 {
+		conn, err := sqlDB.Conn(context.Background())
+		if err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		var on int
+		if err := conn.QueryRowContext(context.Background(), "PRAGMA secure_delete").Scan(&on); err != nil || on != 1 {
+			t.Fatalf("connection %d: PRAGMA secure_delete = %d (err %v), want 1", i, on, err)
+		}
+	}
+}
+
+// TestWithSecureDelete checks how the secure-delete parameter is added to a database
+// path, including one that already carries SQLite URI parameters.
+func TestWithSecureDelete(t *testing.T) {
+	tests := map[string]string{
+		"cryptare.db":           "cryptare.db?_secure_delete=on",
+		":memory:":              ":memory:?_secure_delete=on",
+		"file:keys.db?mode=rwc": "file:keys.db?mode=rwc&_secure_delete=on",
+	}
+	for in, want := range tests {
+		if got := withSecureDelete(in); got != want {
+			t.Errorf("withSecureDelete(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNewDatabaseCreatesPrivateFile is a regression test for SEC-010: a new key
+// database file is created with mode 0600.
+func TestNewDatabaseCreatesPrivateFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "new.db")
+	db, err := NewDatabase(path)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	closeTestDatabase(t, db)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat database: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("new database mode = %04o, want 0600", got)
+	}
+}
+
+// TestNewDatabaseTightensExistingFile checks the owner's decision for SEC-010: opening
+// an existing database (and a leftover journal) that others can read sets it to 0600.
+func TestNewDatabaseTightensExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := NewDatabase(path)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	if err := db.SaveKey(&KeyModel{KeyID: "kept", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	closeTestDatabase(t, db)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod database: %v", err)
+	}
+	// An empty journal is treated as not hot, so SQLite ignores it.
+	journal := path + "-journal"
+	if err := os.WriteFile(journal, nil, 0o644); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+	if err := os.Chmod(journal, 0o644); err != nil {
+		t.Fatalf("chmod journal: %v", err)
+	}
+
+	db, err = NewDatabase(path)
+	if err != nil {
+		t.Fatalf("NewDatabase (existing): %v", err)
+	}
+	defer closeTestDatabase(t, db)
+	for _, p := range []string{path, journal} {
+		info, err := os.Stat(p)
+		if os.IsNotExist(err) && p == journal {
+			continue // SQLite may remove an empty journal
+		}
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %04o after opening, want 0600", filepath.Base(p), got)
+		}
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+		t.Fatalf("keys after reopening = %d (err %v), want 1", len(keys), err)
+	}
+}
+
+// closeTestDatabase closes the database's SQL handle.
+func closeTestDatabase(t *testing.T, db *Database) {
+	t.Helper()
+	sqlDB, err := db.Conn().DB()
+	if err != nil {
+		t.Fatalf("sql handle: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
 	}
 }
