@@ -91,10 +91,10 @@ These apply to all changes.
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Closed |
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Closed |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | In Progress |
-| SEC-011 | Imported key metadata not validated before storage and display | Low | Open |
+| SEC-011 | Imported key metadata not validated before storage and display | Low | In Progress |
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
-| SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | Open |
+| SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | In Progress |
 
 ## 5. Issue register
 
@@ -266,7 +266,7 @@ These apply to all changes.
 ### SEC-004 — Passwords accepted as command-line arguments
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.6):** all four remediation steps are
+- **Progress (2026-09-27, `e512844`; plan 2.6):** all four remediation steps are
   implemented and validated. The owner chose `--password-file`, with piped input as
   the stdin route (it already worked), and a warning that can't be switched off.
   - `passwordFlags` in `logic-cli.go` registers `--password`/`-p` (kept, step 1) and
@@ -287,9 +287,8 @@ These apply to all changes.
     flags was refused.
   - gosec reports one new G304 (`os.Open` on the user's password-file path), the same
     class as the other file-path findings.
-  - Not changed: the CI, CD and Docker smoke tests still use `--password`, so their
-    logs show the warning. Switching them to `--password-file` is optional W11 (a CI
-    change).
+  - The CI, CD and Docker smoke tests still used `--password`. The owner approved
+    switching them to `--password-file` (W11); the patch is delivered.
   - Close after the change is committed and CI passes.
 - **Affected component:** `--password/-p` on `encrypt`, `decrypt`, `keys generate`,
   `keys export` and `keys import` (`internal/logic-cli.go`); the README examples.
@@ -569,7 +568,34 @@ These apply to all changes.
 
 ### SEC-011 — Imported key metadata not validated before storage and display
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.7):** all four remediation steps are
+  implemented and validated.
+  - `ImportKeyFromFile` calls the new `validateKeyExport` before returning a key, so
+    the CLI and TUI both get it. It requires:
+    - export version 1;
+    - a key ID of exactly 16 lower-case hex characters (`isKeyID`, the format
+      `newKeyID` makes);
+    - algorithm `AES-256-GCM`;
+    - an encrypted key that decodes from base64 to exactly 76 bytes (salt, nonce, a
+      32-byte key and the GCM tag).
+
+    Anything else returns `ErrInvalidKeyExport`, and rejected values are quoted with
+    `%q`, so control characters are escaped rather than printed.
+  - Tests: `TestImportKeyRejectsInvalidMetadata` (11 malicious or malformed exports,
+    plus a valid one), `TestKeysImportCmdRejectsInvalidExport` (CLI) and
+    `TestDashboardImportRejectsInvalidExport` (TUI). All failed against the previous
+    code; for example the terminal-escape key ID was accepted as-is. The legacy-export
+    tests still pass.
+  - With real binaries: importing a `.ckey` whose key ID held `ESC ]0;PWNED BEL ESC
+    [31m` succeeded under the previous build, and both the import message and `keys
+    list` wrote the raw escape sequences to the terminal. The new build refused it
+    with the ID escaped, and stored nothing.
+  - Not covered: rows imported before this change are not re-checked. `keys list`
+    and the TUI still print what is stored, so remove any suspicious key with `keys
+    delete`. The import still can't check that the inner blob decrypts, because it
+    is protected by the key's master password (BUG-011).
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/crypto.go` `ImportKeyFromFile` (`KeyID`,
   `Algorithm` and `CreatedAt` taken as-is); `keys list` and the TUI key table.
 - **Risk:** A crafted `.ckey` file, whose password the victim knows, can inject
@@ -637,7 +663,32 @@ These apply to all changes.
 
 ### SEC-014 — Symlink race (TOCTOU) when archiving a directory tree
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.8):** the remediation is implemented and
+  validated.
+  - The new `walkSourceTree` in `compress.go` walks the tree with `fs.WalkDir` over an
+    `os.Root` opened on the source directory, and opens each file through that root.
+    A file swapped for a symlink that leads out of the tree can't be opened: the
+    root refuses it.
+  - Each file is checked again after opening (`visitOpenFile`: still a regular file),
+    and its tar or zip header is built from the opened file's own metadata, so the
+    header always matches the data read.
+  - `writeTarGz` (compress and directory encryption) and `writeZipDirectory` both use
+    it. Walk-time rejection of symlinks and special files is unchanged.
+  - `TestArchivingIgnoresFileSwappedForSymlink` uses a test hook
+    (`testHookBeforeArchiveOpen`) to swap a file for a symlink to an outside file
+    just before it is opened. The previous code, with the same hook added, archived
+    the outside file for tar.gz, zip and directory encryption with no error. The new
+    code refuses and writes no output.
+  - Archives from the previous and new builds of the same tree are byte-identical,
+    for both tar.gz and zip.
+  - gosec no longer reports G122 (or the G304 on that open).
+  - Not covered:
+    - a swap to a symlink that stays inside the tree is followed, which only
+      archives another file from the same tree;
+    - a single-file `compress` or `encrypt` still opens its input by path;
+    - a file swapped for a FIFO could block the open.
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/compress.go` `writeTarGz` (gosec G122 at line 254)
   and `writeZipDirectory`/`writeZipFile`; these are also used by directory encryption.
 - **Risk:** Entry types are checked from `WalkDir` metadata, and then the path is

@@ -399,12 +399,11 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 				}
 			}
 
+			if output == "" {
+				output = defaultExportPath(keyID)
+			}
 			if err := ExportKeyToFile(km, password, output); err != nil {
 				return err
-			}
-
-			if output == "" {
-				output = fmt.Sprintf("%s-%d.ckey", keyID, time.Now().Unix())
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Exported key %s → %s\n", keyID, output); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -771,10 +770,7 @@ func confirmAction(cmd *cobra.Command, prompt string) (bool, error) {
 }
 
 func deriveDecryptOutput(src string) string {
-	if len(src) > len(encExt) && src[len(src)-len(encExt):] == encExt {
-		return src[:len(src)-len(encExt)]
-	}
-	return src + ".dec"
+	return defaultDecryptOutput(src)
 }
 
 func deriveCompressOutput(src, format string) string {

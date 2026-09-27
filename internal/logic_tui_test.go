@@ -413,6 +413,9 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	if _, err := os.Stat(encFile); err != nil {
 		t.Fatalf("encrypted artifact not created: %v", err)
 	}
+	// Deliver the result, as Bubble Tea would, so the dashboard is no longer busy.
+	next, _ = m.Update(result)
+	m = next.(DashboardModel)
 
 	m.startForm(actionDecrypt, screenMain)
 	m = typeString(m, encFile)
@@ -499,6 +502,9 @@ func TestDashboardCompressDecompressZipRoundTrip(t *testing.T) {
 	if err := os.RemoveAll(srcDir); err != nil {
 		t.Fatalf("remove source directory: %v", err)
 	}
+	// Deliver the result, as Bubble Tea would, so the dashboard is no longer busy.
+	next, _ = m.Update(result)
+	m = next.(DashboardModel)
 
 	m.startForm(actionDecompress, screenMain)
 	m = typeString(m, archive)
@@ -775,9 +781,10 @@ func TestDashboardRejectsEmptyPassword(t *testing.T) {
 	db := newTestDatabase(t, false)
 
 	// submit presses Enter through every field and runs the resulting command.
+	// It then delivers the result, as Bubble Tea would, so the next form can be submitted.
 	submit := func(m DashboardModel) (DashboardModel, actionResultMsg) {
 		t.Helper()
-		for {
+		for range len(m.fields) + 1 {
 			next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 			m = next.(DashboardModel)
 			if cmd != nil {
@@ -785,9 +792,12 @@ func TestDashboardRejectsEmptyPassword(t *testing.T) {
 				if !ok {
 					t.Fatalf("expected actionResultMsg")
 				}
-				return m, result
+				next, _ = m.Update(result)
+				return next.(DashboardModel), result
 			}
 		}
+		t.Fatal("form never submitted")
+		return m, actionResultMsg{}
 	}
 
 	// Encrypt: file path typed, output and password left blank.
@@ -1003,4 +1013,108 @@ func TestTUILimitHint(t *testing.T) {
 	if got := withTUILimitHint(other); got != other {
 		t.Fatalf("withTUILimitHint(other) = %v, want it unchanged", got)
 	}
+}
+
+// TestDashboardImportRejectsInvalidExport is a regression test for SEC-011 in the TUI:
+// the Import form refuses an export with a crafted algorithm and stores nothing.
+func TestDashboardImportRejectsInvalidExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evil.ckey")
+	writeTestExport(t, path, KeyExport{Version: 1, KeyID: "0123456789abcdef", Algorithm: "\x1b[31mAES", CreatedAt: 1, EncryptedBlob: validStoredBlob(t)})
+	db := newTestDatabase(t, false)
+
+	m := NewDashboardModel(db)
+	m.startForm(actionKeysImport, screenKeys)
+	result := submitForm(t, m, path, testPassword)
+	if !errors.Is(result.err, ErrInvalidKeyExport) {
+		t.Fatalf("error = %v, want ErrInvalidKeyExport", result.err)
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 0 {
+		t.Fatalf("stored keys = %d (err %v), want 0", len(keys), err)
+	}
+}
+
+// TestDashboardExportReportsWrittenPath is the TUI side of BUG-006: the Export form with
+// no output path reports the file it actually wrote.
+func TestDashboardExportReportsWrittenPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	clock := time.Unix(1_800_000_000, 0)
+	previous := timeNow
+	timeNow = func() time.Time { clock = clock.Add(time.Second); return clock }
+	t.Cleanup(func() { timeNow = previous })
+
+	db := newTestDatabase(t, false)
+	keyID := "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: validStoredBlob(t), CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+
+	m := NewDashboardModel(db)
+	m.startForm(actionKeysExport, screenKeys)
+	result := submitForm(t, m, keyID, "", testPassword, testPassword)
+	if result.err != nil {
+		t.Fatalf("export: %v", result.err)
+	}
+	_, reported, found := strings.Cut(result.message, " → ")
+	if !found {
+		t.Fatalf("message %q has no reported path", result.message)
+	}
+	if _, err := os.Stat(filepath.Join(dir, reported)); err != nil {
+		t.Fatalf("reported path %q was not written: %v", reported, err)
+	}
+}
+
+// TestDashboardRefusesSecondActionWhileBusy is a regression test for BUG-008: while one
+// action is running, submitting another form starts nothing and says why; once the
+// first result arrives, the form can be submitted.
+func TestDashboardRefusesSecondActionWhileBusy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	m := NewDashboardModel(newTestDatabase(t, false))
+
+	// First action: submitted, still running (its command hasn't reported back).
+	m.startForm(actionCompress, screenMain)
+	m = typeString(m, src)
+	var first tea.Cmd
+	for first == nil {
+		next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+		m, first = next.(DashboardModel), cmd
+	}
+	if !m.busy {
+		t.Fatal("busy = false after submitting an action")
+	}
+
+	// Second action while busy: every Enter on the last field must be refused.
+	m.startForm(actionCompress, screenMain)
+	m = typeString(m, src)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
+	m = typeString(next.(DashboardModel), filepath.Join(dir, "second.gz"))
+	for range 3 {
+		next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(DashboardModel)
+		if cmd != nil {
+			t.Fatal("a second action was started while the first was still running")
+		}
+	}
+	if m.screen != screenForm || !m.isError || !strings.Contains(m.status, "still running") {
+		t.Fatalf("screen %v, status %q (isError %v); want the form kept open with a busy message", m.screen, m.status, m.isError)
+	}
+
+	// The first action finishes; now the second form can be submitted.
+	next, _ = m.Update(first())
+	m = next.(DashboardModel)
+	if m.busy {
+		t.Fatal("busy = true after the first action reported back")
+	}
+	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("the form couldn't be submitted after the first action finished")
+	}
+	if result, ok := cmd().(actionResultMsg); !ok || result.err != nil {
+		t.Fatalf("second action result = %+v", result)
+	}
+	_ = next
 }

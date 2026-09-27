@@ -25,13 +25,22 @@ Status: **In progress.**
   - `d683739`: 2.3 (directory-encryption archive built in memory), 2.4 (SQLite secure
     delete) and 2.5 (database opened only when needed, created 0600);
   - `a5edc91`: a test-only fix for Windows CI. CI, Docker and Security are green, so
-    SEC-006, SEC-008 and SEC-009 are closed.
-- **Done, not yet committed:** 2.6, `--password-file` and the `--password` warning
-  (2026-09-27).
+    SEC-006, SEC-008 and SEC-009 are closed;
+  - `e512844`: 2.6 (`--password-file` and the `--password` warning).
+- **Done, not yet committed (2026-09-27):**
+  - W11, the smoke tests switched to `--password-file`. Delivered as
+    `cryptare-w11-password-file-smoke.patch` for the owner to apply;
+  - 2.7, validation of imported key metadata;
+  - 2.8, root-scoped reads when archiving a folder;
+  - 2.9, case-insensitive extensions and the export file name;
+  - 2.10, one TUI action at a time.
+
+  With these, Phase 2 is complete apart from the optional items 2.4a and 2.12.
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** 2.7–2.10, then Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
+- **Next up:** Phase 3, starting with the versioned file format (3.1). Usable stored keys (3.4) depend on the
+  versioned file format (3.1).
 
 ## Principles
 
@@ -88,7 +97,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | W8 | Check the Codecov dashboard: with `fail_ci_if_error: false`, a missing `CODECOV_TOKEN` wouldn't fail CI. | `ci.yml`, repo settings |
 | W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner and committed with the policy change (`b415ffc`).** | `ci.yml`, `cd.yml`, `docker.yml` |
 | W10 | CI annotations on 2026-09-27: several pinned actions target Node.js 20, which GitHub now forces onto Node.js 24; `github/codeql-action` v3 must move to v4 before its December 2026 deprecation; `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Update the pinned SHAs (needs owner approval as a CI change). | `ci.yml`, `cd.yml`, `docker.yml`, `security.yml` |
-| W11 | Optional: switch the CI, CD and Docker smoke tests from `--password` to `--password-file`, so they exercise it and their logs lose the new warning. A CI change, so it needs owner approval. | `ci.yml`, `cd.yml`, `docker.yml` |
+| W11 | Switch the CI, CD and Docker smoke tests from `--password` to `--password-file`, so they exercise it and their logs lose the new warning. **Approved and done 2026-09-27:** delivered as `cryptare-w11-password-file-smoke.patch` for the owner to apply (2.6 is in `e512844`). | `ci.yml`, `cd.yml`, `docker.yml` |
 
 ## Phase 1 — Correctness and critical security (small PRs)
 
@@ -111,11 +120,11 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 2.4 | Enable SQLite `secure_delete`; align README wording. **Done 2026-09-27 (`d683739`):** `_secure_delete=on` on every connection; README updated. | SEC-009 |
 | 2.4a | Optional: clear keys deleted by older versions with a one-time `VACUUM` when the database has free pages, run with `temp_store=MEMORY` so no copy lands in the temp folder. Needs an owner decision. | SEC-009 |
 | 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600. **Done 2026-09-27 (`d683739`):** `NewRootCmdLazy` with a once-only `DatabaseOpener`; `prepareDatabaseFile` creates it 0600, and (owner decision) tightens an existing database to 0600. | SEC-010, BUG-005 |
-| 2.6 | Add `--password-file` / `--password-stdin`; warn when `--password` is used; update README examples. **Done 2026-09-27 (uncommitted).** Owner decisions: `--password-file` only (piped input already covers stdin), and the warning always shows. | SEC-004 |
-| 2.7 | Validate imported key metadata | SEC-011 |
-| 2.8 | Root-scoped opens when archiving | SEC-014 |
-| 2.9 | Fix case-insensitive extension handling and the export filename reporting | BUG-007, BUG-006 |
-| 2.10 | Gate TUI actions on `busy` | BUG-008 |
+| 2.6 | Add `--password-file` / `--password-stdin`; warn when `--password` is used; update README examples. **Done 2026-09-27 (`e512844`).** Owner decisions: `--password-file` only (piped input already covers stdin), and the warning always shows. | SEC-004 |
+| 2.7 | Validate imported key metadata. **Done 2026-09-27 (uncommitted):** `validateKeyExport` checks version, key ID, algorithm and blob shape. | SEC-011 |
+| 2.8 | Root-scoped opens when archiving. **Done 2026-09-27 (uncommitted):** `walkSourceTree` walks and opens through an `os.Root`; archives are byte-identical to before. | SEC-014 |
+| 2.9 | Fix case-insensitive extension handling and the export filename reporting. **Done 2026-09-27 (uncommitted).** | BUG-007, BUG-006 |
+| 2.10 | Gate TUI actions on `busy`. **Done 2026-09-27 (uncommitted).** | BUG-008 |
 | 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output. **Done 2026-09-26 (`b4cd66f`)** for single-file outputs (encrypt, decrypt, compress, gzip decompress, key export). Archive extraction moves to 2.2. | BUG-004 |
 | 2.12 | Optional: an overwrite choice in the TUI forms, which refuse existing outputs today | BUG-004 |
 

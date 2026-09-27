@@ -65,9 +65,11 @@ jobs:
         run: |
           go build -o "cryptare-ci${EXT}" .
           "./cryptare-ci${EXT}" --version
-          "./cryptare-ci${EXT}" keys generate --password ci-smoke-passphrase
+          # Throwaway test passphrase, passed by file so it stays out of the arguments.
+          printf 'ci-smoke-passphrase\n' > smoke-pw.txt
+          "./cryptare-ci${EXT}" keys generate --password-file smoke-pw.txt
           "./cryptare-ci${EXT}" keys list | grep -q "AES-256-GCM"
           printf 'cryptare ci smoke test\n' > smoke.txt
-          "./cryptare-ci${EXT}" encrypt smoke.txt --password ci-smoke-passphrase
-          "./cryptare-ci${EXT}" decrypt smoke.txt.enc --output smoke.out --password ci-smoke-passphrase
+          "./cryptare-ci${EXT}" encrypt smoke.txt --password-file smoke-pw.txt
+          "./cryptare-ci${EXT}" decrypt smoke.txt.enc --output smoke.out --password-file smoke-pw.txt
           cmp smoke.txt smoke.out

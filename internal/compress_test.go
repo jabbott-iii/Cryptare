@@ -19,6 +19,7 @@ package internal
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -1222,5 +1223,128 @@ func TestExtractAbsoluteEntryStaysInside(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(out, "etc", "cryptare-test.txt")); err != nil || string(got) != "inside" {
 		t.Fatalf("extracted file = %q (err %v), want %q inside the output folder", got, err, "inside")
+	}
+}
+
+// TestArchivingIgnoresFileSwappedForSymlink is a regression test for SEC-014: if a file
+// in the tree is swapped for a symlink to a file outside the tree after it was walked
+// but before it is opened, compressing or encrypting the tree must not read the
+// outside file.
+func TestArchivingIgnoresFileSwappedForSymlink(t *testing.T) {
+	const secret = "TOP-SECRET-OUTSIDE-THE-TREE"
+	operations := []struct {
+		name string
+		run  func(tree, out string) error
+		ext  string
+	}{
+		{"tar.gz", func(tree, out string) error { return CompressFileWithFormat(tree, out, "", -1) }, tarGzExt},
+		{"zip", func(tree, out string) error { return CompressFileWithFormat(tree, out, "zip", -1) }, zipExt},
+		{"encrypt", func(tree, out string) error { return EncryptFile(tree, out, testPassword) }, encExt},
+	}
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			dir := t.TempDir()
+			outside := filepath.Join(dir, "outside.txt")
+			if err := os.WriteFile(outside, []byte(secret), 0o600); err != nil {
+				t.Fatalf("write outside file: %v", err)
+			}
+			tree := filepath.Join(dir, "tree")
+			if err := os.MkdirAll(tree, 0o755); err != nil {
+				t.Fatalf("create tree: %v", err)
+			}
+			victim := filepath.Join(tree, "a.txt")
+			// Same length as the secret, so a tar header written from the walked size
+			// still matches after the swap.
+			if err := os.WriteFile(victim, bytes.Repeat([]byte("h"), len(secret)), 0o600); err != nil {
+				t.Fatalf("write tree file: %v", err)
+			}
+			// Symlink support is checked up front so the hook can't fail half-way.
+			if err := os.Symlink(outside, filepath.Join(dir, "probe")); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			swapped := false
+			testHookBeforeArchiveOpen = func(path string) {
+				if filepath.Clean(path) != victim || swapped {
+					return
+				}
+				swapped = true
+				if err := os.Remove(victim); err != nil {
+					t.Errorf("swap: remove: %v", err)
+				}
+				if err := os.Symlink(outside, victim); err != nil {
+					t.Errorf("swap: symlink: %v", err)
+				}
+			}
+			t.Cleanup(func() { testHookBeforeArchiveOpen = nil })
+
+			out := filepath.Join(dir, "out"+op.ext)
+			err := op.run(tree, out)
+			if !swapped {
+				t.Fatal("the swap hook never ran")
+			}
+			if err == nil {
+				t.Fatal("archiving succeeded after the file was swapped for a symlink out of the tree, want an error")
+			}
+			if data, readErr := os.ReadFile(out); readErr == nil && bytes.Contains(data, []byte(secret)) {
+				t.Fatal("the outside file's contents reached the output")
+			}
+			if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+				t.Fatalf("output written despite the error (stat err: %v)", statErr)
+			}
+		})
+	}
+}
+
+// TestExtensionsIgnoreCase is a regression test for BUG-007: archive and encrypted-file
+// extensions are recognised in any letter case, both for default output names and for
+// deciding that a .tar.gz is a folder archive.
+func TestExtensionsIgnoreCase(t *testing.T) {
+	names := map[string]string{
+		"FOO.ZIP":         "FOO",
+		"data.TAR.GZ":     "data",
+		"data.Tar.Gz":     "data",
+		"backup.TGZ":      "backup",
+		"notes.txt.GZ":    "notes.txt",
+		"plain.tar.gz":    "plain",
+		"no-extension":    "no-extension.dec",
+		"archive.tar.gzx": "archive.tar.gzx.dec",
+	}
+	for in, want := range names {
+		if got := defaultDecompressOutput(in); got != want {
+			t.Errorf("defaultDecompressOutput(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"SECRET.ENC", "secret.Enc", "secret.enc"} {
+		if got, want := deriveDecryptOutput(in), in[:len(in)-len(encExt)]; got != want {
+			t.Errorf("deriveDecryptOutput(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// An upper-case .TAR.GZ whose gzip header names "ARCHIVE.TAR" is a folder archive.
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "ARCHIVE.TAR.GZ")
+	writeTestTarGz(t, archive, []archiveEntry{{name: "inner.txt", mode: 0o644, body: "inside"}})
+	if err := DecompressFile(archive, ""); err != nil {
+		t.Fatalf("DecompressFile: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "ARCHIVE", "inner.txt")); err != nil || string(got) != "inside" {
+		t.Fatalf("extracted file = %q (err %v), want the archive extracted into ARCHIVE/", got, err)
+	}
+
+	// DecryptFile's own default output strips an upper-case .ENC too.
+	plain := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(plain, []byte("note"), 0o600); err != nil {
+		t.Fatalf("write note: %v", err)
+	}
+	enc := filepath.Join(dir, "NOTE.ENC")
+	if err := EncryptFile(plain, enc, testPassword); err != nil {
+		t.Fatalf("EncryptFile: %v", err)
+	}
+	if err := DecryptFile(enc, "", testPassword); err != nil {
+		t.Fatalf("DecryptFile: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "NOTE")); err != nil || string(got) != "note" {
+		t.Fatalf("decrypted file = %q (err %v), want NOTE", got, err)
 	}
 }

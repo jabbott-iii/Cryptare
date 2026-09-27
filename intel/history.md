@@ -569,3 +569,108 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     and combining the two flags is refused.
 - **Follow-up (optional, W11):** move the CI, CD and Docker smoke tests to
   `--password-file`.
+
+## 2026-09-27 — Smoke tests use `--password-file` (W11)
+
+- The owner approved W11. `cryptare-w11-password-file-smoke.patch` changes the smoke
+  steps:
+  - `ci.yml` and `cd.yml` write a throwaway passphrase to `smoke-pw.txt` and pass it
+    with `--password-file` to `keys generate`, `encrypt` and `decrypt`;
+  - `docker.yml` mounts the file read-only into the container for `keys generate`.
+- The workflows are protected from direct edits, so this is a patch. It needs the 2.6
+  code, which the owner committed as `e512844` in the meantime.
+- **Validation:**
+  - actionlint 1.7.12 is clean, and the patch applies to the workflow files on the
+    owner's machine;
+  - run locally against the 2.6 code, the CI smoke step and the CD smoke step both
+    passed (the CD static-link check needs a Linux release build, so it was skipped)
+    with no warning in their output;
+  - the Docker step wasn't run: no Docker daemon was available.
+
+## 2026-09-27 — Imported key metadata validated (plan 2.7, SEC-011)
+
+- `internal/crypto.go`: new `ErrInvalidKeyExport`, `validateKeyExport` and `isKeyID`,
+  and constants for the export version, algorithm, key-ID length and stored-blob
+  size. `ImportKeyFromFile` validates before returning, so the CLI and TUI both get
+  it.
+- **Tests:** `TestImportKeyRejectsInvalidMetadata`,
+  `TestKeysImportCmdRejectsInvalidExport` and `TestDashboardImportRejectsInvalidExport`
+  failed against the previous code and pass now.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 73.6% total coverage; both packages also pass
+    as a non-root user;
+  - gosec: 12 findings, unchanged;
+  - real binaries: a `.ckey` with terminal escapes in its key ID was imported and
+    echoed raw by the previous build. The new build refused it, with the ID escaped
+    in the error.
+- `README.md`: `keys import` notes that only Cryptare's export format is accepted.
+
+## 2026-09-27 — Folders are archived through `os.Root` (plan 2.8, SEC-014)
+
+- `internal/compress.go`: new `walkSourceTree` and `visitOpenFile`, and a nil-by-default
+  test hook `testHookBeforeArchiveOpen`. `writeTarGz` and `writeZipDirectory` now
+  walk and read the source folder through an `os.Root`, and build each entry's
+  header from the opened file's own metadata.
+- **Test:** `TestArchivingIgnoresFileSwappedForSymlink` covers tar.gz, zip and
+  directory encryption. With the same hook added to the previous code, the swapped-in
+  outside file was archived with no error in all three. Now each is refused and
+  leaves no output.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 73.9% total coverage; the internal suite also
+    passes as a non-root user;
+  - gosec: 10 findings, down from 12 (G122 and one G304 are gone);
+  - tar.gz and zip archives of the same tree from the previous and new builds are
+    byte-identical.
+
+## 2026-09-27 — Case-insensitive extensions and the export file name (plan 2.9, BUG-007, BUG-006)
+
+- **BUG-007:**
+  - `compress.go`: new `hasSuffixFold`. `defaultDecompressOutput` and
+    `isTarGzArchive` (the file extension and the gzip header name) ignore letter
+    case;
+  - `crypto.go`: new `defaultDecryptOutput` (`.enc` in any case) is used by
+    `DecryptFile` and the CLI's `deriveDecryptOutput`;
+  - so `FOO.ZIP` now extracts to `FOO`, and an upper-case `.TAR.GZ` made by `tar czf`
+    is extracted as a folder instead of being written out as a raw tar file named
+    `….dec`.
+- **BUG-006:**
+  - `crypto.go`: new `defaultExportPath`, which reads the clock through `timeNow`, a
+    package variable tests can replace;
+  - the CLI and TUI compute the default export name once and pass it to
+    `ExportKeyToFile`, so the name they report is the file written.
+- **Tests:**
+  - `TestExtensionsIgnoreCase` failed against the previous code and passes now;
+  - `TestKeysExportReportsWrittenPath` (CLI) and `TestDashboardExportReportsWrittenPath`
+    (TUI) use a clock that advances on every read. The previous code read the clock
+    twice: with the same clock routed into it, both tests failed, reporting a file
+    one second later than the one written.
+- **Real binary:** `decompress DATA.TAR.GZ` (made by `tar -czf`) produced a raw
+  `DATA.TAR.GZ.dec` file under the previous build and a `DATA/` folder under the new
+  one.
+
+## 2026-09-27 — One TUI action at a time (plan 2.10, BUG-008)
+
+- `internal/logic-tui.go`: `advanceOrSubmitForm` refuses to submit while `busy`. It
+  shows "Another action is still running; …" and keeps the form open, so it can be
+  submitted once the running action reports back.
+- **Test:** `TestDashboardRefusesSecondActionWhileBusy` failed against the previous
+  code, which started a second action.
+- **Test fixes:** three existing TUI tests (`TestDashboardEncryptDecryptDirectoryRoundTrip`,
+  `TestDashboardCompressDecompressZipRoundTrip` and the `submit` helper in
+  `TestDashboardRejectsEmptyPassword`) submitted a second form without handing the
+  first result back to the model, which Bubble Tea always does. They now deliver it.
+  The `submit` helper also stops after one pass through the form instead of looping
+  forever; before this fix it hung until the test timeout.
+- **Validation for 2.7–2.10** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 74.3% total coverage; both packages also pass
+    as a non-root user;
+  - gosec: 10 findings;
+  - the pseudo-terminal password checks still pass 7 of 7, including the TUI
+    mismatch-then-match flow.
+- With 2.10, Phase 2 is complete apart from the optional items 2.4a and 2.12.

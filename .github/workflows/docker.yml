@@ -35,5 +35,8 @@ jobs:
       - name: Smoke test database access
         run: |
           docker volume create cryptare-smoke
-          docker run --rm -v cryptare-smoke:/app/data "$IMAGE_NAME" keys generate --password docker-smoke-passphrase
+          # Throwaway test passphrase, mounted as a file so it stays out of the arguments.
+          printf 'docker-smoke-passphrase\n' > smoke-pw.txt
+          docker run --rm -v cryptare-smoke:/app/data -v "$PWD/smoke-pw.txt:/run/smoke-pw.txt:ro" \
+            "$IMAGE_NAME" keys generate --password-file /run/smoke-pw.txt
           docker run --rm -v cryptare-smoke:/app/data "$IMAGE_NAME" keys list | grep -q "AES-256-GCM"

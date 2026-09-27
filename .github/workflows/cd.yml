@@ -85,11 +85,13 @@ jobs:
           if [ "${{ matrix.goos }}" = "linux" ]; then
             file "$bin" | grep -q "statically linked"
           fi
-          "$bin" keys generate --password release-smoke-passphrase
+          # Throwaway test passphrase, passed by file so it stays out of the arguments.
+          printf 'release-smoke-passphrase\n' > smoke-pw.txt
+          "$bin" keys generate --password-file smoke-pw.txt
           "$bin" keys list | grep -q "AES-256-GCM"
           printf 'cryptare release smoke test\n' > smoke.txt
-          "$bin" encrypt smoke.txt --password release-smoke-passphrase
-          "$bin" decrypt smoke.txt.enc --output smoke.out --password release-smoke-passphrase
+          "$bin" encrypt smoke.txt --password-file smoke-pw.txt
+          "$bin" decrypt smoke.txt.enc --output smoke.out --password-file smoke-pw.txt
           cmp smoke.txt smoke.out
 
       - name: Upload binary

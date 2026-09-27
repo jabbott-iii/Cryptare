@@ -64,6 +64,10 @@ var (
 	// ErrPasswordMismatch is returned by the CLI and TUI when a new password and its
 	// confirmation differ.
 	ErrPasswordMismatch = errors.New("passwords do not match")
+
+	// ErrInvalidKeyExport is returned by ImportKeyFromFile when an export's contents
+	// aren't what Cryptare writes (see validateKeyExport).
+	ErrInvalidKeyExport = errors.New("invalid key export")
 )
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
@@ -163,12 +167,7 @@ func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) erro
 	}
 
 	if dst == "" {
-		dst = src
-		if filepath.Ext(dst) == encExt {
-			dst = dst[:len(dst)-len(encExt)]
-		} else {
-			dst = dst + ".dec"
-		}
+		dst = defaultDecryptOutput(src)
 	}
 	if err := checkNotSameFile(src, dst); err != nil {
 		return err
@@ -439,13 +438,32 @@ func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
 	}
 
 	if path == "" {
-		path = fmt.Sprintf("%s-%d.ckey", km.KeyID, time.Now().Unix())
+		path = defaultExportPath(km.KeyID)
 	}
 
 	if err := writeFileAtomic(path, []byte(blob)); err != nil {
 		return fmt.Errorf("write export file: %w", err)
 	}
 	return nil
+}
+
+// timeNow is the clock used for default export file names; tests replace it.
+var timeNow = time.Now
+
+// defaultExportPath returns the default export file name for keyID,
+// <key-id>-<unix time>.ckey in the current directory. Callers compute it once and pass
+// it on, so the name they report is the file written (BUG-006).
+func defaultExportPath(keyID string) string {
+	return fmt.Sprintf("%s-%d.ckey", keyID, timeNow().Unix())
+}
+
+// defaultDecryptOutput strips the ".enc" extension from src, in any letter case
+// (BUG-007), or appends ".dec" when there is none.
+func defaultDecryptOutput(src string) string {
+	if len(src) > len(encExt) && hasSuffixFold(src, encExt) {
+		return src[:len(src)-len(encExt)]
+	}
+	return src + ".dec"
 }
 
 // ImportKeyFromFile reads an export file and returns a KeyModel (not yet persisted).
@@ -465,6 +483,9 @@ func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
 	if err := unmarshalKeyExport(plaintext, &export); err != nil {
 		return nil, fmt.Errorf("parse export: %w", err)
 	}
+	if err := validateKeyExport(export); err != nil {
+		return nil, err
+	}
 
 	return &KeyModel{
 		KeyID:         export.KeyID,
@@ -472,6 +493,52 @@ func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
 		EncryptedBlob: export.EncryptedBlob,
 		CreatedAt_:    export.CreatedAt,
 	}, nil
+}
+
+const (
+	keyExportVersion = 1
+	keyAlgorithm     = "AES-256-GCM"
+	keyIDLen         = 16 // hex characters, from newKeyID
+	gcmTagLen        = 16
+	// storedKeyBlobLen is the decoded size of a stored key blob from EncryptKeyBlob:
+	// salt, nonce, and the 32-byte key sealed with a GCM tag.
+	storedKeyBlobLen = saltLen + ivLen + keyLen + gcmTagLen
+)
+
+// validateKeyExport checks an imported export's fields before they are stored and
+// shown by keys list and the TUI (SEC-011): the version must be 1, the key ID 16
+// lower-case hex characters as newKeyID makes, the algorithm AES-256-GCM, and the
+// encrypted key a base64 blob of the size EncryptKeyBlob produces. Rejected values
+// are quoted with %q, so control characters in them are escaped, not printed.
+func validateKeyExport(e KeyExport) error {
+	if e.Version != keyExportVersion {
+		return fmt.Errorf("%w: unsupported version %d", ErrInvalidKeyExport, e.Version)
+	}
+	if !isKeyID(e.KeyID) {
+		return fmt.Errorf("%w: key ID %q is not %d lower-case hexadecimal characters", ErrInvalidKeyExport, e.KeyID, keyIDLen)
+	}
+	if e.Algorithm != keyAlgorithm {
+		return fmt.Errorf("%w: unsupported algorithm %q", ErrInvalidKeyExport, e.Algorithm)
+	}
+	blob, err := base64.StdEncoding.DecodeString(e.EncryptedBlob)
+	if err != nil || len(blob) != storedKeyBlobLen {
+		return fmt.Errorf("%w: the encrypted key is malformed", ErrInvalidKeyExport)
+	}
+	return nil
+}
+
+// isKeyID reports whether s has the format of a generated key ID.
+func isKeyID(s string) bool {
+	if len(s) != keyIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // unmarshalKeyExport parses a JSON export envelope.

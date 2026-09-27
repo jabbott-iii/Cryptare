@@ -356,6 +356,13 @@ func (m DashboardModel) advanceOrSubmitForm() (tea.Model, tea.Cmd) {
 		m.fieldIdx++
 		return m, nil
 	}
+	// Only one action runs at a time (BUG-008); the form stays open so it can be
+	// submitted once the running action reports back.
+	if m.busy {
+		m.status = "Another action is still running; wait for it to finish, then press Enter again."
+		m.isError = true
+		return m, nil
+	}
 
 	cmd := m.buildActionCmd()
 	m.busy = true
@@ -668,13 +675,12 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			if err := checkTUINewPassword(password, passwordAgain); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := ExportKeyToFile(km, password, output); err != nil {
-				return actionResultMsg{err: err}
-			}
-
 			dst := output
 			if dst == "" {
-				dst = fmt.Sprintf("%s-%d.ckey", keyID, time.Now().Unix())
+				dst = defaultExportPath(keyID)
+			}
+			if err := ExportKeyToFile(km, password, dst); err != nil {
+				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Exported key %s → %s", keyID, dst)}
 		}

@@ -1500,3 +1500,74 @@ func TestPasswordFlagWarns(t *testing.T) {
 		t.Fatal("the warning repeats the password")
 	}
 }
+
+// TestKeysImportCmdRejectsInvalidExport is a regression test for SEC-011 on the CLI: an
+// export with a crafted key ID is refused and nothing is stored.
+func TestKeysImportCmdRejectsInvalidExport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evil.ckey")
+	writeTestExport(t, path, KeyExport{Version: 1, KeyID: "\x1b[2Jevil", Algorithm: "AES-256-GCM", CreatedAt: 1, EncryptedBlob: validStoredBlob(t)})
+	db := newTestDatabase(t, false)
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "import", path, "--password-file", writePasswordFile(t, testPassword)})
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	if err := rootCmd.Execute(); !errors.Is(err, ErrInvalidKeyExport) {
+		t.Fatalf("error = %v, want ErrInvalidKeyExport", err)
+	}
+	if strings.Contains(out.String(), "\x1b") {
+		t.Fatalf("output contains a raw escape character: %q", out.String())
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 0 {
+		t.Fatalf("stored keys = %d (err %v), want 0", len(keys), err)
+	}
+}
+
+// writePasswordFile writes password to a new file and returns its path.
+func writePasswordFile(t *testing.T, password string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pw.txt")
+	if err := os.WriteFile(path, []byte(password+"\n"), 0o600); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+	return path
+}
+
+// TestKeysExportReportsWrittenPath is a regression test for BUG-006: without --output,
+// the file name keys export reports is the file it wrote, even when the clock moves on
+// between computing the name and printing it.
+func TestKeysExportReportsWrittenPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	clock := time.Unix(1_800_000_000, 0)
+	previous := timeNow
+	timeNow = func() time.Time { clock = clock.Add(time.Second); return clock }
+	t.Cleanup(func() { timeNow = previous })
+
+	db := newTestDatabase(t, false)
+	keyID := "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: validStoredBlob(t), CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "export", keyID, "--password-file", writePasswordFile(t, testPassword)})
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("keys export: %v", err)
+	}
+
+	_, reported, found := strings.Cut(strings.TrimSpace(out.String()), " → ")
+	if !found {
+		t.Fatalf("output %q has no reported path", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, reported)); err != nil {
+		t.Fatalf("reported path %q was not written: %v", reported, err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*.ckey")); len(matches) != 1 {
+		t.Fatalf("export files = %v, want exactly one", matches)
+	}
+}

@@ -61,7 +61,7 @@ header, a legacy read path, and tests covering both.
 | Encrypted file (`.enc`) | `salt(16) ‖ nonce(12) ‖ AES-256-GCM ciphertext+tag` | Key = PBKDF2-HMAC-SHA256(password, salt, 100,000 iterations, 32 bytes). No header, version or AAD. |
 | Encrypted directory (`.enc`) | `"CRYPTARE-DIR-ENC\x00" ‖ salt ‖ nonce ‖ ciphertext+tag` | Plaintext is a tar.gz of the tree. The magic string is also the GCM AAD, so a stripped magic can't be decrypted as a single file. |
 | Stored key (`key_models.encrypted_blob`) | base64(`salt ‖ nonce ‖ GCM(32-byte raw key)`) | Encrypted with the master password using the same KDF. |
-| Key export (`.ckey`) | base64(`salt ‖ nonce ‖ GCM(JSON KeyExport{version:1,…})`) | The JSON carries the already-encrypted stored blob; the outer layer uses the export password. |
+| Key export (`.ckey`) | base64(`salt ‖ nonce ‖ GCM(JSON KeyExport{version:1,…})`) | The JSON carries the already-encrypted stored blob; the outer layer uses the export password. Import accepts only version 1, a 16-character lower-case hex key ID, `AES-256-GCM`, and a 76-byte blob (`validateKeyExport`, SEC-011). |
 | Compressed output | `.gz` (single file, gzip header `Name` set), `.tar.gz` (directory), `.zip` | Archive entries use forward-slash relative paths. Symlinks and special files are rejected. |
 
 `TestDecryptLegacyEncryptedFile` guards the single-file format; keep it passing.
@@ -120,8 +120,10 @@ These are observed in the codebase and required for new code:
   `passwordFlags.register` and read it with `passwordFlags.get`, which handles
   `--password-file` and the `--password` warning. They fall back to `readPassword`, or
   to `readNewPassword` when the password protects new data (SEC-004).
-- Symlinks and non-regular files are rejected when reading directory trees, and path
-  traversal (`..`) is rejected when extracting, before the `os.Root` check. Keep these
+- Symlinks and non-regular files are rejected when reading directory trees, which
+  are always read through `walkSourceTree` (an `os.Root` on the source folder,
+  SEC-014). Path traversal (`..`) is rejected when extracting, before the `os.Root`
+  check. Keep these
   checks. An absolute entry name is extracted inside the output folder.
 - Code is grouped with the existing `//----- section -----//` banner comments.
 - File naming is mixed (`logic-cli.go` vs `logic_cli_test.go`). Don't rename existing

@@ -244,25 +244,28 @@ func defaultCompressOutput(src string, isDir bool, format compressFormat) string
 	return src + gzExt
 }
 
+// defaultDecompressOutput strips a known archive extension from src, in any letter
+// case (BUG-007), or appends ".dec" when there is none.
 func defaultDecompressOutput(src string) string {
-	switch {
-	case strings.HasSuffix(src, tarGzExt):
-		return src[:len(src)-len(tarGzExt)]
-	case strings.HasSuffix(src, tgzExt):
-		return src[:len(src)-len(tgzExt)]
-	case strings.HasSuffix(src, gzExt):
-		return src[:len(src)-len(gzExt)]
-	case strings.HasSuffix(src, zipExt):
-		return src[:len(src)-len(zipExt)]
-	default:
-		return src + ".dec"
+	for _, ext := range []string{tarGzExt, tgzExt, gzExt, zipExt} {
+		if hasSuffixFold(src, ext) {
+			return src[:len(src)-len(ext)]
+		}
 	}
+	return src + ".dec"
 }
 
+// isTarGzArchive reports whether a gzip file holds a tar archive, judging by its file
+// extension or the name stored in its gzip header, in any letter case.
 func isTarGzArchive(src, gzipName string) bool {
-	return strings.HasSuffix(src, tarGzExt) ||
-		strings.HasSuffix(src, tgzExt) ||
-		strings.HasSuffix(gzipName, ".tar")
+	return hasSuffixFold(src, tarGzExt) ||
+		hasSuffixFold(src, tgzExt) ||
+		hasSuffixFold(gzipName, ".tar")
+}
+
+// hasSuffixFold is strings.HasSuffix ignoring letter case.
+func hasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
 }
 
 func resolveCompressFormat(format, dst string) (compressFormat, error) {
@@ -279,71 +282,34 @@ func resolveCompressFormat(format, dst string) (compressFormat, error) {
 	}
 }
 
+// writeTarGz writes the directory tree at root to w as a tar stream, reading it through
+// walkSourceTree, and returns the number of entries written.
 func writeTarGz(w io.Writer, root string) (int, error) {
 	tw := tar.NewWriter(w)
 	entries := 0
 
-	root = filepath.Clean(root)
-	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk source directory: %w", walkErr)
-		}
-		if path == root {
-			return nil
-		}
+	err := walkSourceTree(filepath.Clean(root), func(name string, info fs.FileInfo, file fs.File) error {
 		entries++
-
-		info, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("read entry info: %w", err)
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("derive archive path: %w", err)
-		}
-		rel = filepath.ToSlash(rel)
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("compress directory: symlinks are not supported (%s)", path)
-		}
-		if !info.IsDir() && !info.Mode().IsRegular() {
-			return fmt.Errorf("compress directory: unsupported file type at %s", path)
-		}
-
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return fmt.Errorf("create tar header: %w", err)
 		}
-		header.Name = rel
+		header.Name = name
 		if info.IsDir() {
 			header.Name += "/"
 		}
-
 		if err := tw.WriteHeader(header); err != nil {
 			return fmt.Errorf("write tar header: %w", err)
 		}
-		if info.IsDir() {
+		if file == nil {
 			return nil
 		}
-
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("open source file: %w", err)
-		}
-
 		if _, err := io.Copy(tw, file); err != nil {
-			closeErr := file.Close()
-			if closeErr != nil {
-				return errors.Join(fmt.Errorf("write tar contents: %w", err), fmt.Errorf("close source file: %w", closeErr))
-			}
 			return fmt.Errorf("write tar contents: %w", err)
 		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close source file: %w", err)
-		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		closeErr := tw.Close()
 		if closeErr != nil {
 			return entries, errors.Join(err, fmt.Errorf("finalise tar archive: %w", closeErr))
@@ -371,45 +337,29 @@ func writeZip(w io.Writer, src string, info fs.FileInfo, level int) (err error) 
 }
 
 func writeZipDirectory(zw *zip.Writer, root string) error {
-	root = filepath.Clean(root)
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk source directory: %w", walkErr)
-		}
-		if path == root {
-			return nil
-		}
-
-		info, err := d.Info()
+	return walkSourceTree(filepath.Clean(root), func(name string, info fs.FileInfo, file fs.File) error {
+		header, err := zip.FileInfoHeader(info)
 		if err != nil {
-			return fmt.Errorf("read entry info: %w", err)
+			return fmt.Errorf("create zip header: %w", err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("compress directory: symlinks are not supported (%s)", path)
-		}
-		if !info.IsDir() && !info.Mode().IsRegular() {
-			return fmt.Errorf("compress directory: unsupported file type at %s", path)
-		}
-
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("derive archive path: %w", err)
-		}
-		rel = filepath.ToSlash(rel)
-
-		if info.IsDir() {
-			header, err := zip.FileInfoHeader(info)
-			if err != nil {
-				return fmt.Errorf("create zip header: %w", err)
-			}
-			header.Name = rel + "/"
+		if file == nil {
+			header.Name = name + "/"
 			if _, err := zw.CreateHeader(header); err != nil {
 				return fmt.Errorf("write zip header: %w", err)
 			}
 			return nil
 		}
 
-		return writeZipFile(zw, path, rel)
+		header.Name = name
+		header.Method = zip.Deflate
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			return fmt.Errorf("write zip header: %w", err)
+		}
+		if _, err := io.Copy(writer, file); err != nil {
+			return fmt.Errorf("write zip contents: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -842,6 +792,77 @@ func checkInputOutsideOutput(src, dst string) error {
 		return fmt.Errorf("%w: %s", ErrInputInsideOutput, dst)
 	}
 	return nil
+}
+
+//--------------------------------------------------source trees-----------------------------------------------------------------------------------------//
+
+// testHookBeforeArchiveOpen, when a test sets it, runs just before walkSourceTree opens
+// a file, so the test can swap the file for a symlink (SEC-014). It is nil otherwise.
+var testHookBeforeArchiveOpen func(path string)
+
+// walkSourceTree calls visit for every entry below the directory root, in lexical
+// order, with its slash-separated path relative to root. Folders are visited with a nil
+// file. Regular files are visited open, with the opened file's own metadata, so a
+// header built from info matches the data read. The walk and the opens go through an
+// os.Root on root, so an entry swapped for a symlink during the walk can't lead outside
+// the tree (SEC-014). Symlinks and special files found by the walk are rejected.
+func walkSourceTree(root string, visit func(name string, info fs.FileInfo, file fs.File) error) (err error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return fmt.Errorf("open source directory: %w", err)
+	}
+	defer closeWithError(&err, r, "close source directory")
+	fsys := r.FS()
+
+	return fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk source directory: %w", walkErr)
+		}
+		if name == "." {
+			return nil
+		}
+		path := filepath.Join(root, filepath.FromSlash(name))
+
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("read entry info: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("compress directory: symlinks are not supported (%s)", path)
+		}
+		if info.IsDir() {
+			return visit(name, info, nil)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("compress directory: unsupported file type at %s", path)
+		}
+
+		if testHookBeforeArchiveOpen != nil {
+			testHookBeforeArchiveOpen(path)
+		}
+		file, err := fsys.Open(name)
+		if err != nil {
+			return fmt.Errorf("open source file: %w", err)
+		}
+		err = visitOpenFile(file, name, path, visit)
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close source file: %w", closeErr)
+		}
+		return err
+	})
+}
+
+// visitOpenFile checks that an opened tree entry is still a regular file, then visits
+// it with its own metadata.
+func visitOpenFile(file fs.File, name, path string, visit func(string, fs.FileInfo, fs.File) error) error {
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat source file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("compress directory: %s changed while it was being read", path)
+	}
+	return visit(name, info, file)
 }
 
 //--------------------------------------------------output paths-----------------------------------------------------------------------------------------//

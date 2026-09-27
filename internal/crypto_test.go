@@ -18,7 +18,9 @@ package internal
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -761,5 +763,88 @@ func TestEncryptDirectoryWritesNoTempPlaintext(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(restored, "nested", "secret.txt")); err != nil || string(got) != "top secret" {
 		t.Fatalf("restored content = %q (err %v), want %q", got, err, "top secret")
+	}
+}
+
+// validStoredBlob returns an encrypted key blob with the shape keys generate stores.
+func validStoredBlob(t *testing.T) string {
+	t.Helper()
+	rawKey, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	blob, err := EncryptKeyBlob(rawKey, testPassword)
+	if err != nil {
+		t.Fatalf("EncryptKeyBlob: %v", err)
+	}
+	return blob
+}
+
+// writeTestExport writes export to path as a .ckey file protected with testPassword,
+// exactly as given, so tests can craft exports with bad fields.
+func writeTestExport(t *testing.T, path string, export KeyExport) {
+	t.Helper()
+	raw, err := json.Marshal(export)
+	if err != nil {
+		t.Fatalf("marshal export: %v", err)
+	}
+	blob, err := EncryptKeyBlob(raw, testPassword)
+	if err != nil {
+		t.Fatalf("encrypt export: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
+		t.Fatalf("write export: %v", err)
+	}
+}
+
+// TestImportKeyRejectsInvalidMetadata is a regression test for SEC-011: an export whose
+// key ID, algorithm, blob or version isn't what Cryptare writes is refused with
+// ErrInvalidKeyExport, and the error never echoes control characters to the terminal.
+func TestImportKeyRejectsInvalidMetadata(t *testing.T) {
+	dir := t.TempDir()
+	good := KeyExport{Version: 1, KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", CreatedAt: 1_700_000_000, EncryptedBlob: validStoredBlob(t)}
+
+	path := filepath.Join(dir, "good.ckey")
+	writeTestExport(t, path, good)
+	km, err := ImportKeyFromFile(path, testPassword)
+	if err != nil {
+		t.Fatalf("valid export refused: %v", err)
+	}
+	if km.KeyID != good.KeyID || km.Algorithm != good.Algorithm || km.EncryptedBlob != good.EncryptedBlob || km.CreatedAt_ != good.CreatedAt {
+		t.Fatalf("imported %+v, want the fields of %+v", km, good)
+	}
+
+	shortBlob := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	tests := []struct {
+		name   string
+		modify func(e *KeyExport)
+	}{
+		{"terminal escape in key ID", func(e *KeyExport) { e.KeyID = "\x1b]0;pwned\x07\x1b[2J0123" }},
+		{"key ID too short", func(e *KeyExport) { e.KeyID = "0123abcd" }},
+		{"key ID upper-case", func(e *KeyExport) { e.KeyID = "0123456789ABCDEF" }},
+		{"key ID not hex", func(e *KeyExport) { e.KeyID = "0123456789abcdeg" }},
+		{"empty key ID", func(e *KeyExport) { e.KeyID = "" }},
+		{"unknown algorithm", func(e *KeyExport) { e.Algorithm = "AES-128-CBC" }},
+		{"terminal escape in algorithm", func(e *KeyExport) { e.Algorithm = "AES-256-GCM\x1b[31m" }},
+		{"blob not base64", func(e *KeyExport) { e.EncryptedBlob = "not base64!" }},
+		{"blob wrong length", func(e *KeyExport) { e.EncryptedBlob = shortBlob }},
+		{"empty blob", func(e *KeyExport) { e.EncryptedBlob = "" }},
+		{"unsupported version", func(e *KeyExport) { e.Version = 2 }},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			export := good
+			tt.modify(&export)
+			path := filepath.Join(dir, fmt.Sprintf("bad%d.ckey", i))
+			writeTestExport(t, path, export)
+
+			km, err := ImportKeyFromFile(path, testPassword)
+			if !errors.Is(err, ErrInvalidKeyExport) {
+				t.Fatalf("ImportKeyFromFile() = %+v, %v; want ErrInvalidKeyExport", km, err)
+			}
+			if strings.ContainsAny(err.Error(), "\x1b\x07") {
+				t.Fatalf("error message contains raw control characters: %q", err.Error())
+			}
+		})
 	}
 }
