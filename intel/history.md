@@ -382,3 +382,42 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     files.
 - **W9:** the owner applied `cryptare-password-policy-workflows.patch`; the three
   workflows on disk match the patched versions. It is uncommitted, alongside 0.5.
+
+## 2026-09-27 — Plan 2.2 completed: `os.Root` extraction and owner-only permissions (SEC-008, BUG-014)
+
+- The owner committed 0.5 and 2.1 as `b415ffc`, with the W9 workflow patch. CI was
+  still running when last checked.
+- **Owner decision:** extracted files and folders are owner-only. Folders are 0700
+  and files 0600, or 0700 when the archive marks them executable. This applies to
+  `decompress` and to decrypted folders.
+- `internal/compress.go`:
+  - `extractTarGz` and `extractZipEntries` open an `os.Root` on the new extraction
+    folder and create folders and files through it, using the entry's path relative
+    to the output. The lexical `..` check stays, and an absolute entry name is still
+    extracted inside the output;
+  - new `extractDirMode` (0700) and `extractFileMode`. Archive permissions are no
+    longer applied;
+  - the two functions no longer create the output folder, since `extractToDir`
+    always passes one that exists.
+- **BUG-014 (new, fixed in the same change):** as a non-root user, an archive with a
+  read-only folder that has contents failed with "permission denied". Running as
+  root hides this, which is why it hadn't been seen.
+- **Tests:**
+  - `TestExtractMasksArchivePermissions` (tar.gz and zip, hand-built archives with
+    0777, 0666, 0775, 0500 and 0444 entries) failed against `b415ffc`, both as root
+    (wrong modes) and as a non-root user (permission denied);
+  - `TestEncryptDecryptDirectory` now expects a restored 0640 file to be 0600;
+  - new `TestExtractRejectsPathTraversal` and `TestExtractAbsoluteEntryStaysInside`
+    cover path handling, which had no tests (part of 4.3). They pass against both
+    versions.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 71.8% total coverage. The internal test suite
+    also passes when run as a non-root user;
+  - gosec v2.29.0: 11 findings, down from 20. The G703 path-traversal findings on
+    extraction are gone, as are four of six G301 and two G304;
+  - real binaries as a non-root user with umask 000: `b415ffc` extracted a 0777
+    folder, a 0666 file and a 0775 script unchanged and failed on a 0500 folder. The
+    new build produced 0700, 0600 and 0700, the script still ran, and the read-only
+    folder was extracted.

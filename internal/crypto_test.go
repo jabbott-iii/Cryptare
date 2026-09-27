@@ -193,8 +193,9 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(restoreDir, "nested", "child.txt")); err != nil {
 		t.Fatalf("Failed to stat restored nested file: %v", err)
-	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
-		t.Fatalf("Nested file mode mismatch: got %o, want %o", info.Mode().Perm(), 0o640)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		// Restored files are owner-only (SEC-008), whatever mode they had (0640 here).
+		t.Fatalf("Nested file mode mismatch: got %o, want %o", info.Mode().Perm(), 0o600)
 	}
 
 	if info, err := os.Stat(filepath.Join(restoreDir, "empty")); err != nil {

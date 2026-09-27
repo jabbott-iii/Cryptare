@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
 	"errors"
@@ -1051,5 +1052,175 @@ func TestFormatSize(t *testing.T) {
 		if got := formatSize(n); got != want {
 			t.Errorf("formatSize(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// archiveEntry describes one entry of a hand-built test archive.
+type archiveEntry struct {
+	name string
+	mode os.FileMode // permission bits stored in the archive
+	dir  bool
+	body string
+}
+
+// writeTestTarGz writes entries to a new tar.gz at path, exactly as given.
+func writeTestTarGz(t *testing.T, path string, entries []archiveEntry) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	gz := gzip.NewWriter(f)
+	gz.Name = strings.TrimSuffix(filepath.Base(path), ".gz")
+	tw := tar.NewWriter(gz)
+	for _, e := range entries {
+		h := &tar.Header{Name: e.name, Mode: int64(e.mode), Typeflag: tar.TypeReg, Size: int64(len(e.body))}
+		if e.dir {
+			h.Typeflag, h.Size = tar.TypeDir, 0
+		}
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatalf("write tar header %s: %v", e.name, err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatalf("write tar entry %s: %v", e.name, err)
+		}
+	}
+	for _, c := range []interface{ Close() error }{tw, gz, f} {
+		if err := c.Close(); err != nil {
+			t.Fatalf("close %s: %v", path, err)
+		}
+	}
+}
+
+// writeTestZip writes entries to a new zip at path, exactly as given.
+func writeTestZip(t *testing.T, path string, entries []archiveEntry) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	zw := zip.NewWriter(f)
+	for _, e := range entries {
+		h := &zip.FileHeader{Name: e.name, Method: zip.Deflate}
+		mode := e.mode
+		if e.dir {
+			mode |= os.ModeDir
+		}
+		h.SetMode(mode)
+		w, err := zw.CreateHeader(h)
+		if err != nil {
+			t.Fatalf("write zip header %s: %v", e.name, err)
+		}
+		if !e.dir {
+			if _, err := w.Write([]byte(e.body)); err != nil {
+				t.Fatalf("write zip entry %s: %v", e.name, err)
+			}
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", path, err)
+	}
+}
+
+// TestExtractMasksArchivePermissions is a regression test for SEC-008 step 3: extracted
+// folders are 0700 and files 0600, or 0700 when the archive marks them executable,
+// whatever permissions the archive stores. A read-only folder in the archive doesn't
+// stop its contents from being extracted.
+func TestExtractMasksArchivePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	entries := []archiveEntry{
+		{name: "open/", mode: 0o777, dir: true},
+		{name: "open/shared.txt", mode: 0o666, body: "shared"},
+		{name: "open/tool.sh", mode: 0o775, body: "#!/bin/sh\n"},
+		{name: "locked/", mode: 0o500, dir: true},
+		{name: "locked/inner.txt", mode: 0o444, body: "inner"},
+	}
+	want := map[string]os.FileMode{
+		"open":             0o700,
+		"open/shared.txt":  0o600,
+		"open/tool.sh":     0o700,
+		"locked":           0o700,
+		"locked/inner.txt": 0o600,
+	}
+
+	for _, ext := range []string{tarGzExt, zipExt} {
+		t.Run(ext, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, "perms"+ext)
+			if ext == tarGzExt {
+				writeTestTarGz(t, archive, entries)
+			} else {
+				writeTestZip(t, archive, entries)
+			}
+			out := filepath.Join(dir, "out")
+			if err := DecompressFile(archive, out); err != nil {
+				t.Fatalf("DecompressFile: %v", err)
+			}
+			for name, mode := range want {
+				info, err := os.Stat(filepath.Join(out, filepath.FromSlash(name)))
+				if err != nil {
+					t.Fatalf("stat %s: %v", name, err)
+				}
+				if got := info.Mode().Perm(); got != mode {
+					t.Errorf("%s mode = %04o, want %04o", name, got, mode)
+				}
+			}
+		})
+	}
+}
+
+// TestExtractRejectsPathTraversal checks that an archive entry naming a path outside
+// the output folder is refused, nothing is written outside it, and no partial
+// output is left behind.
+func TestExtractRejectsPathTraversal(t *testing.T) {
+	for _, name := range []string{"../escaped.txt", "a/../../escaped.txt"} {
+		for _, ext := range []string{tarGzExt, zipExt} {
+			t.Run(ext+" "+name, func(t *testing.T) {
+				dir := t.TempDir()
+				archive := filepath.Join(dir, "evil"+ext)
+				entries := []archiveEntry{
+					{name: "ok.txt", mode: 0o644, body: "fine"},
+					{name: name, mode: 0o644, body: "escaped"},
+				}
+				if ext == tarGzExt {
+					writeTestTarGz(t, archive, entries)
+				} else {
+					writeTestZip(t, archive, entries)
+				}
+				out := filepath.Join(dir, "sub", "out")
+				err := DecompressFile(archive, out)
+				if err == nil || !strings.Contains(err.Error(), "invalid path") {
+					t.Fatalf("error = %v, want an invalid-path error", err)
+				}
+				for _, p := range []string{filepath.Join(dir, "escaped.txt"), filepath.Join(dir, "sub", "escaped.txt")} {
+					if _, err := os.Stat(p); !os.IsNotExist(err) {
+						t.Fatalf("%s written outside the output folder (stat err: %v)", p, err)
+					}
+				}
+				if _, err := os.Stat(out); !os.IsNotExist(err) {
+					t.Fatalf("partial output left behind (stat err: %v)", err)
+				}
+			})
+		}
+	}
+}
+
+// TestExtractAbsoluteEntryStaysInside checks that a tar entry with an absolute name is
+// extracted inside the output folder, as before extraction went through os.Root.
+func TestExtractAbsoluteEntryStaysInside(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "abs.tar.gz")
+	writeTestTarGz(t, archive, []archiveEntry{{name: "/etc/cryptare-test.txt", mode: 0o644, body: "inside"}})
+	out := filepath.Join(dir, "out")
+	if err := DecompressFile(archive, out); err != nil {
+		t.Fatalf("DecompressFile: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(out, "etc", "cryptare-test.txt")); err != nil || string(got) != "inside" {
+		t.Fatalf("extracted file = %q (err %v), want %q inside the output folder", got, err, "inside")
 	}
 }

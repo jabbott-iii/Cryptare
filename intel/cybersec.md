@@ -114,7 +114,7 @@ These apply to all changes.
     recovers a file the old build encrypted with a blank password.
   - Remaining: step 3, the minimum-length policy (Q-004). This item stays open
     until that is decided and implemented.
-- **Progress (2026-09-27, uncommitted):** step 3 is implemented and validated. The owner
+- **Progress (2026-09-27, `b415ffc`):** step 3 is implemented and validated. The owner
   asked for a default policy (Q-004).
   - `CheckPasswordPolicy` in `crypto.go` requires at least `MinPasswordLength` (15)
     Unicode code points and rejects a single repeated character (`ErrWeakPassword`).
@@ -139,7 +139,7 @@ These apply to all changes.
   - The CI, CD and Docker smoke tests used passwords shorter than 15 characters. The
     workflow patch `cryptare-password-policy-workflows.patch` lengthens them (plan W9);
     the owner has applied it.
-  - Close after the change is committed and CI passes with the patched workflows.
+  - Close once CI passes on `b415ffc` with the patched workflows.
 - **Affected component:**
   - `internal/logic-tui.go` `buildActionCmd` (encrypt, keys generate, keys export)
   - `internal/crypto.go` `EncryptFile`, `EncryptKeyBlob`, `ExportKeyToFile` (none of
@@ -183,7 +183,7 @@ These apply to all changes.
     exits with status 130; verified in a pseudo-terminal.
   - Remaining: step 3 (confirmation on encrypt, tied to Q-004), and the migration
     note in the next release's notes.
-- **Progress (2026-09-27, uncommitted):** step 3 is implemented and validated.
+- **Progress (2026-09-27, `b415ffc`):** step 3 is implemented and validated.
   - `readNewPassword` in `logic-cli.go` asks for the password a second time when the
     input is a terminal and refuses a mismatch (`ErrPasswordMismatch`). Piped input
     is read once, so scripts keep working. It is used by `encrypt`, `keys generate`
@@ -324,7 +324,7 @@ These apply to all changes.
 ### SEC-007 — Unbounded decompression and extraction (decompression bomb)
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.1):** all three remediation steps are
+- **Progress (2026-09-27, `b415ffc`; plan 2.1):** all three remediation steps are
   implemented and validated. The owner approved the defaults (10 GiB and 100,000
   entries), the flags, cleanup through a temporary folder, and applying the limits
   to encrypted folders too.
@@ -352,7 +352,7 @@ These apply to all changes.
     `--max-size 100MB`, and with the default entry limit), left nothing behind, and
     extracted them fully with the limits raised. The TUI showed the hint.
   - gosec no longer reports G110 (it did at four places).
-  - Close after the change is committed and CI passes.
+  - Close once CI passes on `b415ffc`.
 - **Affected component:** `internal/compress.go` `DecompressFile`, `extractTarGz`,
   `extractZip`, `extractZipSingleFile`. gosec G110 fires at `compress.go` lines 155,
   416, 498 and 551.
@@ -371,7 +371,29 @@ These apply to all changes.
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plans 2.1 and 2.2):** extraction now always
+- **Progress (2026-09-27, uncommitted; plan 2.2):** steps 1 and 3 are implemented and
+  validated, so all remediation steps are done. The owner chose owner-only
+  permissions.
+  - `extractTarGz` and `extractZipEntries` write through an `os.Root` opened on the
+    new extraction folder, so no entry can be created outside it, even through a
+    symlink. The lexical `..` check stays, for a clear error.
+  - Permissions from the archive are no longer applied: folders are 0700 and files
+    0600, or 0700 when the archive marks them executable (`extractDirMode`,
+    `extractFileMode`). A read-only folder in an archive therefore no longer stops
+    its contents from being extracted (BUG-014).
+  - Tests: `TestExtractMasksArchivePermissions` (tar.gz and zip) failed against the
+    previous code. It reported the archive's modes as root, and as a non-root user
+    extraction failed with "permission denied". `TestEncryptDecryptDirectory` now
+    expects 0600 for a restored 0640 file. `TestExtractRejectsPathTraversal` and
+    `TestExtractAbsoluteEntryStaysInside` cover path handling, which had no tests.
+  - With real binaries as a non-root user with umask 000, the previous build
+    extracted a 0777 folder, a 0666 file and a 0775 script unchanged, and failed on a
+    0500 folder with contents. The new build produced 0700, 0600 and 0700 (the
+    script still runs) and extracted the read-only folder.
+  - gosec no longer reports G703 on extraction (three findings).
+  - The whole internal test suite also passes as a non-root user.
+  - Close after the change is committed and CI passes.
+- **Progress (2026-09-27, `b415ffc`; plans 2.1 and 2.2):** extraction now always
   writes into a new, empty folder with mode 0700 (`extractToDir`), which is renamed
   to the output only when extraction succeeds. Archives can't contain symlinks, and
   other users can't write into a 0700 folder, so there is no symlink to follow, even

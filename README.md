@@ -95,7 +95,7 @@ cryptare                             # opens the interactive TUI
   - the TUI never overwrites, so choose a different output path there;
   - a command that fails part-way leaves no partial output, and a file or folder it was replacing with `--force` is kept;
   - with `--force`, an existing output folder is replaced as a whole, not merged into: files in it that aren't in the archive are removed. Extracting into the folder that holds the archive itself is refused;
-  - single output files (encrypted, decrypted, compressed or decompressed) are readable only by you (mode 0600), and so is the top folder of an extracted archive or decrypted folder (mode 0700). Files inside it keep the archive's permissions.
+  - everything the tool writes is private to you: output files are mode 0600, and extracted or decrypted folders are 0700 with files inside at 0600 (0700 for files the archive marks executable). Permissions stored in an archive are otherwise ignored.
 - Extraction is limited to protect against decompression bombs: `decompress`, and `decrypt` for an encrypted folder, stop after 10 GiB of output or 100,000 archive entries, and remove what they wrote. Change the limits with `--max-size` and `--max-entries` (`0` means no limit). The TUI always uses the defaults.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
 - New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
@@ -105,7 +105,8 @@ cryptare                             # opens the interactive TUI
 - ⚠️ **Upgrading from v1.1.0 or earlier:**
   - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. To export a key whose master password is shorter, choose an export password of 15 or more characters;
   - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
-  - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`.
+  - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
+  - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above).
 
 ## Core CLI capabilities
 

@@ -17,16 +17,15 @@ Status: **In progress.**
   - The password policy (Q-004) was still open. On 2026-09-27 the owner asked for a
     default policy (0.5).
 - **Committed:** 2.11, atomic writes for single-file outputs (`b4cd66f`, 2026-09-26).
-- **Done, not yet committed (2026-09-27):**
-  - 0.5, the default password policy, with the workflow patch for the smoke-test
-    passwords (W9), which the owner has applied. Commit them together, or CI fails;
-  - 2.1, extraction limits, with the atomic-extraction part of 2.2. The owner approved
-    the defaults and design.
+- **Committed 2026-09-27 (`b415ffc`):** 0.5 (the default password policy, with the
+  W9 workflow patch) and 2.1 (extraction limits, with the atomic-extraction part of
+  2.2). CI was still running when last checked.
+- **Done, not yet committed:** the rest of 2.2, that is `os.Root` extraction and
+  owner-only permissions (2026-09-27).
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** the rest of 2.2 (`os.Root` extraction and mode masking), 2.3–2.10, then
-  Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
+- **Next up:** 2.3–2.10, then Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
 
 ## Principles
 
@@ -46,7 +45,7 @@ Status: **In progress.**
 | 0.2 | Stop using the master password that was used with the committed DB; discard that key | SEC-003 | Owner confirms | **Done** (2026-09-26): the owner discarded the key. |
 | 0.3 | Mark the v1.0.0 release as broken, or pull its assets | BUG-001, Q-007 | Release page updated | **Done** (2026-09-26): v1.1.0 is released and verified. The owner decided to leave v1.0.0 as it is. |
 | 0.4 | Decide the CGO/release strategy | Q-001 | Decision recorded in `notes.md` | **Done:** a native CGO build per OS, verified by the v1.0.1 release (2026-09-24). |
-| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | **Done** (2026-09-27, uncommitted): stored keys should be usable (Q-002 = yes, 2026-09-26). For Q-004 the owner asked for a default policy, now implemented: new passwords need at least 15 characters (Unicode code points) and must not be one repeated character, with no composition rules; typed passwords are confirmed; decrypt and import accept any password. See SEC-001 and SEC-002. |
+| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | **Done** (2026-09-27, `b415ffc`): stored keys should be usable (Q-002 = yes, 2026-09-26). For Q-004 the owner asked for a default policy, now implemented: new passwords need at least 15 characters (Unicode code points) and must not be one repeated character, with no composition rules; typed passwords are confirmed; decrypt and import accept any password. See SEC-001 and SEC-002. |
 
 ## Completed — CI/CD rework (v1.0.1, 2026-09-24)
 
@@ -81,7 +80,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | W6 | v1.0.1 ships 5 assets, with no Windows arm64 build. Remove `cryptare_windows_arm64.zip` from the README release table (part of 4.9), or restore the target on a Windows Arm runner. | `README.md` or `cd.yml` |
 | W7 | darwin/amd64 is cross-compiled and not smoke-tested by CD. Its build info is correct (x86-64 Mach-O, CGO on, v1.0.1), but it hasn't been run on an Intel Mac or under Rosetta. | `cd.yml` |
 | W8 | Check the Codecov dashboard: with `fail_ci_if_error: false`, a missing `CODECOV_TOKEN` wouldn't fail CI. | `ci.yml`, repo settings |
-| W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner 2026-09-27** (uncommitted); commit it with the policy change. | `ci.yml`, `cd.yml`, `docker.yml` |
+| W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner and committed with the policy change (`b415ffc`).** | `ci.yml`, `cd.yml`, `docker.yml` |
 
 ## Phase 1 — Correctness and critical security (small PRs)
 
@@ -98,8 +97,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs |
 |---|---|---|
-| 2.1 | Extraction size and entry limits, with clean-up on abort. **Done 2026-09-27 (uncommitted).** Owner decisions: defaults of 10 GiB of output and 100,000 entries per run; `--max-size` and `--max-entries` on `decompress` and `decrypt` (0 = no limit); the TUI uses the defaults; the limits also apply to encrypted folders; clean-up through a temporary folder (below). | SEC-007 |
-| 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions. **Atomic extraction done 2026-09-27 (uncommitted, with 2.1):** `extractToDir` extracts into a new hidden 0700 folder and renames it into place, replacing an existing output with `--force` instead of merging into it; a single-file zip goes through a temporary file (0600). This also removes the planted-symlink risk. **Remaining:** `os.Root` as defence in depth, and masking the archive's file and folder modes. | SEC-008 |
+| 2.1 | Extraction size and entry limits, with clean-up on abort. **Done 2026-09-27 (`b415ffc`).** Owner decisions: defaults of 10 GiB of output and 100,000 entries per run; `--max-size` and `--max-entries` on `decompress` and `decrypt` (0 = no limit); the TUI uses the defaults; the limits also apply to encrypted folders; clean-up through a temporary folder (below). | SEC-007 |
+| 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions. **Atomic extraction done 2026-09-27 (`b415ffc`, with 2.1):** `extractToDir` extracts into a new hidden 0700 folder and renames it into place, replacing an existing output with `--force` instead of merging into it; a single-file zip goes through a temporary file (0600). This also removes the planted-symlink risk. **`os.Root` and permissions done 2026-09-27 (uncommitted):** entries are written through an `os.Root` on the extraction folder; the owner chose owner-only permissions, so folders are 0700 and files 0600, or 0700 when marked executable. | SEC-008, BUG-014 |
 | 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext) | SEC-006 |
 | 2.4 | Enable SQLite `secure_delete`; align README wording | SEC-009 |
 | 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600 | SEC-010, BUG-005 |
@@ -128,7 +127,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 |---|---|---|
 | 4.1 | Pin actions to SHAs; pin gosec and upload its SARIF; triage the findings. **In progress:** pins and SARIF upload shipped in v1.0.1, and the Security workflow succeeded. Remaining: confirm gosec alerts appear in Code Scanning, triage them, and decide on govulncheck. | SEC-012 |
 | 4.2 | Non-root container user; pin images by digest | SEC-013 (needs approval) |
-| 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View` | `maint.md` §5 |
+| 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View`. **Partly done:** `readPassword` (1.1), `ImportKeyFromFile` and a CLI import/export of a legacy key (0.5, `TestLegacyShortPasswordCmds`), and traversal rejection (2.2, `TestExtractRejectsPathTraversal`). **Remaining:** a full CLI export/import round trip and the TUI `View`. | `maint.md` §5 |
 | 4.4 | Add `SECURITY.md` with a private reporting channel | `CONTRIBUTING.md` |
 | 4.5 | Settle the contents of `NOTICE` | Q-006 |
 | 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3) | `notes.md` §3 |

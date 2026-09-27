@@ -96,6 +96,10 @@ These are observed in the codebase and required for new code:
   existing output (allowed with `--force`) is moved aside, replaced, then removed,
   so it is replaced as a whole rather than merged into. Replacing a folder that holds
   the archive being extracted is refused (`ErrInputInsideOutput`).
+- **Extraction permissions and confinement.** Entries are written through an
+  `os.Root` opened on the new extraction folder, so nothing can be created outside
+  it. Permissions stored in an archive are ignored: folders get `extractDirMode`
+  (0700) and files `extractFileMode` (0600, or 0700 when marked executable).
 - **Extraction limits.** Every decompression or extraction runs under
   `ExtractLimits` (default 10 GiB of output and 100,000 entries, SEC-007) and copies
   through `extractBudget`, never a bare `io.Copy` from a decompressor. New code that
@@ -111,7 +115,8 @@ These are observed in the codebase and required for new code:
   field and `checkTUINewPassword`. New commands or forms that set a password must do
   the same.
 - Symlinks and non-regular files are rejected when reading directory trees, and path
-  traversal (`..`) is rejected when extracting. Keep both behaviours.
+  traversal (`..`) is rejected when extracting, before the `os.Root` check. Keep these
+  checks. An absolute entry name is extracted inside the output folder.
 - Code is grouped with the existing `//----- section -----//` banner comments.
 - File naming is mixed (`logic-cli.go` vs `logic_cli_test.go`). Don't rename existing
   files as part of unrelated changes. Name new files in `snake_case.go` (Go convention).

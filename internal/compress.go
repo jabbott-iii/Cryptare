@@ -447,14 +447,18 @@ func writeZipFile(zw *zip.Writer, srcPath, zipName string) error {
 	return nil
 }
 
-// extractTarGz extracts a tar stream into dst, counting its entries and bytes against
-// budget. Callers extract into a new directory (see extractToDir).
-func extractTarGz(r io.Reader, dst string, budget *extractBudget) error {
+// extractTarGz extracts a tar stream into the existing directory dst, counting its
+// entries and bytes against budget. Callers pass a new, empty directory (see
+// extractToDir). Writes go through an os.Root on dst, so no entry can land outside
+// it, and permissions are set by extractDirMode and extractFileMode.
+func extractTarGz(r io.Reader, dst string, budget *extractBudget) (err error) {
 	cleanDst := filepath.Clean(dst)
 	cleanDstWithSep := cleanDst + string(os.PathSeparator)
-	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+	root, err := os.OpenRoot(cleanDst)
+	if err != nil {
+		return fmt.Errorf("open output directory: %w", err)
 	}
+	defer closeWithError(&err, root, "close output directory")
 
 	tr := tar.NewReader(r)
 	for {
@@ -480,17 +484,19 @@ func extractTarGz(r io.Reader, dst string, budget *extractBudget) error {
 		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("extract archive: invalid path %q", header.Name)
 		}
+		// Relative to the output; a leading "/" in the entry name was dropped by Join.
+		name := strings.TrimPrefix(target, cleanDstWithSep)
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
+			if err := root.MkdirAll(name, extractDirMode); err != nil {
 				return fmt.Errorf("create directory: %w", err)
 			}
 		case tar.TypeReg, 0:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(name), extractDirMode); err != nil {
 				return fmt.Errorf("create parent directory: %w", err)
 			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, header.FileInfo().Mode().Perm())
+			file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, extractFileMode(header.FileInfo().Mode()))
 			if err != nil {
 				return fmt.Errorf("create output file: %w", err)
 			}
@@ -537,14 +543,17 @@ func extractZip(src, dst string, budget *extractBudget) (err error) {
 	})
 }
 
-// extractZipEntries extracts zip entries into dst, counting their entries and bytes
-// against budget. Callers extract into a new directory (see extractToDir).
-func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) error {
+// extractZipEntries extracts zip entries into the existing directory dst, like
+// extractTarGz: through an os.Root, with permissions from extractDirMode and
+// extractFileMode, counting entries and bytes against budget.
+func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) (err error) {
 	cleanDst := filepath.Clean(dst)
 	cleanDstWithSep := cleanDst + string(os.PathSeparator)
-	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
+	root, err := os.OpenRoot(cleanDst)
+	if err != nil {
+		return fmt.Errorf("open output directory: %w", err)
 	}
+	defer closeWithError(&err, root, "close output directory")
 
 	for _, file := range files {
 		if err := budget.addEntry(); err != nil {
@@ -561,6 +570,8 @@ func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) err
 		if archivePath == ".." || strings.HasPrefix(archivePath, ".."+string(filepath.Separator)) {
 			return fmt.Errorf("extract archive: invalid path %q", file.Name)
 		}
+		// Relative to the output; a leading "/" in the entry name was dropped by Join.
+		name := strings.TrimPrefix(target, cleanDstWithSep)
 
 		mode := file.Mode()
 		if mode&os.ModeSymlink != 0 {
@@ -568,7 +579,7 @@ func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) err
 		}
 
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, mode.Perm()); err != nil {
+			if err := root.MkdirAll(name, extractDirMode); err != nil {
 				return fmt.Errorf("create directory: %w", err)
 			}
 			continue
@@ -577,7 +588,7 @@ func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) err
 			return fmt.Errorf("extract archive: unsupported entry type %q", file.Name)
 		}
 
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := root.MkdirAll(filepath.Dir(name), extractDirMode); err != nil {
 			return fmt.Errorf("create parent directory: %w", err)
 		}
 
@@ -586,7 +597,7 @@ func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) err
 			return fmt.Errorf("open zip entry: %w", err)
 		}
 
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, extractFileMode(mode))
 		if err != nil {
 			closeErr := rc.Close()
 			if closeErr != nil {
@@ -661,6 +672,20 @@ func extractZipSingleFile(file *zip.File, dst string, budget *extractBudget) (er
 }
 
 //--------------------------------------------------extraction limits and output-------------------------------------------------------------------------//
+
+// extractDirMode is the mode of every folder created by extraction. Extracted files
+// and folders are private to the owner whatever the archive stores (SEC-008), and a
+// read-only folder in the archive can't block extracting its contents.
+const extractDirMode fs.FileMode = 0o700
+
+// extractFileMode returns the mode of an extracted file: 0700 when the archive marks
+// it executable for anyone, otherwise 0600.
+func extractFileMode(archived fs.FileMode) fs.FileMode {
+	if archived&0o111 != 0 {
+		return 0o700
+	}
+	return 0o600
+}
 
 // extractBudget tracks one decompression or extraction against its ExtractLimits.
 type extractBudget struct {
