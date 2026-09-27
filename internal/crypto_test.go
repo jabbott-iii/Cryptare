@@ -91,12 +91,12 @@ func TestEncryptDecryptFile(t *testing.T) {
 	}{
 		{
 			name:     "encrypt with default output",
-			password: "testpassword",
+			password: testPassword,
 			dstPath:  "",
 		},
 		{
 			name:     "encrypt with custom output",
-			password: "testpassword123",
+			password: "another correct horse battery staple",
 			dstPath:  filepath.Join(tmpDir, "custom.enc"),
 		},
 	}
@@ -159,7 +159,7 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 
 	encFile := srcDir + encExt
-	if err := EncryptFile(srcDir, "", "testpassword"); err != nil {
+	if err := EncryptFile(srcDir, "", testPassword); err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
 	}
 
@@ -172,7 +172,7 @@ func TestEncryptDecryptDirectory(t *testing.T) {
 	}
 
 	restoreDir := filepath.Join(tmpDir, "restored")
-	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+	if err := DecryptFile(encFile, restoreDir, testPassword); err != nil {
 		t.Fatalf("DecryptFile failed: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestEncryptDecryptEmptyDirectory(t *testing.T) {
 	}
 
 	encFile := emptyDir + encExt
-	if err := EncryptFile(emptyDir, "", "testpassword"); err != nil {
+	if err := EncryptFile(emptyDir, "", testPassword); err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
 	}
 	if _, err := os.Stat(encFile); err != nil {
@@ -221,7 +221,7 @@ func TestEncryptDecryptEmptyDirectory(t *testing.T) {
 	}
 
 	restoreDir := filepath.Join(tmpDir, "restored-empty")
-	if err := DecryptFile(encFile, restoreDir, "testpassword"); err != nil {
+	if err := DecryptFile(encFile, restoreDir, testPassword); err != nil {
 		t.Fatalf("DecryptFile failed: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestEncryptDirectoryWithSymlink(t *testing.T) {
 		t.Skipf("Symlinks are unavailable in this environment: %v", err)
 	}
 
-	err := EncryptFile(srcDir, "", "testpassword")
+	err := EncryptFile(srcDir, "", testPassword)
 	if err == nil {
 		t.Fatal("EncryptFile should fail when the directory contains a symlink")
 	}
@@ -273,7 +273,7 @@ func TestEncryptSymlinkedDirectoryPath(t *testing.T) {
 		t.Skipf("Symlinks are unavailable in this environment: %v", err)
 	}
 
-	err := EncryptFile(linkDir, "", "testpassword")
+	err := EncryptFile(linkDir, "", testPassword)
 	if err == nil {
 		t.Fatal("EncryptFile should fail when the source directory path is a symlink")
 	}
@@ -322,7 +322,7 @@ func TestDecryptWithWrongPassword(t *testing.T) {
 	}
 
 	encFile := filepath.Join(tmpDir, "test.enc")
-	if err := EncryptFile(srcFile, encFile, "correctpassword"); err != nil {
+	if err := EncryptFile(srcFile, encFile, testPassword); err != nil {
 		t.Fatalf("EncryptFile failed: %v", err)
 	}
 
@@ -377,17 +377,17 @@ func TestEncryptDecryptKeyBlob(t *testing.T) {
 		{
 			name:       "basic key encryption",
 			rawKey:     []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-			masterPass: "masterpass123",
+			masterPass: "master passphrase 123",
 		},
 		{
 			name:       "32-byte key",
 			rawKey:     make([]byte, 32),
-			masterPass: "anotherpass",
+			masterPass: "another master passphrase",
 		},
 		{
 			name:       "unicode master password",
 			rawKey:     []byte("some_key_data"),
-			masterPass: "pässwörd🔐",
+			masterPass: "pässwörd🔐-mit-Ümlauten",
 		},
 	}
 
@@ -418,7 +418,7 @@ func TestEncryptDecryptKeyBlob(t *testing.T) {
 // It ensures that the decryption process returns an error and does not produce the original key.
 func TestDecryptKeyBlobWithWrongPassword(t *testing.T) {
 	rawKey := []byte{1, 2, 3, 4, 5}
-	masterPass := "correctpass"
+	masterPass := testPassword
 
 	blob, err := EncryptKeyBlob(rawKey, masterPass)
 	if err != nil {
@@ -435,7 +435,7 @@ func TestDecryptKeyBlobWithWrongPassword(t *testing.T) {
 // This ensures that the encryption process uses random IVs and salts to enhance security.
 func TestEncryptDecryptKeyBlobRandomness(t *testing.T) {
 	rawKey := []byte{1, 2, 3}
-	masterPass := "pass"
+	masterPass := testPassword
 
 	blob1, err := EncryptKeyBlob(rawKey, masterPass)
 	if err != nil {
@@ -575,5 +575,153 @@ func TestDecryptAcceptsLegacyEmptyPassword(t *testing.T) {
 	}
 	if string(gotKey) != string(rawKey) {
 		t.Fatalf("DecryptKeyBlob = %q, want %q", gotKey, rawKey)
+	}
+}
+
+// testPassword meets the password policy; tests use it wherever a password protects
+// new data.
+const testPassword = "correct horse battery staple"
+
+// TestCheckPasswordPolicy is a regression test for SEC-001: passwords that protect new
+// data must be at least MinPasswordLength Unicode code points long and must not be a
+// single repeated character. There are no composition rules.
+func TestCheckPasswordPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		password string
+		want     error
+	}{
+		{name: "empty", password: "", want: ErrEmptyPassword},
+		{name: "short", password: "hunter2", want: ErrWeakPassword},
+		{name: "one character short", password: "abcdefghijklmn", want: ErrWeakPassword},
+		{name: "minimum length", password: "abcdefghijklmno"},
+		{name: "passphrase with spaces", password: testPassword},
+		{name: "lower-case letters only", password: "correcthorsebatterystaple"},
+		{name: "one repeated character", password: "aaaaaaaaaaaaaaaaaaaa", want: ErrWeakPassword},
+		{name: "only spaces", password: strings.Repeat(" ", 20), want: ErrWeakPassword},
+		// 14 code points but 28 bytes: length is counted in code points, not bytes.
+		{name: "multi-byte one character short", password: "äöüßéèêëïîôûçñ", want: ErrWeakPassword},
+		{name: "multi-byte minimum length", password: "äöüßéèêëïîôûçñå"},
+		{name: "repeated multi-byte character", password: strings.Repeat("🔐", 20), want: ErrWeakPassword},
+		// Bytes that aren't valid UTF-8 count as one character each and are compared as bytes.
+		{name: "distinct invalid UTF-8 bytes", password: "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e"},
+		{name: "repeated invalid UTF-8 byte", password: strings.Repeat("\xff", 15), want: ErrWeakPassword},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckPasswordPolicy(tt.password)
+			if tt.want == nil {
+				if err != nil {
+					t.Fatalf("CheckPasswordPolicy() error = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("CheckPasswordPolicy() error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	if err := CheckPasswordPolicy("hunter2"); err == nil || !strings.Contains(err.Error(), "at least 15 characters") {
+		t.Fatalf("short password error = %v, want it to state the minimum length", err)
+	}
+}
+
+// TestEncryptRejectsWeakPassword is a regression test for SEC-001: every operation that
+// protects new data enforces the password policy and writes nothing when it fails.
+func TestEncryptRejectsWeakPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	srcFile := filepath.Join(tmpDir, "secret.txt")
+	if err := os.WriteFile(srcFile, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	srcDir := filepath.Join(tmpDir, "secret-dir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "inner.txt"), []byte("inner"), 0o600); err != nil {
+		t.Fatalf("write inner file: %v", err)
+	}
+
+	for _, src := range []string{srcFile, srcDir} {
+		dst := src + encExt
+		if err := EncryptFile(src, dst, "hunter2"); !errors.Is(err, ErrWeakPassword) {
+			t.Errorf("EncryptFile(%s) error = %v, want ErrWeakPassword", src, err)
+		}
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Errorf("EncryptFile(%s) created %s despite the weak password", src, dst)
+		}
+	}
+
+	rawKey, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	if _, err := EncryptKeyBlob(rawKey, "hunter2"); !errors.Is(err, ErrWeakPassword) {
+		t.Errorf("EncryptKeyBlob error = %v, want ErrWeakPassword", err)
+	}
+
+	exportPath := filepath.Join(tmpDir, "key.ckey")
+	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}
+	if err := ExportKeyToFile(km, "hunter2", exportPath); !errors.Is(err, ErrWeakPassword) {
+		t.Errorf("ExportKeyToFile error = %v, want ErrWeakPassword", err)
+	}
+	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+		t.Errorf("ExportKeyToFile created %s despite the weak password", exportPath)
+	}
+}
+
+// TestDecryptAcceptsLegacyShortPassword checks that data protected with a password
+// shorter than the policy minimum, before the policy existed, stays readable: files,
+// stored key blobs and key exports.
+func TestDecryptAcceptsLegacyShortPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	const legacyPassword = "hunter2"
+
+	ciphertext, err := encryptBytes([]byte("legacy data"), legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	if err := os.WriteFile(encFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+	decFile := filepath.Join(tmpDir, "legacy.txt")
+	if err := DecryptFile(encFile, decFile, legacyPassword); err != nil {
+		t.Fatalf("DecryptFile(legacy file) error = %v", err)
+	}
+	if got, err := os.ReadFile(decFile); err != nil || string(got) != "legacy data" {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, "legacy data")
+	}
+
+	// A stored key blob created with a short master password.
+	rawKey := []byte("0123456789abcdef0123456789abcdef")
+	blobBytes, err := encryptBytes(rawKey, legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes(key): %v", err)
+	}
+	storedBlob := base64.StdEncoding.EncodeToString(blobBytes)
+	if got, err := DecryptKeyBlob(storedBlob, legacyPassword); err != nil || string(got) != string(rawKey) {
+		t.Fatalf("DecryptKeyBlob(legacy blob) = %q (err %v), want the raw key", got, err)
+	}
+
+	// A key export created with a short export password.
+	envelope := []byte(`{"version":1,"key_id":"0123456789abcdef","algorithm":"AES-256-GCM","created_at":1,"encrypted_blob":"` + storedBlob + `"}`)
+	exportBytes, err := encryptBytes(envelope, legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes(export): %v", err)
+	}
+	exportPath := filepath.Join(tmpDir, "legacy.ckey")
+	if err := os.WriteFile(exportPath, []byte(base64.StdEncoding.EncodeToString(exportBytes)), 0o600); err != nil {
+		t.Fatalf("write legacy export: %v", err)
+	}
+	km, err := ImportKeyFromFile(exportPath, legacyPassword)
+	if err != nil {
+		t.Fatalf("ImportKeyFromFile(legacy export) error = %v", err)
+	}
+	if km.KeyID != "0123456789abcdef" || km.EncryptedBlob != storedBlob {
+		t.Fatalf("imported key = %+v, want the legacy key", km)
 	}
 }

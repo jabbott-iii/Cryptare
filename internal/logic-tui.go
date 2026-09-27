@@ -62,13 +62,22 @@ const (
 	labelLevel    = "Compression level 1-9 (optional)"
 	labelKeyID    = "Key ID"
 	labelConfirm  = "Type DELETE to confirm"
+
+	labelConfirmPassword = "Confirm password"
 )
 
 //--------------------------------------------------form field sets------------------------------------------------------------------------------//
 
 func fieldsFor(action actionKind) []formField {
 	switch action {
-	case actionEncrypt, actionDecrypt:
+	case actionEncrypt:
+		return []formField{
+			{label: labelFilePath},
+			{label: labelOutput},
+			{label: labelPassword, password: true},
+			{label: labelConfirmPassword, password: true},
+		}
+	case actionDecrypt:
 		return []formField{
 			{label: labelFilePath},
 			{label: labelOutput},
@@ -89,12 +98,14 @@ func fieldsFor(action actionKind) []formField {
 	case actionKeysGenerate:
 		return []formField{
 			{label: labelPassword, password: true},
+			{label: labelConfirmPassword, password: true},
 		}
 	case actionKeysExport:
 		return []formField{
 			{label: labelKeyID},
 			{label: labelOutput},
 			{label: labelPassword, password: true},
+			{label: labelConfirmPassword, password: true},
 		}
 	case actionKeysImport:
 		return []formField{
@@ -535,6 +546,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 	levelStr := m.fieldValue(labelLevel)
 	format := m.fieldValue(labelFormat)
 	confirm := m.fieldValue(labelConfirm)
+	passwordAgain := m.fieldValue(labelConfirmPassword)
 
 	switch action {
 	case actionEncrypt:
@@ -544,6 +556,9 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				dst = file + encExt
 			}
 			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := checkTUINewPassword(password, passwordAgain); err != nil {
 				return actionResultMsg{err: err}
 			}
 			if err := EncryptFile(file, dst, password); err != nil {
@@ -562,7 +577,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				return actionResultMsg{err: err}
 			}
 			if err := DecryptFile(file, dst, password); err != nil {
-				return actionResultMsg{err: err}
+				return actionResultMsg{err: withTUILimitHint(err)}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decrypted: %s → %s", file, dst)}
 		}
@@ -603,13 +618,17 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				return actionResultMsg{err: err}
 			}
 			if err := DecompressFile(file, dst); err != nil {
-				return actionResultMsg{err: err}
+				return actionResultMsg{err: withTUILimitHint(err)}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decompressed: %s → %s", file, dst)}
 		}
 
 	case actionKeysGenerate:
 		return func() tea.Msg {
+			if err := checkTUINewPassword(password, passwordAgain); err != nil {
+				return actionResultMsg{err: err}
+			}
+
 			rawKey, err := GenerateKey()
 			if err != nil {
 				return actionResultMsg{err: err}
@@ -646,6 +665,9 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 				return actionResultMsg{err: fmt.Errorf("key not found: %w", err)}
 			}
 
+			if err := checkTUINewPassword(password, passwordAgain); err != nil {
+				return actionResultMsg{err: err}
+			}
 			if err := ExportKeyToFile(km, password, output); err != nil {
 				return actionResultMsg{err: err}
 			}
@@ -691,6 +713,27 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			return actionResultMsg{err: fmt.Errorf("unsupported action %d", action)}
 		}
 	}
+}
+
+// checkTUINewPassword checks a password that will protect new data against the
+// password policy, then checks that the confirmation field matches it.
+func checkTUINewPassword(password, confirmation string) error {
+	if err := CheckPasswordPolicy(password); err != nil {
+		return err
+	}
+	if confirmation != password {
+		return ErrPasswordMismatch
+	}
+	return nil
+}
+
+// withTUILimitHint explains an extraction-limit error: the TUI always uses the
+// default limits, and the CLI's flags change them.
+func withTUILimitHint(err error) error {
+	if errors.Is(err, ErrExtractLimit) {
+		return fmt.Errorf("%w; the TUI uses the default limits (use the CLI's --max-size or --max-entries to change them)", err)
+	}
+	return err
 }
 
 // checkTUIOutput applies CheckOutputPath for form actions. The TUI has no overwrite

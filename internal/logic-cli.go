@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,7 +82,7 @@ func newEncryptCmd() *cobra.Command {
 			}
 			if password == "" {
 				var err error
-				password, err = readPassword(cmd, "Enter password: ")
+				password, err = readNewPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
 				}
@@ -106,12 +108,17 @@ func newEncryptCmd() *cobra.Command {
 func newDecryptCmd() *cobra.Command {
 	var output, password string
 	var force bool
+	var limitFlags extractLimitFlags
 
 	cmd := &cobra.Command{
 		Use:   "decrypt [path]",
 		Short: "Decrypt an AES-256-GCM encrypted file or directory archive",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			limits, err := limitFlags.limits()
+			if err != nil {
+				return err
+			}
 			src := args[0]
 			dst := output
 			if dst == "" {
@@ -121,14 +128,13 @@ func newDecryptCmd() *cobra.Command {
 				return withForceHint(err)
 			}
 			if password == "" {
-				var err error
 				password, err = readPassword(cmd, "Enter password: ")
 				if err != nil {
 					return err
 				}
 			}
-			if err := DecryptFile(src, dst, password); err != nil {
-				return err
+			if err := DecryptFileWithLimits(src, dst, password, limits); err != nil {
+				return withLimitHint(err)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -140,6 +146,7 @@ func newDecryptCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file or directory path")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "decryption password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
+	limitFlags.register(cmd)
 	return cmd
 }
 
@@ -189,12 +196,17 @@ func newCompressCmd() *cobra.Command {
 func newDecompressCmd() *cobra.Command {
 	var output string
 	var force bool
+	var limitFlags extractLimitFlags
 
 	cmd := &cobra.Command{
 		Use:   "decompress [archive]",
 		Short: "Decompress gzip/tar.gz files or extract zip archives",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			limits, err := limitFlags.limits()
+			if err != nil {
+				return err
+			}
 			src := args[0]
 			dst := output
 			if dst == "" {
@@ -203,8 +215,8 @@ func newDecompressCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			if err := DecompressFile(src, dst); err != nil {
-				return err
+			if err := DecompressFileWithLimits(src, dst, limits); err != nil {
+				return withLimitHint(err)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decompressed: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -215,6 +227,7 @@ func newDecompressCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output path")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
+	limitFlags.register(cmd)
 	return cmd
 }
 
@@ -276,7 +289,7 @@ func newKeysGenerateCmd(db *Database) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if password == "" {
 				var err error
-				password, err = readPassword(cmd, "Enter master password to protect key: ")
+				password, err = readNewPassword(cmd, "Enter master password to protect key: ")
 				if err != nil {
 					return err
 				}
@@ -335,7 +348,7 @@ func newKeysExportCmd(db *Database) *cobra.Command {
 			}
 
 			if password == "" {
-				password, err = readPassword(cmd, "Enter master password: ")
+				password, err = readNewPassword(cmd, "Enter master password: ")
 				if err != nil {
 					return err
 				}
@@ -439,6 +452,71 @@ func newKeysDeleteCmd(db *Database) *cobra.Command {
 
 //-----------------------------------------helpers------------------------------------------------------//
 
+// extractLimitFlags holds the --max-size and --max-entries flags of the commands that
+// extract archives (decompress, and decrypt for encrypted directories).
+type extractLimitFlags struct {
+	maxSize    string
+	maxEntries int
+}
+
+func (f *extractLimitFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.maxSize, "max-size", formatSize(DefaultMaxExtractBytes),
+		"stop extracting once the output passes this size, e.g. 500MB or 20GiB (0 = no limit)")
+	cmd.Flags().IntVar(&f.maxEntries, "max-entries", DefaultMaxExtractEntries,
+		"stop extracting an archive with more entries than this (0 = no limit)")
+}
+
+// limits validates the flag values and returns them as ExtractLimits.
+func (f *extractLimitFlags) limits() (ExtractLimits, error) {
+	size, err := parseSize(f.maxSize)
+	if err != nil {
+		return ExtractLimits{}, fmt.Errorf("invalid --max-size: %w", err)
+	}
+	if f.maxEntries < 0 {
+		return ExtractLimits{}, fmt.Errorf("invalid --max-entries %d: use 0 or more", f.maxEntries)
+	}
+	return ExtractLimits{MaxBytes: size, MaxEntries: f.maxEntries}, nil
+}
+
+// parseSize parses a byte count such as "1024", "500MB" or "10 GiB". The number must
+// be whole. Units are B, KB, MB, GB and TB (powers of 1000) or KiB, MiB, GiB and TiB
+// (powers of 1024), in any letter case.
+func parseSize(s string) (int64, error) {
+	t := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
+	digits := 0
+	for digits < len(t) && t[digits] >= '0' && t[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 {
+		return 0, fmt.Errorf("size %q must start with a whole number", s)
+	}
+	n, err := strconv.ParseInt(t[:digits], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("size %q is too large", s)
+	}
+	units := map[string]int64{
+		"": 1, "b": 1,
+		"kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+		"kib": 1 << 10, "mib": 1 << 20, "gib": 1 << 30, "tib": 1 << 40,
+	}
+	unit, ok := units[t[digits:]]
+	if !ok {
+		return 0, fmt.Errorf("size %q has an unknown unit (use B, KB, MB, GB, TB, KiB, MiB, GiB or TiB)", s)
+	}
+	if n > math.MaxInt64/unit {
+		return 0, fmt.Errorf("size %q is too large", s)
+	}
+	return n * unit, nil
+}
+
+// withLimitHint tells CLI users how to change the extraction limits.
+func withLimitHint(err error) error {
+	if errors.Is(err, ErrExtractLimit) {
+		return fmt.Errorf("%w (use --max-size or --max-entries to change the limit; 0 means no limit)", err)
+	}
+	return err
+}
+
 // withForceHint tells CLI users how to overwrite an existing output on purpose.
 func withForceHint(err error) error {
 	if errors.Is(err, ErrOutputExists) {
@@ -455,8 +533,7 @@ func readPassword(cmd *cobra.Command, prompt string) (string, error) {
 		return "", fmt.Errorf("write password prompt: %w", err)
 	}
 
-	in := cmd.InOrStdin()
-	if f, ok := in.(*os.File); ok && term.IsTerminal(f.Fd()) {
+	if f, ok := terminalInput(cmd); ok {
 		pwd, err := readTerminalPassword(f.Fd(), cmd.ErrOrStderr())
 		// Enter isn't echoed either, so end the prompt line before any further output.
 		if _, werr := fmt.Fprintln(cmd.ErrOrStderr()); err == nil && werr != nil {
@@ -468,11 +545,55 @@ func readPassword(cmd *cobra.Command, prompt string) (string, error) {
 		return string(pwd), nil
 	}
 
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// readNewPassword prompts for a password that will protect new data. The password
+// must meet the password policy (CheckPasswordPolicy). When it is typed at a terminal
+// it is asked for a second time, so a typo can't make the data unrecoverable; piped
+// input is read once, so scripts keep working.
+func readNewPassword(cmd *cobra.Command, prompt string) (string, error) {
+	_, interactive := terminalInput(cmd)
+	read := func(p string) (string, error) { return readPassword(cmd, p) }
+	return readNewPasswordWith(read, prompt, interactive)
+}
+
+// readNewPasswordWith implements readNewPassword. read shows a prompt and returns
+// the line typed, and confirm says whether to ask for the password a second time.
+// The policy is checked first, so a rejected password isn't typed twice.
+func readNewPasswordWith(read func(prompt string) (string, error), prompt string, confirm bool) (string, error) {
+	password, err := read(prompt)
+	if err != nil {
+		return "", err
+	}
+	if err := CheckPasswordPolicy(password); err != nil {
+		return "", err
+	}
+	if !confirm {
+		return password, nil
+	}
+
+	again, err := read("Confirm password: ")
+	if err != nil {
+		return "", err
+	}
+	if again != password {
+		return "", ErrPasswordMismatch
+	}
+	return password, nil
+}
+
+// terminalInput returns the command's input file when it is a terminal.
+func terminalInput(cmd *cobra.Command) (*os.File, bool) {
+	f, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(f.Fd()) {
+		return nil, false
+	}
+	return f, true
 }
 
 // readTerminalPassword reads one line from the terminal fd without echo. Ctrl+C

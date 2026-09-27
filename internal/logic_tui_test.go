@@ -18,6 +18,7 @@ package internal
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,7 +222,10 @@ func TestDashboardVimNormalModeLSubmitsLastField(t *testing.T) {
 	m = next.(DashboardModel)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
-	m = typeString(m, "hunter2")
+	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, testPassword)
 
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(DashboardModel)
@@ -295,7 +299,10 @@ func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 	m = next.(DashboardModel)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // leave output empty, move to password
 	m = next.(DashboardModel)
-	m = typeString(m, "hunter2")
+	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password confirmation
+	m = next.(DashboardModel)
+	m = typeString(m, testPassword)
 
 	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	m = next.(DashboardModel)
@@ -332,7 +339,7 @@ func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 	m = typeString(m, decFile)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password
 	m = next.(DashboardModel)
-	m = typeString(m, "hunter2")
+	m = typeString(m, testPassword)
 
 	next, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	m = next.(DashboardModel)
@@ -382,7 +389,10 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	m = next.(DashboardModel)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
-	m = typeString(m, "hunter2")
+	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(DashboardModel)
+	m = typeString(m, testPassword)
 
 	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
@@ -412,7 +422,7 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	m = typeString(m, restoreDir)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
-	m = typeString(m, "hunter2")
+	m = typeString(m, testPassword)
 
 	_, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -530,7 +540,10 @@ func TestDashboardKeysGenerateAndExport(t *testing.T) {
 
 	m := NewDashboardModel(db)
 	m.startForm(actionKeysGenerate, screenKeys)
-	m = typeString(m, "masterpass")
+	m = typeString(m, testPassword)
+	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password confirmation
+	m = next.(DashboardModel)
+	m = typeString(m, testPassword)
 
 	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
@@ -556,13 +569,16 @@ func TestDashboardKeysGenerateAndExport(t *testing.T) {
 	// Export the generated key.
 	m.startForm(actionKeysExport, screenKeys)
 	m = typeString(m, keys[0].KeyID)
-	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to output
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to output
 	m = next.(DashboardModel)
 	outFile := filepath.Join(tmpDir, "exported.ckey")
 	m = typeString(m, outFile)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password
 	m = next.(DashboardModel)
-	m = typeString(m, "masterpass")
+	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password confirmation
+	m = next.(DashboardModel)
+	m = typeString(m, testPassword)
 
 	_, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	if cmd == nil {
@@ -805,7 +821,7 @@ func TestDashboardRejectsEmptyPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	blob, err := EncryptKeyBlob(rawKey, "masterpass")
+	blob, err := EncryptKeyBlob(rawKey, testPassword)
 	if err != nil {
 		t.Fatalf("EncryptKeyBlob: %v", err)
 	}
@@ -845,7 +861,9 @@ func TestDashboardRefusesExistingOutput(t *testing.T) {
 	next, _ := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // output
 	m = typeString(next.(DashboardModel), taken)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // password
-	m = typeString(next.(DashboardModel), "pw")
+	m = typeString(next.(DashboardModel), testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // password confirmation
+	m = typeString(next.(DashboardModel), testPassword)
 	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a command for the encrypt submission")
@@ -860,5 +878,129 @@ func TestDashboardRefusesExistingOutput(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(taken); string(got) != "existing" {
 		t.Fatalf("existing output was modified to %q", got)
+	}
+}
+
+// submitForm types values into the form's fields in order, pressing Enter after each
+// (fields without a value are left blank), and returns the result of the action the
+// form submits.
+func submitForm(t *testing.T, m DashboardModel, values ...string) actionResultMsg {
+	t.Helper()
+	for i := 0; ; i++ {
+		if i < len(values) {
+			m = typeString(m, values[i])
+		}
+		next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
+		m = next.(DashboardModel)
+		if cmd != nil {
+			result, ok := cmd().(actionResultMsg)
+			if !ok {
+				t.Fatal("expected actionResultMsg")
+			}
+			return result
+		}
+		if i > len(m.fields) {
+			t.Fatal("form never submitted")
+		}
+	}
+}
+
+// TestDashboardNewPasswordFormsHaveConfirmation checks that the forms that set a new
+// password ask for it twice, and the forms that use an existing password don't.
+func TestDashboardNewPasswordFormsHaveConfirmation(t *testing.T) {
+	hasConfirm := func(action actionKind) bool {
+		for _, f := range fieldsFor(action) {
+			if f.label == labelConfirmPassword {
+				if !f.password {
+					t.Errorf("action %d: confirmation field is not masked", action)
+				}
+				return true
+			}
+		}
+		return false
+	}
+	for _, action := range []actionKind{actionEncrypt, actionKeysGenerate, actionKeysExport} {
+		if !hasConfirm(action) {
+			t.Errorf("action %d: form has no password confirmation field", action)
+		}
+	}
+	for _, action := range []actionKind{actionDecrypt, actionKeysImport} {
+		if hasConfirm(action) {
+			t.Errorf("action %d: form asks to confirm an existing password", action)
+		}
+	}
+}
+
+// TestDashboardRejectsWeakOrMismatchedPassword is a regression test for SEC-001 and
+// SEC-002 in the TUI: encrypt, keys generate and keys export refuse a password that
+// fails the policy or doesn't match its confirmation, and change nothing.
+func TestDashboardRejectsWeakOrMismatchedPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "secret.txt")
+	if err := os.WriteFile(src, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	db := newTestDatabase(t, false)
+	blob, err := EncryptKeyBlob(make([]byte, keyLen), testPassword)
+	if err != nil {
+		t.Fatalf("EncryptKeyBlob: %v", err)
+	}
+	const keyID = "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: blob, CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	exportPath := filepath.Join(tmpDir, "key.ckey")
+
+	const other = "correct horse battery stapler"
+	cases := []struct {
+		name   string
+		action actionKind
+		values []string
+		want   error
+	}{
+		{"encrypt weak", actionEncrypt, []string{src, "", "hunter2", "hunter2"}, ErrWeakPassword},
+		{"encrypt mismatch", actionEncrypt, []string{src, "", testPassword, other}, ErrPasswordMismatch},
+		{"encrypt confirmation blank", actionEncrypt, []string{src, "", testPassword}, ErrPasswordMismatch},
+		{"keys generate weak", actionKeysGenerate, []string{"hunter2", "hunter2"}, ErrWeakPassword},
+		{"keys generate mismatch", actionKeysGenerate, []string{testPassword, other}, ErrPasswordMismatch},
+		{"keys export weak", actionKeysExport, []string{keyID, exportPath, "hunter2", "hunter2"}, ErrWeakPassword},
+		{"keys export mismatch", actionKeysExport, []string{keyID, exportPath, testPassword, other}, ErrPasswordMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewDashboardModel(db)
+			m.startForm(tc.action, screenMain)
+			result := submitForm(t, m, tc.values...)
+			if !errors.Is(result.err, tc.want) {
+				t.Fatalf("error = %v, want %v", result.err, tc.want)
+			}
+			next, _ := m.Update(result)
+			if got := next.(DashboardModel); !got.isError {
+				t.Fatalf("status = %q, want an error status", got.status)
+			}
+			if _, err := os.Stat(src + encExt); !os.IsNotExist(err) {
+				t.Fatalf("encrypted file created (stat err: %v)", err)
+			}
+			if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+				t.Fatalf("export file created (stat err: %v)", err)
+			}
+			if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+				t.Fatalf("stored keys = %d (err %v), want only the fixture key", len(keys), err)
+			}
+		})
+	}
+}
+
+// TestTUILimitHint checks that an extraction-limit error in the TUI explains that the
+// TUI uses the default limits and names the CLI flags that change them.
+func TestTUILimitHint(t *testing.T) {
+	limitErr := fmt.Errorf("%w: the output is larger than 10 GiB", ErrExtractLimit)
+	got := withTUILimitHint(limitErr)
+	if !errors.Is(got, ErrExtractLimit) || !strings.Contains(got.Error(), "--max-size") {
+		t.Fatalf("withTUILimitHint() = %v, want ErrExtractLimit with a hint about the CLI flags", got)
+	}
+	other := errors.New("other failure")
+	if got := withTUILimitHint(other); got != other {
+		t.Fatalf("withTUILimitHint(other) = %v, want it unchanged", got)
 	}
 }

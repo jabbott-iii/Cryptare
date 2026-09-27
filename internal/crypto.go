@@ -30,7 +30,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -44,10 +46,25 @@ const (
 	directoryArtifactMagicV1 = "CRYPTARE-DIR-ENC\x00"
 )
 
-// ErrEmptyPassword is returned when an encryption operation is given an empty
-// password. Decryption still accepts one so that files, archives and key blobs
-// created before this check was added remain readable.
-var ErrEmptyPassword = errors.New("password must not be empty")
+// MinPasswordLength is the minimum length, in Unicode code points, of a password that
+// protects new data. It follows NIST SP 800-63B-4 section 3.1.1.2, which requires at
+// least 15 characters for a password used on its own (single-factor).
+const MinPasswordLength = 15
+
+var (
+	// ErrEmptyPassword is returned when an encryption operation is given an empty
+	// password. Decryption still accepts one so that files, archives and key blobs
+	// created before this check was added remain readable.
+	ErrEmptyPassword = errors.New("password must not be empty")
+
+	// ErrWeakPassword is returned when a password that would protect new data fails
+	// the password policy (see CheckPasswordPolicy).
+	ErrWeakPassword = errors.New("password is too weak")
+
+	// ErrPasswordMismatch is returned by the CLI and TUI when a new password and its
+	// confirmation differ.
+	ErrPasswordMismatch = errors.New("passwords do not match")
+)
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
@@ -56,12 +73,36 @@ func deriveKey(password string, salt []byte) []byte {
 	return pbkdf2.Key([]byte(password), salt, pbkdf2Iter, keyLen, sha256.New)
 }
 
-// EncryptFile encrypts src with AES-256-GCM using password, writing to dst.
-// If dst is empty, the output path is src + ".enc". An empty password is
-// rejected with ErrEmptyPassword.
-func EncryptFile(src, dst, password string) error {
+// CheckPasswordPolicy reports whether password may protect new data: encrypted files
+// and directories, stored keys and key exports. It returns ErrEmptyPassword for an
+// empty password and ErrWeakPassword for one that is shorter than MinPasswordLength
+// Unicode code points or is a single character repeated. There are no composition
+// rules and no maximum length.
+//
+// Passwords used to decrypt or import are not checked, so data protected before the
+// policy existed stays readable.
+func CheckPasswordPolicy(password string) error {
 	if password == "" {
 		return ErrEmptyPassword
+	}
+	if utf8.RuneCountInString(password) < MinPasswordLength {
+		return fmt.Errorf("%w: use at least %d characters", ErrWeakPassword, MinPasswordLength)
+	}
+	// Compare bytes so that invalid UTF-8 (which decodes to RuneError) isn't mistaken
+	// for a repeated character.
+	_, size := utf8.DecodeRuneInString(password)
+	if len(password)%size == 0 && strings.Repeat(password[:size], len(password)/size) == password {
+		return fmt.Errorf("%w: it is one character repeated", ErrWeakPassword)
+	}
+	return nil
+}
+
+// EncryptFile encrypts src with AES-256-GCM using password, writing to dst.
+// If dst is empty, the output path is src + ".enc". The password must meet the
+// password policy (CheckPasswordPolicy).
+func EncryptFile(src, dst, password string) error {
+	if err := CheckPasswordPolicy(password); err != nil {
+		return err
 	}
 
 	info, err := os.Lstat(src)
@@ -106,7 +147,16 @@ func EncryptFile(src, dst, password string) error {
 
 // DecryptFile decrypts an AES-256-GCM encrypted file at src using password,
 // writing plaintext to dst.  If dst is empty, the ".enc" suffix is stripped.
+// An encrypted directory is restored under DefaultExtractLimits.
 func DecryptFile(src, dst, password string) error {
+	return DecryptFileWithLimits(src, dst, password, DefaultExtractLimits())
+}
+
+// DecryptFileWithLimits is DecryptFile with explicit limits for restoring an
+// encrypted directory, which is extracted like an archive (see
+// DecompressFileWithLimits). Single files are not affected: their plaintext is
+// never larger than the encrypted file.
+func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Errorf("read source file: %w", err)
@@ -129,7 +179,7 @@ func DecryptFile(src, dst, password string) error {
 		if err != nil {
 			return err
 		}
-		return restoreDirectoryArchive(archive, dst)
+		return restoreDirectoryArchive(archive, src, dst, limits)
 	}
 
 	plaintext, err := decryptBytes(data, password)
@@ -275,18 +325,19 @@ func createDirectoryArchiveTempFile(src string) (archivePath string, cleanup fun
 	return archivePath, archiveCleanup, nil
 }
 
-func restoreDirectoryArchive(archive []byte, dst string) (err error) {
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("create output directory: %w", err)
-	}
-
+// restoreDirectoryArchive extracts the decrypted tar.gz of an encrypted directory
+// (read from src) into dst, through extractToDir and within limits.
+func restoreDirectoryArchive(archive []byte, src, dst string, limits ExtractLimits) (err error) {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return fmt.Errorf("read decrypted directory archive: %w", err)
 	}
 	defer closeWithError(&err, gz, "close directory archive reader")
 
-	return extractTarGz(gz, dst)
+	budget := &extractBudget{limits: limits}
+	return extractToDir(src, dst, func(dir string) error {
+		return extractTarGz(gz, dir, budget)
+	})
 }
 
 //--------------------------------------------------key management---------------------------------------------------------------------------------------//
@@ -301,10 +352,10 @@ func GenerateKey() ([]byte, error) {
 }
 
 // EncryptKeyBlob encrypts rawKey with masterPassword and returns a base64 blob.
-// An empty masterPassword is rejected with ErrEmptyPassword.
+// masterPassword must meet the password policy (CheckPasswordPolicy).
 func EncryptKeyBlob(rawKey []byte, masterPassword string) (string, error) {
-	if masterPassword == "" {
-		return "", ErrEmptyPassword
+	if err := CheckPasswordPolicy(masterPassword); err != nil {
+		return "", err
 	}
 
 	salt := make([]byte, saltLen)
@@ -383,7 +434,8 @@ type KeyExport struct {
 	EncryptedBlob string `json:"encrypted_blob"` // base64 AES-256-GCM ciphertext
 }
 
-// ExportKeyToFile writes an encrypted key export to the path using masterPassword.
+// ExportKeyToFile writes an encrypted key export to the path using masterPassword,
+// which must meet the password policy (CheckPasswordPolicy).
 func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
 	export := KeyExport{
 		Version:       1,

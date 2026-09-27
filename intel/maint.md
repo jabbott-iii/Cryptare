@@ -37,7 +37,7 @@ Rules:
    CLI's key generate/export/import flows. Until those flows move into shared core
    functions (`intel/plan.md`), a change to one interface must be mirrored in the other
    and tested in both.
-3. **Data-protecting validation goes in core.** Checks such as non-empty passwords,
+3. **Data-protecting validation goes in core.** Checks such as the password policy,
    overwrite protection and extraction limits belong in the core layer so both
    interfaces get them. For example, `ErrEmptyPassword` is enforced in `crypto.go`, not
    in the CLI or TUI (SEC-001: the TUI once accepted empty passwords because this rule
@@ -91,7 +91,25 @@ These are observed in the codebase and required for new code:
   - a killed process (power loss, `kill -9`) can leave a hidden `.<name>.*.tmp` file
     (mode 0600) behind.
 
-  Archive extraction is not atomic yet (plan 2.2).
+  Archive extraction is atomic too: `extractToDir` extracts into a new hidden
+  `.<name>.*.tmp` folder (mode 0700) and renames it into place only on success. An
+  existing output (allowed with `--force`) is moved aside, replaced, then removed,
+  so it is replaced as a whole rather than merged into. Replacing a folder that holds
+  the archive being extracted is refused (`ErrInputInsideOutput`).
+- **Extraction limits.** Every decompression or extraction runs under
+  `ExtractLimits` (default 10 GiB of output and 100,000 entries, SEC-007) and copies
+  through `extractBudget`, never a bare `io.Copy` from a decompressor. New code that
+  extracts or decompresses must do the same. The CLI exposes the limits as
+  `--max-size` and `--max-entries`; the TUI uses the defaults.
+- **Password policy.** Any operation that protects new data with a password
+  (`EncryptFile`, `EncryptKeyBlob`, and so `ExportKeyToFile`) calls
+  `CheckPasswordPolicy`: at least `MinPasswordLength` (15) Unicode code points, not
+  one repeated character, and no composition rules or maximum length. Operations that
+  read existing data (decrypt, `DecryptKeyBlob`, import) must not check it, so older
+  files and keys stay readable. Interfaces also confirm a typed new password: the CLI
+  with `readNewPassword` (terminal input only) and the TUI with a "Confirm password"
+  field and `checkTUINewPassword`. New commands or forms that set a password must do
+  the same.
 - Symlinks and non-regular files are rejected when reading directory trees, and path
   traversal (`..`) is rejected when extracting. Keep both behaviours.
 - Code is grouped with the existing `//----- section -----//` banner comments.

@@ -3,7 +3,7 @@
 Active implementation plans and follow-on work. IDs refer to
 [`cybersec.md`](cybersec.md) (SEC-…) and [`notes.md`](notes.md) (BUG-…, Q-…).
 
-Last updated: 2026-09-26
+Last updated: 2026-09-27
 
 Status: **In progress.**
 - **Released:**
@@ -14,14 +14,19 @@ Status: **In progress.**
 - **Owner decisions (2026-09-26):**
   - 0.2 and 0.3 are done.
   - Stored keys should be usable (Q-002 = yes), so 3.4 is approved.
-  - The password policy (Q-004) is still open.
-- **Done, not yet committed:** 2.11 (atomic writes for single-file outputs,
-  2026-09-26).
+  - The password policy (Q-004) was still open. On 2026-09-27 the owner asked for a
+    default policy (0.5).
+- **Committed:** 2.11, atomic writes for single-file outputs (`b4cd66f`, 2026-09-26).
+- **Done, not yet committed (2026-09-27):**
+  - 0.5, the default password policy, with the workflow patch for the smoke-test
+    passwords (W9), which the owner has applied. Commit them together, or CI fails;
+  - 2.1, extraction limits, with the atomic-extraction part of 2.2. The owner approved
+    the defaults and design.
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** the rest of Phase 2 (2.1–2.10), then Phase 3. Usable stored keys (3.4)
-  depend on the versioned file format (3.1).
+- **Next up:** the rest of 2.2 (`os.Root` extraction and mode masking), 2.3–2.10, then
+  Phase 3. Usable stored keys (3.4) depend on the versioned file format (3.1).
 
 ## Principles
 
@@ -41,7 +46,7 @@ Status: **In progress.**
 | 0.2 | Stop using the master password that was used with the committed DB; discard that key | SEC-003 | Owner confirms | **Done** (2026-09-26): the owner discarded the key. |
 | 0.3 | Mark the v1.0.0 release as broken, or pull its assets | BUG-001, Q-007 | Release page updated | **Done** (2026-09-26): v1.1.0 is released and verified. The owner decided to leave v1.0.0 as it is. |
 | 0.4 | Decide the CGO/release strategy | Q-001 | Decision recorded in `notes.md` | **Done:** a native CGO build per OS, verified by the v1.0.1 release (2026-09-24). |
-| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | **Partly done** (2026-09-26): stored keys should be usable (Q-002 = yes). The password policy (Q-004) is still open. |
+| 0.5 | Decide the password policy and whether stored keys should be usable | Q-002, Q-004 | Decisions recorded | **Done** (2026-09-27, uncommitted): stored keys should be usable (Q-002 = yes, 2026-09-26). For Q-004 the owner asked for a default policy, now implemented: new passwords need at least 15 characters (Unicode code points) and must not be one repeated character, with no composition rules; typed passwords are confirmed; decrypt and import accept any password. See SEC-001 and SEC-002. |
 
 ## Completed — CI/CD rework (v1.0.1, 2026-09-24)
 
@@ -76,6 +81,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | W6 | v1.0.1 ships 5 assets, with no Windows arm64 build. Remove `cryptare_windows_arm64.zip` from the README release table (part of 4.9), or restore the target on a Windows Arm runner. | `README.md` or `cd.yml` |
 | W7 | darwin/amd64 is cross-compiled and not smoke-tested by CD. Its build info is correct (x86-64 Mach-O, CGO on, v1.0.1), but it hasn't been run on an Intel Mac or under Rosetta. | `cd.yml` |
 | W8 | Check the Codecov dashboard: with `fail_ci_if_error: false`, a missing `CODECOV_TOKEN` wouldn't fail CI. | `ci.yml`, repo settings |
+| W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner 2026-09-27** (uncommitted); commit it with the policy change. | `ci.yml`, `cd.yml`, `docker.yml` |
 
 ## Phase 1 — Correctness and critical security (small PRs)
 
@@ -83,7 +89,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 |---|---|---|---|
 | 1.1 | Rewrite `readPassword`: read a full line, no echo on a TTY (`charmbracelet/x/term`) **Done 2026-09-24** (`ed46150`), with owner approval for the `go.mod` change. | SEC-002 | A multi-word passphrase round-trips via the prompt; a non-TTY test passes |
 | 1.1a | Restore the terminal when Ctrl+C interrupts the hidden password prompt. This needs a signal handler and a short-lived goroutine, which `golang.md` allows only when required. **Done 2026-09-24** (`ed46150`). | BUG-012 | In a pseudo-terminal, echo is on again after Ctrl+C at the prompt; exit status 130 |
-| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24** (`ed46150`). The minimum-length policy is still open (Q-004). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
+| 1.2 | Reject empty passwords in the core encrypt, key-blob and export paths; show the error in CLI and TUI **Done 2026-09-24** (`ed46150`). The minimum-length policy and confirmation followed on 2026-09-27 (0.5). | SEC-001 | Core, CLI and TUI tests; legacy decrypt still works |
 | 1.3 | Replace the `panic("unhandled default case")` branches with no-ops or errors. **Done 2026-09-24** (`18ea97a`). | BUG-002 | Tests send Left, Right, Delete, Home, End and Ctrl+U to forms without panicking |
 | 1.4 | Fix release builds with a native CGO build per OS, and smoke-run each built binary in CD and CI. **Done** in v1.0.1 (2026-09-24). | BUG-001, Q-001 | CI runs each built binary; a new release tag produces working assets |
 | 1.5 | Guard against `src == dst` and refuse to overwrite existing outputs unless forced (new flag) **Done 2026-09-24** (`c47a94f`, v1.1.0). Also refuses compressing a folder into an archive inside itself (BUG-013). Atomic writes, the rest of BUG-004, moved to 2.11. | BUG-003, BUG-004 | Tests for the same-path and existing-output cases |
@@ -92,8 +98,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs |
 |---|---|---|
-| 2.1 | Extraction size and entry limits, with clean-up on abort | SEC-007 |
-| 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions | SEC-008 |
+| 2.1 | Extraction size and entry limits, with clean-up on abort. **Done 2026-09-27 (uncommitted).** Owner decisions: defaults of 10 GiB of output and 100,000 entries per run; `--max-size` and `--max-entries` on `decompress` and `decrypt` (0 = no limit); the TUI uses the defaults; the limits also apply to encrypted folders; clean-up through a temporary folder (below). | SEC-007 |
+| 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions. **Atomic extraction done 2026-09-27 (uncommitted, with 2.1):** `extractToDir` extracts into a new hidden 0700 folder and renames it into place, replacing an existing output with `--force` instead of merging into it; a single-file zip goes through a temporary file (0600). This also removes the planted-symlink risk. **Remaining:** `os.Root` as defence in depth, and masking the archive's file and folder modes. | SEC-008 |
 | 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext) | SEC-006 |
 | 2.4 | Enable SQLite `secure_delete`; align README wording | SEC-009 |
 | 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600 | SEC-010, BUG-005 |
@@ -102,7 +108,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 2.8 | Root-scoped opens when archiving | SEC-014 |
 | 2.9 | Fix case-insensitive extension handling and the export filename reporting | BUG-007, BUG-006 |
 | 2.10 | Gate TUI actions on `busy` | BUG-008 |
-| 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output. **Done 2026-09-26 (uncommitted)** for single-file outputs (encrypt, decrypt, compress, gzip decompress, key export). Archive extraction moves to 2.2. | BUG-004 |
+| 2.11 | Atomic writes: write to a temporary file in the destination folder, then rename, so a failure leaves no partial output. **Done 2026-09-26 (`b4cd66f`)** for single-file outputs (encrypt, decrypt, compress, gzip decompress, key export). Archive extraction moves to 2.2. | BUG-004 |
 | 2.12 | Optional: an overwrite choice in the TUI forms, which refuse existing outputs today | BUG-004 |
 
 ## Phase 3 — Formats and architecture

@@ -20,6 +20,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -507,7 +508,7 @@ func TestOperationsRefuseToOverwriteTheirInput(t *testing.T) {
 	if err := CompressFile(plain, gz, -1); err != nil {
 		t.Fatalf("prepare gzip: %v", err)
 	}
-	if err := EncryptFile(plain, enc, "pw"); err != nil {
+	if err := EncryptFile(plain, enc, testPassword); err != nil {
 		t.Fatalf("prepare encrypted file: %v", err)
 	}
 	if err := CompressFileWithFormat(plain, zipFile, "zip", -1); err != nil {
@@ -523,8 +524,8 @@ func TestOperationsRefuseToOverwriteTheirInput(t *testing.T) {
 		{"compress zip", plain, func(p string) error { return CompressFileWithFormat(p, p, "zip", -1) }},
 		{"decompress gzip", gz, func(p string) error { return DecompressFile(p, p) }},
 		{"decompress zip", zipFile, func(p string) error { return DecompressFile(p, p) }},
-		{"encrypt", plain, func(p string) error { return EncryptFile(p, p, "pw") }},
-		{"decrypt", enc, func(p string) error { return DecryptFile(p, p, "pw") }},
+		{"encrypt", plain, func(p string) error { return EncryptFile(p, p, testPassword) }},
+		{"decrypt", enc, func(p string) error { return DecryptFile(p, p, testPassword) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -717,5 +718,338 @@ func TestWriteFileAtomic(t *testing.T) {
 
 	if err := writeFileAtomic(filepath.Join(tmpDir, "missing-dir", "out.bin"), []byte("x")); err == nil {
 		t.Fatal("writeFileAtomic() into a missing folder succeeded, want an error")
+	}
+}
+
+// bombFixtures builds small, highly compressible archives in dir that expand to
+// payload bytes of zeros: a .gz, a .tar.gz and a .zip of a folder, and a single-file
+// .zip. It returns their paths keyed by kind, plus the output path to use for each.
+func bombFixtures(t *testing.T, dir string, payload int) map[string][2]string {
+	t.Helper()
+	zeros := make([]byte, payload)
+	src := filepath.Join(dir, "zeros.bin")
+	if err := os.WriteFile(src, zeros, 0o600); err != nil {
+		t.Fatalf("write zeros: %v", err)
+	}
+	tree := filepath.Join(dir, "tree")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "zeros.bin"), zeros, 0o600); err != nil {
+		t.Fatalf("write tree file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
+		t.Fatalf("create output folder: %v", err)
+	}
+
+	fixtures := map[string][2]string{
+		"gzip":            {filepath.Join(dir, "zeros.bin.gz"), filepath.Join(dir, "out", "zeros.bin")},
+		"tar.gz":          {filepath.Join(dir, "tree.tar.gz"), filepath.Join(dir, "out", "tree")},
+		"zip":             {filepath.Join(dir, "tree.zip"), filepath.Join(dir, "out", "tree")},
+		"single-file zip": {filepath.Join(dir, "zeros.zip"), filepath.Join(dir, "out", "zeros.bin")},
+	}
+	if err := CompressFile(src, fixtures["gzip"][0], -1); err != nil {
+		t.Fatalf("prepare gzip: %v", err)
+	}
+	if err := CompressFileWithFormat(tree, fixtures["tar.gz"][0], "", -1); err != nil {
+		t.Fatalf("prepare tar.gz: %v", err)
+	}
+	if err := CompressFileWithFormat(tree, fixtures["zip"][0], "zip", -1); err != nil {
+		t.Fatalf("prepare zip: %v", err)
+	}
+	if err := CompressFileWithFormat(src, fixtures["single-file zip"][0], "zip", -1); err != nil {
+		t.Fatalf("prepare single-file zip: %v", err)
+	}
+	return fixtures
+}
+
+// TestDecompressEnforcesSizeLimit is a regression test for SEC-007: decompression and
+// extraction stop once the output passes ExtractLimits.MaxBytes, report
+// ErrExtractLimit and leave no output behind. Output up to the limit is allowed.
+func TestDecompressEnforcesSizeLimit(t *testing.T) {
+	const payload = 1 << 20 // 1 MiB of zeros compresses to about 1 KiB
+	for kind := range bombFixtures(t, t.TempDir(), 1) {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			f := bombFixtures(t, dir, payload)[kind]
+			archive, out := f[0], f[1]
+
+			err := DecompressFileWithLimits(archive, out, ExtractLimits{MaxBytes: 64 << 10})
+			if !errors.Is(err, ErrExtractLimit) {
+				t.Fatalf("error = %v, want ErrExtractLimit", err)
+			}
+			if _, err := os.Stat(out); !os.IsNotExist(err) {
+				t.Fatalf("output left behind after the limit was hit (stat err: %v)", err)
+			}
+			if left := tempLeftovers(t, filepath.Dir(out)); len(left) != 0 {
+				t.Fatalf("temporary files left behind: %v", left)
+			}
+
+			if err := DecompressFileWithLimits(archive, out, ExtractLimits{MaxBytes: payload}); err != nil {
+				t.Fatalf("output exactly at the limit: %v", err)
+			}
+		})
+	}
+}
+
+// TestExtractEnforcesEntryLimit is a regression test for SEC-007: extraction stops when
+// an archive has more entries than ExtractLimits.MaxEntries. Zero means no limit.
+func TestExtractEnforcesEntryLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	tree := filepath.Join(tmpDir, "many")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	for i := range 20 {
+		if err := os.WriteFile(filepath.Join(tree, fmt.Sprintf("f%02d.txt", i)), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	for _, format := range []string{"", "zip"} {
+		name := "tar.gz"
+		archive := filepath.Join(tmpDir, "many.tar.gz")
+		if format == "zip" {
+			name, archive = "zip", filepath.Join(tmpDir, "many.zip")
+		}
+		t.Run(name, func(t *testing.T) {
+			if err := CompressFileWithFormat(tree, archive, format, -1); err != nil {
+				t.Fatalf("prepare archive: %v", err)
+			}
+			out := filepath.Join(t.TempDir(), "restored")
+			err := DecompressFileWithLimits(archive, out, ExtractLimits{MaxEntries: 5})
+			if !errors.Is(err, ErrExtractLimit) {
+				t.Fatalf("error = %v, want ErrExtractLimit", err)
+			}
+			if _, err := os.Stat(out); !os.IsNotExist(err) {
+				t.Fatalf("output left behind after the limit was hit (stat err: %v)", err)
+			}
+			if err := DecompressFileWithLimits(archive, out, ExtractLimits{}); err != nil {
+				t.Fatalf("without limits: %v", err)
+			}
+			if entries, err := os.ReadDir(out); err != nil || len(entries) != 20 {
+				t.Fatalf("restored %d entries (err %v), want 20", len(entries), err)
+			}
+		})
+	}
+}
+
+// TestDefaultExtractLimits pins the default limits (plan 2.1): 10 GiB and 100,000
+// entries per run.
+func TestDefaultExtractLimits(t *testing.T) {
+	got := DefaultExtractLimits()
+	if got.MaxBytes != 10<<30 || got.MaxEntries != 100_000 {
+		t.Fatalf("DefaultExtractLimits() = %+v, want 10 GiB and 100000 entries", got)
+	}
+}
+
+// TestFailedExtractionLeavesNoPartialOutput checks that a corrupt archive leaves no
+// partial folder behind, and that a failed run with an existing output folder (the
+// --force case) leaves that folder as it was.
+func TestFailedExtractionLeavesNoPartialOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	tree := filepath.Join(tmpDir, "tree")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	data := make([]byte, 256*1024)
+	for i := range data {
+		data[i] = byte(i*7919 + i/13) // poorly compressible, so truncation cuts file data
+	}
+	for _, name := range []string{"a.bin", "b.bin"} {
+		if err := os.WriteFile(filepath.Join(tree, name), data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	for _, ext := range []string{tarGzExt, zipExt} {
+		t.Run(ext, func(t *testing.T) {
+			archive := filepath.Join(tmpDir, "tree"+ext)
+			if err := CompressFileWithFormat(tree, archive, "", -1); err != nil {
+				t.Fatalf("prepare archive: %v", err)
+			}
+			if ext == tarGzExt {
+				// Truncating a tar.gz corrupts the stream after the first file.
+				info, err := os.Stat(archive)
+				if err != nil {
+					t.Fatalf("stat archive: %v", err)
+				}
+				if err := os.Truncate(archive, info.Size()*3/4); err != nil {
+					t.Fatalf("truncate archive: %v", err)
+				}
+			} else {
+				// Corrupt the second entry's compressed data; the central directory stays valid.
+				raw, err := os.ReadFile(archive)
+				if err != nil {
+					t.Fatalf("read archive: %v", err)
+				}
+				for i := len(raw) * 3 / 4; i < len(raw)*3/4+64; i++ {
+					raw[i] ^= 0xff
+				}
+				if err := os.WriteFile(archive, raw, 0o600); err != nil {
+					t.Fatalf("write archive: %v", err)
+				}
+			}
+
+			outDir := t.TempDir()
+			newOut := filepath.Join(outDir, "new")
+			if err := DecompressFile(archive, newOut); err == nil {
+				t.Fatal("DecompressFile of a corrupt archive succeeded, want an error")
+			}
+			if _, err := os.Stat(newOut); !os.IsNotExist(err) {
+				t.Fatalf("partial output left behind (stat err: %v)", err)
+			}
+
+			existing := filepath.Join(outDir, "existing")
+			if err := os.MkdirAll(existing, 0o755); err != nil {
+				t.Fatalf("create existing output: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(existing, "keep.txt"), []byte("keep"), 0o600); err != nil {
+				t.Fatalf("write existing file: %v", err)
+			}
+			if err := DecompressFile(archive, existing); err == nil {
+				t.Fatal("DecompressFile of a corrupt archive succeeded, want an error")
+			}
+			if entries, _ := os.ReadDir(existing); len(entries) != 1 {
+				t.Fatalf("existing output changed by a failed run: %d entries", len(entries))
+			}
+			if left := tempLeftovers(t, outDir); len(left) != 0 {
+				t.Fatalf("temporary folders left behind: %v", left)
+			}
+		})
+	}
+}
+
+// TestExtractReplacesExistingOutput checks the --force behaviour of extraction: an
+// existing output folder is replaced as a whole rather than merged into. This is also
+// a regression test for SEC-008: a symlink planted in that folder is not followed.
+func TestExtractReplacesExistingOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	tree := filepath.Join(tmpDir, "tree")
+	if err := os.MkdirAll(filepath.Join(tree, "link"), 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "link", "escaped.txt"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write tree file: %v", err)
+	}
+
+	for _, ext := range []string{tarGzExt, zipExt} {
+		t.Run(ext, func(t *testing.T) {
+			archive := filepath.Join(tmpDir, "tree"+ext)
+			if err := CompressFileWithFormat(tree, archive, "", -1); err != nil {
+				t.Fatalf("prepare archive: %v", err)
+			}
+			base := t.TempDir()
+			outside := filepath.Join(base, "outside")
+			if err := os.MkdirAll(outside, 0o755); err != nil {
+				t.Fatalf("create outside dir: %v", err)
+			}
+			out := filepath.Join(base, "out")
+			if err := os.MkdirAll(out, 0o755); err != nil {
+				t.Fatalf("create output dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(out, "stale.txt"), []byte("old"), 0o600); err != nil {
+				t.Fatalf("write stale file: %v", err)
+			}
+			if err := os.Symlink(outside, filepath.Join(out, "link")); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				t.Fatalf("create symlink: %v", err)
+			}
+
+			if err := DecompressFile(archive, out); err != nil {
+				t.Fatalf("DecompressFile into an existing folder: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(outside, "escaped.txt")); !os.IsNotExist(err) {
+				t.Fatalf("extraction followed a symlink out of the output folder (stat err: %v)", err)
+			}
+			if got, err := os.ReadFile(filepath.Join(out, "link", "escaped.txt")); err != nil || string(got) != "payload" {
+				t.Fatalf("extracted file = %q (err %v), want %q", got, err, "payload")
+			}
+			if info, err := os.Lstat(filepath.Join(out, "link")); err != nil || !info.IsDir() {
+				t.Fatalf("link is not a real directory after extraction (err %v)", err)
+			}
+			if _, err := os.Stat(filepath.Join(out, "stale.txt")); !os.IsNotExist(err) {
+				t.Fatalf("stale file kept: the output was merged into, not replaced (stat err: %v)", err)
+			}
+			if left := tempLeftovers(t, base); len(left) != 0 {
+				t.Fatalf("temporary folders left behind: %v", left)
+			}
+		})
+	}
+}
+
+// TestExtractRefusesToReplaceFolderHoldingInput checks that replacing an existing
+// output folder is refused when the archive being extracted is inside it, since
+// replacing the folder would delete the archive.
+func TestExtractRefusesToReplaceFolderHoldingInput(t *testing.T) {
+	tmpDir := t.TempDir()
+	tree := filepath.Join(tmpDir, "tree")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "a.txt"), []byte("a"), 0o600); err != nil {
+		t.Fatalf("write tree file: %v", err)
+	}
+	out := filepath.Join(tmpDir, "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatalf("create output dir: %v", err)
+	}
+	archive := filepath.Join(out, "tree.tar.gz")
+	if err := CompressFileWithFormat(tree, archive, "", -1); err != nil {
+		t.Fatalf("prepare archive: %v", err)
+	}
+
+	if err := DecompressFile(archive, out); !errors.Is(err, ErrInputInsideOutput) {
+		t.Fatalf("error = %v, want ErrInputInsideOutput", err)
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("archive lost: %v", err)
+	}
+}
+
+// TestDecryptDirectoryEnforcesExtractLimits is a regression test for SEC-007 on the
+// decrypt path: an encrypted directory is extracted under the same limits.
+func TestDecryptDirectoryEnforcesExtractLimits(t *testing.T) {
+	tmpDir := t.TempDir()
+	tree := filepath.Join(tmpDir, "tree")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "zeros.bin"), make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatalf("write tree file: %v", err)
+	}
+	enc := filepath.Join(tmpDir, "tree.enc")
+	if err := EncryptFile(tree, enc, testPassword); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	out := filepath.Join(tmpDir, "restored")
+	err := DecryptFileWithLimits(enc, out, testPassword, ExtractLimits{MaxBytes: 64 << 10})
+	if !errors.Is(err, ErrExtractLimit) {
+		t.Fatalf("error = %v, want ErrExtractLimit", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("output left behind after the limit was hit (stat err: %v)", err)
+	}
+	if err := DecryptFileWithLimits(enc, out, testPassword, DefaultExtractLimits()); err != nil {
+		t.Fatalf("decrypt with default limits: %v", err)
+	}
+}
+
+// TestFormatSize checks the sizes shown in limit errors.
+func TestFormatSize(t *testing.T) {
+	tests := map[int64]string{
+		10 << 30:    "10 GiB",
+		500_000_000: "500 MB",
+		64 << 10:    "64 KiB",
+		1 << 40:     "1 TiB",
+		1000:        "1 KB",
+		1023:        "1023 bytes",
+	}
+	for n, want := range tests {
+		if got := formatSize(n); got != want {
+			t.Errorf("formatSize(%d) = %q, want %q", n, got, want)
+		}
 	}
 }

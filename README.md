@@ -93,9 +93,19 @@ cryptare                             # opens the interactive TUI
   - if the output file or folder already exists, the command stops; add `--force` to overwrite it;
   - an output that is the input itself is always refused, even with `--force`, as is compressing a folder into an archive inside that folder;
   - the TUI never overwrites, so choose a different output path there;
-  - a command that fails part-way leaves no partial output file, and a file it was replacing with `--force` is kept. Extracting a tar.gz or zip archive is the exception for now.
+  - a command that fails part-way leaves no partial output, and a file or folder it was replacing with `--force` is kept;
+  - with `--force`, an existing output folder is replaced as a whole, not merged into: files in it that aren't in the archive are removed. Extracting into the folder that holds the archive itself is refused;
+  - single output files (encrypted, decrypted, compressed or decompressed) are readable only by you (mode 0600), and so is the top folder of an extracted archive or decrypted folder (mode 0700). Files inside it keep the archive's permissions.
+- Extraction is limited to protect against decompression bombs: `decompress`, and `decrypt` for an encrypted folder, stop after 10 GiB of output or 100,000 archive entries, and remove what they wrote. Change the limits with `--max-size` and `--max-entries` (`0` means no limit). The TUI always uses the defaults.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
+- New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
+- When you type a new password in a terminal or the TUI, you're asked to type it again to confirm it. Piped input is read once.
+- Decrypting and importing accept any password, so files and keys protected with a shorter password before this rule existed still open.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
+- ⚠️ **Upgrading from v1.1.0 or earlier:**
+  - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. To export a key whose master password is shorter, choose an export password of 15 or more characters;
+  - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
+  - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`.
 
 ## Core CLI capabilities
 
@@ -127,6 +137,7 @@ Examples:
 - cryptare decrypt [path] --output [path] — write to a custom output file or restore into a target directory
 - cryptare decrypt [path] --force — overwrite the output if it already exists
 - cryptare decrypt [path] --password [value] — provide the decryption password non-interactively
+- cryptare decrypt [path] --max-size [size] --max-entries [n] — change the extraction limits for an encrypted folder (defaults 10 GiB and 100,000; 0 means no limit)
 
 Examples:
 - cryptare decrypt ./secret.txt.enc
@@ -154,13 +165,16 @@ Examples:
 
 - cryptare decompress [archive] — decompress a gzip file or extract a tar.gz/zip archive
 - cryptare decompress [archive] --output [path] — write to a custom output file or extract to a directory
-- cryptare decompress [archive] --force — overwrite the output if it already exists
+- cryptare decompress [archive] --force — overwrite the output if it already exists (an existing folder is replaced, not merged into)
+- cryptare decompress [archive] --max-size [size] — stop once the output passes this size (default 10 GiB; units B, KB, MB, GB, TB, KiB, MiB, GiB, TiB; 0 means no limit)
+- cryptare decompress [archive] --max-entries [n] — stop if the archive has more entries than this (default 100,000; 0 means no limit)
 
 Examples:
 - cryptare decompress ./artifact.bin.gz
 - cryptare decompress ./artifact.bin.gz --output ./artifact.bin
 - cryptare decompress ./build-backup.tar.gz --output ./restored-build
 - cryptare decompress ./build-backup.zip --output ./restored-build
+- cryptare decompress ./huge-dataset.tar.gz --max-size 50GiB
 
 ### keys
 

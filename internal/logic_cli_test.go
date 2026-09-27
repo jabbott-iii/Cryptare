@@ -18,6 +18,7 @@ package internal
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -198,7 +199,7 @@ func TestEncryptCmdWithPassword(t *testing.T) {
 	db := newTestDatabase(t, false)
 
 	rootCmd := NewRootCmd(db)
-	rootCmd.SetArgs([]string{"encrypt", srcFile, "-p", "testpass"})
+	rootCmd.SetArgs([]string{"encrypt", srcFile, "-p", testPassword})
 
 	var out bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -227,7 +228,7 @@ func TestEncryptDecryptCmdRoundTrip(t *testing.T) {
 
 	db := newTestDatabase(t, false)
 
-	password := "testpass123"
+	password := testPassword
 
 	// Encrypt
 	rootCmd := NewRootCmd(db)
@@ -277,7 +278,7 @@ func TestEncryptDecryptDirectoryCmdRoundTrip(t *testing.T) {
 
 	db := newTestDatabase(t, false)
 
-	password := "testpass123"
+	password := testPassword
 
 	rootCmd := NewRootCmd(db)
 	rootCmd.SetArgs([]string{"encrypt", srcDir, "-p", password})
@@ -836,7 +837,7 @@ func TestFileCmdsRefuseExistingOutput(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 	enc := src + encExt
-	if err := EncryptFile(src, enc, "pw"); err != nil {
+	if err := EncryptFile(src, enc, testPassword); err != nil {
 		t.Fatalf("prepare encrypted file: %v", err)
 	}
 	gz := src + gzExt
@@ -859,8 +860,12 @@ func TestFileCmdsRefuseExistingOutput(t *testing.T) {
 		name string
 		args func(out string) []string
 	}{
-		{"encrypt", func(out string) []string { return []string{"encrypt", src, "--output", out, "--password", "pw"} }},
-		{"decrypt", func(out string) []string { return []string{"decrypt", enc, "--output", out, "--password", "pw"} }},
+		{"encrypt", func(out string) []string {
+			return []string{"encrypt", src, "--output", out, "--password", testPassword}
+		}},
+		{"decrypt", func(out string) []string {
+			return []string{"decrypt", enc, "--output", out, "--password", testPassword}
+		}},
 		{"compress", func(out string) []string { return []string{"compress", src, "--output", out} }},
 		{"decompress", func(out string) []string { return []string{"decompress", gz, "--output", out} }},
 	}
@@ -889,7 +894,7 @@ func TestFileCmdsRefuseExistingOutput(t *testing.T) {
 	}
 
 	// Default output: decrypting data.txt.enc would write data.txt, which still exists.
-	if err := run("decrypt", enc, "--password", "pw"); !errors.Is(err, ErrOutputExists) {
+	if err := run("decrypt", enc, "--password", testPassword); !errors.Is(err, ErrOutputExists) {
 		t.Fatalf("decrypt to existing default output: error = %v, want ErrOutputExists", err)
 	}
 	if got, _ := os.ReadFile(src); string(got) != "payload" {
@@ -915,5 +920,358 @@ func TestCompressCmdRefusesSameInputOutputEvenWithForce(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(src); string(got) != "irreplaceable" {
 		t.Fatalf("source was modified to %q", got)
+	}
+}
+
+// TestReadNewPasswordWith is a regression test for SEC-001 and SEC-002: a password that
+// will protect new data is checked against the policy before it is confirmed, and when
+// confirmation is on (terminal input) a mismatched second entry is refused.
+func TestReadNewPasswordWith(t *testing.T) {
+	const other = "correct horse battery stapler"
+	tests := []struct {
+		name        string
+		answers     []string
+		confirm     bool
+		want        string
+		wantErr     error
+		wantPrompts []string
+	}{
+		{
+			name:        "confirmed",
+			answers:     []string{testPassword, testPassword},
+			confirm:     true,
+			want:        testPassword,
+			wantPrompts: []string{"Enter password: ", "Confirm password: "},
+		},
+		{
+			name:        "confirmation differs",
+			answers:     []string{testPassword, other},
+			confirm:     true,
+			wantErr:     ErrPasswordMismatch,
+			wantPrompts: []string{"Enter password: ", "Confirm password: "},
+		},
+		{
+			name:        "weak password is refused before confirmation",
+			answers:     []string{"hunter2"},
+			confirm:     true,
+			wantErr:     ErrWeakPassword,
+			wantPrompts: []string{"Enter password: "},
+		},
+		{
+			name:        "empty password is refused before confirmation",
+			answers:     []string{""},
+			confirm:     true,
+			wantErr:     ErrEmptyPassword,
+			wantPrompts: []string{"Enter password: "},
+		},
+		{
+			name:        "piped input is read once",
+			answers:     []string{testPassword},
+			want:        testPassword,
+			wantPrompts: []string{"Enter password: "},
+		},
+		{
+			name:        "piped weak password is refused",
+			answers:     []string{"hunter2"},
+			wantErr:     ErrWeakPassword,
+			wantPrompts: []string{"Enter password: "},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var prompts []string
+			read := func(prompt string) (string, error) {
+				prompts = append(prompts, prompt)
+				if len(prompts) > len(tt.answers) {
+					return "", errors.New("unexpected extra prompt")
+				}
+				return tt.answers[len(prompts)-1], nil
+			}
+
+			got, err := readNewPasswordWith(read, "Enter password: ", tt.confirm)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("readNewPasswordWith() error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil || got != tt.want {
+				t.Fatalf("readNewPasswordWith() = %q, %v; want %q", got, err, tt.want)
+			}
+			if strings.Join(prompts, "|") != strings.Join(tt.wantPrompts, "|") {
+				t.Fatalf("prompts = %q, want %q", prompts, tt.wantPrompts)
+			}
+		})
+	}
+
+	readErr := errors.New("read failed")
+	_, err := readNewPasswordWith(func(prompt string) (string, error) {
+		if prompt == "Confirm password: " {
+			return "", readErr
+		}
+		return testPassword, nil
+	}, "Enter password: ", true)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("confirmation read error = %v, want %v", err, readErr)
+	}
+}
+
+// TestNewPasswordCmdsRejectWeakPassword is a regression test for SEC-001 on the CLI:
+// encrypt, keys generate and keys export refuse a password that fails the policy,
+// whether it comes from --password or the prompt, and change nothing.
+func TestNewPasswordCmdsRejectWeakPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "data.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	blob, err := EncryptKeyBlob(make([]byte, keyLen), testPassword)
+	if err != nil {
+		t.Fatalf("EncryptKeyBlob: %v", err)
+	}
+	const keyID = "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: blob, CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	exportPath := filepath.Join(tmpDir, "key.ckey")
+
+	run := func(stdin string, args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(stdin))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	cases := []struct {
+		name  string
+		stdin string
+		args  []string
+	}{
+		{"encrypt flag", "", []string{"encrypt", src, "--password", "hunter2"}},
+		{"encrypt prompt", "hunter2\n", []string{"encrypt", src}},
+		{"keys generate flag", "", []string{"keys", "generate", "--password", "hunter2"}},
+		{"keys generate prompt", "hunter2\n", []string{"keys", "generate"}},
+		{"keys export flag", "", []string{"keys", "export", keyID, "--output", exportPath, "--password", "hunter2"}},
+		{"keys export prompt", "hunter2\n", []string{"keys", "export", keyID, "--output", exportPath}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := run(tc.stdin, tc.args...); !errors.Is(err, ErrWeakPassword) {
+				t.Fatalf("error = %v, want ErrWeakPassword", err)
+			}
+			if _, err := os.Stat(src + encExt); !os.IsNotExist(err) {
+				t.Fatalf("encrypted file created despite the weak password (stat err: %v)", err)
+			}
+			if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+				t.Fatalf("export file created despite the weak password (stat err: %v)", err)
+			}
+			if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+				t.Fatalf("stored keys = %d (err %v), want only the fixture key", len(keys), err)
+			}
+		})
+	}
+}
+
+// TestLegacyShortPasswordCmds checks that the CLI still decrypts files and imports key
+// exports protected with a password shorter than the policy minimum, and that a key
+// stored under a short master password can be exported with a password that meets it.
+func TestLegacyShortPasswordCmds(t *testing.T) {
+	tmpDir := t.TempDir()
+	const legacyPassword = "hunter2"
+	db := newTestDatabase(t, false)
+
+	run := func(stdin string, args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(stdin))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	ciphertext, err := encryptBytes([]byte("legacy content"), legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
+	encFile := filepath.Join(tmpDir, "legacy.txt.enc")
+	if err := os.WriteFile(encFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+	if err := run(legacyPassword+"\n", "decrypt", encFile); err != nil {
+		t.Fatalf("decrypt legacy file via prompt: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(tmpDir, "legacy.txt")); err != nil || string(got) != "legacy content" {
+		t.Fatalf("decrypted content = %q (err %v), want %q", got, err, "legacy content")
+	}
+
+	// A key stored with a short master password, exported the way pre-policy builds did.
+	blobBytes, err := encryptBytes(make([]byte, keyLen), legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes(key): %v", err)
+	}
+	storedBlob := base64.StdEncoding.EncodeToString(blobBytes)
+	envelope := []byte(`{"version":1,"key_id":"0123456789abcdef","algorithm":"AES-256-GCM","created_at":1,"encrypted_blob":"` + storedBlob + `"}`)
+	exportBytes, err := encryptBytes(envelope, legacyPassword)
+	if err != nil {
+		t.Fatalf("encryptBytes(export): %v", err)
+	}
+	legacyExport := filepath.Join(tmpDir, "legacy.ckey")
+	if err := os.WriteFile(legacyExport, []byte(base64.StdEncoding.EncodeToString(exportBytes)), 0o600); err != nil {
+		t.Fatalf("write legacy export: %v", err)
+	}
+	if err := run("", "keys", "import", legacyExport, "--password", legacyPassword); err != nil {
+		t.Fatalf("import legacy export: %v", err)
+	}
+
+	newExport := filepath.Join(tmpDir, "renewed.ckey")
+	if err := run("", "keys", "export", "0123456789abcdef", "--output", newExport, "--password", testPassword); err != nil {
+		t.Fatalf("export legacy key with a strong export password: %v", err)
+	}
+	if _, err := os.Stat(newExport); err != nil {
+		t.Fatalf("export file not created: %v", err)
+	}
+}
+
+// TestParseSize checks the --max-size values the CLI accepts.
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{in: "0", want: 0},
+		{in: "1024", want: 1024},
+		{in: "1B", want: 1},
+		{in: "10GiB", want: 10 << 30},
+		{in: "10 GiB", want: 10 << 30},
+		{in: "500MB", want: 500_000_000},
+		{in: "64kib", want: 64 << 10},
+		{in: "2TB", want: 2_000_000_000_000},
+		{in: "", wantErr: true},
+		{in: "ten", wantErr: true},
+		{in: "-1", wantErr: true},
+		{in: "1.5GB", wantErr: true},
+		{in: "10XB", wantErr: true},
+		{in: "99999999999TiB", wantErr: true},
+	}
+	for _, tt := range tests {
+		got, err := parseSize(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("parseSize(%q) = %d, want an error", tt.in, got)
+			}
+			continue
+		}
+		if err != nil || got != tt.want {
+			t.Errorf("parseSize(%q) = %d, %v; want %d", tt.in, got, err, tt.want)
+		}
+	}
+}
+
+// TestExtractLimitFlags is a regression test for SEC-007 on the CLI: decompress and
+// decrypt stop at the limits set by --max-size and --max-entries (defaults 10 GiB and
+// 100,000), say how to change them, and accept 0 for no limit.
+func TestExtractLimitFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	zeros := filepath.Join(tmpDir, "zeros.bin")
+	if err := os.WriteFile(zeros, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatalf("write zeros: %v", err)
+	}
+	bomb := zeros + gzExt
+	if err := CompressFile(zeros, bomb, -1); err != nil {
+		t.Fatalf("prepare gzip: %v", err)
+	}
+	tree := filepath.Join(tmpDir, "tree")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("create tree: %v", err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(tree, name), make([]byte, 1<<20), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	archive := filepath.Join(tmpDir, "tree.tar.gz")
+	if err := CompressFileWithFormat(tree, archive, "", -1); err != nil {
+		t.Fatalf("prepare tar.gz: %v", err)
+	}
+	enc := filepath.Join(tmpDir, "tree.enc")
+	if err := EncryptFile(tree, enc, testPassword); err != nil {
+		t.Fatalf("prepare encrypted folder: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	run := func(args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(args)
+		rootCmd.SetIn(strings.NewReader(""))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+	out := func(name string) string { return filepath.Join(tmpDir, name) }
+
+	limited := []struct {
+		name string
+		args []string
+		dst  string
+	}{
+		{"gzip size", []string{"decompress", bomb, "--output", out("a.bin"), "--max-size", "64KiB"}, out("a.bin")},
+		{"tar.gz size", []string{"decompress", archive, "--output", out("b"), "--max-size", "1MiB"}, out("b")},
+		{"tar.gz entries", []string{"decompress", archive, "--output", out("c"), "--max-entries", "1"}, out("c")},
+		{"decrypt size", []string{"decrypt", enc, "--output", out("d"), "--password", testPassword, "--max-size", "64KiB"}, out("d")},
+		{"decrypt entries", []string{"decrypt", enc, "--output", out("e"), "--password", testPassword, "--max-entries", "1"}, out("e")},
+	}
+	for _, tc := range limited {
+		t.Run(tc.name, func(t *testing.T) {
+			err := run(tc.args...)
+			if !errors.Is(err, ErrExtractLimit) || !strings.Contains(err.Error(), "--max-size") {
+				t.Fatalf("error = %v, want ErrExtractLimit with a hint about the flags", err)
+			}
+			if _, err := os.Stat(tc.dst); !os.IsNotExist(err) {
+				t.Fatalf("output left behind (stat err: %v)", err)
+			}
+		})
+	}
+
+	if err := run("decompress", bomb, "--output", out("f.bin"), "--max-size", "0"); err != nil {
+		t.Fatalf("decompress with --max-size 0: %v", err)
+	}
+	if err := run("decrypt", enc, "--output", out("g"), "--password", testPassword, "--max-size", "0", "--max-entries", "0"); err != nil {
+		t.Fatalf("decrypt with no limits: %v", err)
+	}
+	if err := run("decompress", archive, "--output", out("h")); err != nil {
+		t.Fatalf("decompress with the default limits: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"decompress", bomb, "--output", out("i.bin"), "--max-size", "ten"},
+		{"decompress", bomb, "--output", out("i.bin"), "--max-entries", "-1"},
+		{"decrypt", enc, "--output", out("j"), "--password", testPassword, "--max-size", "1.5GB"},
+	} {
+		if err := run(args...); err == nil {
+			t.Errorf("%v succeeded, want an invalid-limit error", args)
+		}
+	}
+	if _, err := os.Stat(out("i.bin")); !os.IsNotExist(err) {
+		t.Fatalf("output written despite an invalid limit (stat err: %v)", err)
+	}
+
+	for _, name := range []string{"decompress", "decrypt"} {
+		cmd, _, err := NewRootCmd(db).Find([]string{name})
+		if err != nil {
+			t.Fatalf("find %s: %v", name, err)
+		}
+		if got := cmd.Flags().Lookup("max-size").DefValue; got != "10 GiB" {
+			t.Errorf("%s --max-size default = %q, want %q", name, got, "10 GiB")
+		}
+		if got := cmd.Flags().Lookup("max-entries").DefValue; got != "100000" {
+			t.Errorf("%s --max-entries default = %q, want %q", name, got, "100000")
+		}
 	}
 }

@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-09-26
+Last updated: 2026-09-27
 
 ## 1. Security requirements
 
@@ -17,13 +17,19 @@ These apply to all changes.
    - Passwords are never logged, echoed, or written to disk.
    - They are read in full, including spaces.
    - Empty passwords are rejected on every encryption path.
+   - Passwords that protect new data (encrypt, stored keys, key exports) meet the
+     password policy: at least 15 Unicode code points and not one repeated character,
+     with no composition rules (`CheckPasswordPolicy`, following NIST SP 800-63B-4
+     §3.1.1.2). Typed passwords are confirmed. Decryption and import accept any
+     password so that existing data stays readable.
    - Non-interactive password input should not require the secret to appear in the
      process arguments.
 3. **Integrity.** Tampered or wrong-password ciphertext fails closed with a generic
    error. Directory artifacts stay bound to their type through AAD.
 4. **Filesystem safety.**
    - Symlinks and special files are rejected when archiving.
-   - Extraction never writes outside the destination and bounds its output size.
+   - Extraction never writes outside the destination and bounds its output size
+     (default 10 GiB and 100,000 entries, SEC-007).
    - Outputs are created with mode `0o600`.
    - Plaintext is not staged outside the user-chosen locations.
 5. **Key storage.**
@@ -81,7 +87,7 @@ These apply to all changes.
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Open |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Open |
-| SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Open |
+| SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | In Progress |
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | In Progress |
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Open |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | Open |
@@ -108,6 +114,32 @@ These apply to all changes.
     recovers a file the old build encrypted with a blank password.
   - Remaining: step 3, the minimum-length policy (Q-004). This item stays open
     until that is decided and implemented.
+- **Progress (2026-09-27, uncommitted):** step 3 is implemented and validated. The owner
+  asked for a default policy (Q-004).
+  - `CheckPasswordPolicy` in `crypto.go` requires at least `MinPasswordLength` (15)
+    Unicode code points and rejects a single repeated character (`ErrWeakPassword`).
+    It has no composition rules and no maximum length, following NIST SP 800-63B-4
+    §3.1.1.2 for single-factor passwords.
+  - `EncryptFile` and `EncryptKeyBlob`, and through it `ExportKeyToFile`, enforce the
+    policy in place of the empty-only check, so the CLI (`--password` and prompt) and
+    the TUI all get it. The CLI prompt and the TUI also check it before asking for
+    confirmation (SEC-002 step 3).
+  - Decryption and import don't check it. `TestDecryptAcceptsLegacyShortPassword` and
+    `TestLegacyShortPasswordCmds` show files, key blobs and exports protected with a
+    short password still open, and a key stored under a short master password can
+    be exported with a compliant export password.
+  - New tests, which failed against the previous code: `TestCheckPasswordPolicy` (14
+    cases, including code-point counting and invalid UTF-8),
+    `TestEncryptRejectsWeakPassword`, `TestNewPasswordCmdsRejectWeakPassword` (flag
+    and prompt for encrypt, keys generate and keys export) and
+    `TestDashboardRejectsWeakOrMismatchedPassword`.
+  - Not covered: a blocklist of common or breached passwords, which NIST also asks
+    verifiers for. Cryptare has no offline list today; a 15-character minimum still
+    admits weak phrases such as a repeated word.
+  - The CI, CD and Docker smoke tests used passwords shorter than 15 characters. The
+    workflow patch `cryptare-password-policy-workflows.patch` lengthens them (plan W9);
+    the owner has applied it.
+  - Close after the change is committed and CI passes with the patched workflows.
 - **Affected component:**
   - `internal/logic-tui.go` `buildActionCmd` (encrypt, keys generate, keys export)
   - `internal/crypto.go` `EncryptFile`, `EncryptKeyBlob`, `ExportKeyToFile` (none of
@@ -151,6 +183,23 @@ These apply to all changes.
     exits with status 130; verified in a pseudo-terminal.
   - Remaining: step 3 (confirmation on encrypt, tied to Q-004), and the migration
     note in the next release's notes.
+- **Progress (2026-09-27, uncommitted):** step 3 is implemented and validated.
+  - `readNewPassword` in `logic-cli.go` asks for the password a second time when the
+    input is a terminal and refuses a mismatch (`ErrPasswordMismatch`). Piped input
+    is read once, so scripts keep working. It is used by `encrypt`, `keys generate`
+    and `keys export`.
+  - The TUI's Encrypt, Generate key and Export key forms have a masked "Confirm
+    password" field, checked after the policy.
+  - Tests: `TestReadNewPasswordWith` (7 cases) and
+    `TestDashboardRejectsWeakOrMismatchedPassword` failed against the previous code;
+    `TestDashboardNewPasswordFormsHaveConfirmation` checks the fields.
+  - In a pseudo-terminal the new binary passed 7 of 7 checks: it asks to confirm, a
+    mismatch writes nothing, a weak password is refused before confirmation, Ctrl+C
+    at the confirmation exits 130 with echo restored, piped input is read once, and
+    the TUI refuses a mismatch and then accepts a match. A build of the previous
+    commit (`b4cd66f`) passed 1 of 7, the piped-input check.
+  - Remaining: the migration notes in the next release's notes (the v1.0.1 prompt
+    change, and the new 15-character minimum for scripts).
 - **Affected component:** `internal/logic-cli.go` `readPassword` (uses `fmt.Fscan`);
   used by `encrypt`, `decrypt` and the `keys` subcommands.
 - **Risk:**
@@ -274,7 +323,36 @@ These apply to all changes.
 
 ### SEC-007 — Unbounded decompression and extraction (decompression bomb)
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plan 2.1):** all three remediation steps are
+  implemented and validated. The owner approved the defaults (10 GiB and 100,000
+  entries), the flags, cleanup through a temporary folder, and applying the limits
+  to encrypted folders too.
+  - `ExtractLimits` (`MaxBytes`, `MaxEntries`; 0 means no limit) and
+    `DefaultExtractLimits()` in `compress.go`. `DecompressFileWithLimits` and
+    `DecryptFileWithLimits` take them; `DecompressFile` and `DecryptFile` use the
+    defaults.
+  - An `extractBudget` counts entries and copies each entry through `io.CopyN`,
+    reading at most one byte past the size limit. Hitting a limit returns
+    `ErrExtractLimit`. A zip whose central directory lists too many entries is
+    refused before anything is written.
+  - Extraction goes into a new hidden folder next to the output (`extractToDir`) and
+    is renamed into place only on success, so a limit or any other failure leaves no
+    output behind (step 3). Single-file outputs already used temporary files (2.11).
+  - The CLI's `decompress` and `decrypt` have `--max-size` (for example `500MB` or
+    `20GiB`) and `--max-entries`, and their errors name the flags. The TUI uses the
+    defaults and says how to change them from the CLI.
+  - Tests that failed against the previous code: `TestDecompressEnforcesSizeLimit`
+    (gzip, tar.gz, zip and single-file zip), `TestExtractEnforcesEntryLimit`,
+    `TestDecryptDirectoryEnforcesExtractLimits`, `TestFailedExtractionLeavesNoPartialOutput`,
+    `TestExtractLimitFlags` and `TestTUILimitHint`, plus `TestDefaultExtractLimits`,
+    `TestParseSize` and `TestFormatSize`.
+  - With real binaries: a 305 KB gzip wrote 300 MiB and a 620 KB tar.gz created
+    100,001 files under the previous build. The new build stopped both (with
+    `--max-size 100MB`, and with the default entry limit), left nothing behind, and
+    extracted them fully with the limits raised. The TUI showed the hint.
+  - gosec no longer reports G110 (it did at four places).
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/compress.go` `DecompressFile`, `extractTarGz`,
   `extractZip`, `extractZipSingleFile`. gosec G110 fires at `compress.go` lines 155,
   416, 498 and 551.
@@ -293,6 +371,15 @@ These apply to all changes.
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
 - **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plans 2.1 and 2.2):** extraction now always
+  writes into a new, empty folder with mode 0700 (`extractToDir`), which is renamed
+  to the output only when extraction succeeds. Archives can't contain symlinks, and
+  other users can't write into a 0700 folder, so there is no symlink to follow, even
+  with `--force`. An existing output folder is replaced as a whole instead of being
+  merged into, which covers step 2. `TestExtractReplacesExistingOutput` (tar.gz and
+  zip, symlink in the existing output) failed against the previous code, which wrote
+  through the symlink. Remaining: `os.Root` extraction as defence in depth (step 1)
+  and masking archive modes (step 3).
 - **Progress (2026-09-24, `c47a94f`, v1.1.0):** Part of step 2 is done.
   - `decompress` and `decrypt` now refuse an output path that already exists unless
     `--force` is given, and the TUI always refuses (plan 1.5, `CheckOutputPath`).

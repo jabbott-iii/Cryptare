@@ -279,3 +279,106 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     existing file with 49,961 bytes of partial data under v1.1.0; the new build leaves
     it intact. Round trips still work, outputs are mode 0600, and no temporary files
     are left.
+
+## 2026-09-27 — Default password policy (plan 0.5, Q-004; SEC-001, SEC-002)
+
+- **Owner decision:** use a default password policy (Q-004). The policy follows NIST
+  SP 800-63B-4 §3.1.1.2 for single-factor passwords:
+  - at least 15 characters, counted as Unicode code points;
+  - no composition rules and no maximum length;
+  - a single repeated character is refused.
+- **Scope:** only passwords that protect new data, that is `encrypt`, the
+  `keys generate` master password and the `keys export` password. Decrypt and
+  `keys import` accept any password, so older files, key blobs and exports stay
+  readable.
+- `internal/crypto.go`: new `MinPasswordLength`, `ErrWeakPassword`,
+  `ErrPasswordMismatch` and `CheckPasswordPolicy`. `EncryptFile` and `EncryptKeyBlob`
+  (and so `ExportKeyToFile`) call it in place of the empty-password check.
+  `ErrEmptyPassword` is still returned for an empty password.
+- `internal/logic-cli.go`: `readNewPassword`/`readNewPasswordWith` check the policy,
+  then ask "Confirm password: " when the input is a terminal. Piped input is read
+  once. The new `terminalInput` helper is shared with `readPassword`. `encrypt`,
+  `keys generate` and `keys export` use it; `--password` values are checked by core.
+- `internal/logic-tui.go`: the Encrypt, Generate key and Export key forms have a masked
+  "Confirm password" field. `checkTUINewPassword` checks the policy and then the
+  match. The Decrypt and Import forms are unchanged.
+- **Tests:**
+  - new: `TestCheckPasswordPolicy`, `TestEncryptRejectsWeakPassword`,
+    `TestDecryptAcceptsLegacyShortPassword`, `TestReadNewPasswordWith`,
+    `TestNewPasswordCmdsRejectWeakPassword`, `TestLegacyShortPasswordCmds`,
+    `TestDashboardNewPasswordFormsHaveConfirmation` and
+    `TestDashboardRejectsWeakOrMismatchedPassword`. Apart from the two legacy tests,
+    which guard compatibility, all failed against the previous code;
+  - existing tests that encrypted with short passwords now use a compliant one, and
+    TUI tests fill in the confirmation field.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native, plus linux/arm64,
+    darwin/arm64, darwin/amd64 and windows/amd64) and golangci-lint v2.13.2 are
+    clean;
+  - `go test -race ./...` passes, with 67.8% total coverage;
+  - gosec v2.29.0 reports the same 25 findings as before the change;
+  - in a pseudo-terminal the new binary passed 7 of 7 end-to-end checks (confirmation,
+    mismatch, weak password, Ctrl+C at confirmation, piped input, TUI mismatch then
+    match). A build of `b4cd66f` passed only the piped-input check.
+- **Workflows (W9):** the CI, CD and Docker smoke tests passed 8–13 character
+  passwords, which the policy rejects. `cryptare-password-policy-workflows.patch`
+  lengthens them. With the new code, the CI smoke step passed with the patched
+  workflow and failed with the original. The CD and Docker steps weren't run here.
+- **Behaviour change:** scripts that pass a password shorter than 15 characters to
+  `encrypt`, `keys generate` or `keys export` now fail. The README documents this.
+
+## 2026-09-27 — Extraction limits and atomic extraction (plan 2.1, part of 2.2; SEC-007, SEC-008)
+
+- **Owner decisions:**
+  - default limits of 10 GiB of output and 100,000 entries per run;
+  - `--max-size` and `--max-entries` flags, where 0 means no limit;
+  - partial output is cleaned up by extracting into a temporary folder and renaming
+    it into place;
+  - the limits apply to encrypted folders on `decrypt` as well.
+- `internal/compress.go`:
+  - new `ExtractLimits`, `DefaultExtractLimits`, `DefaultMaxExtractBytes`,
+    `DefaultMaxExtractEntries`, `ErrExtractLimit`, `ErrInputInsideOutput` and
+    `DecompressFileWithLimits`. `DecompressFile` uses the defaults;
+  - `extractBudget` counts entries and copies through `io.CopyN`. A zip with too many
+    entries in its central directory is refused up front;
+  - `extractToDir` extracts into a new hidden 0700 folder next to the output and
+    renames it into place. An existing output (`--force`) is moved aside, replaced
+    and removed, so it is replaced rather than merged into. Replacing a folder that
+    holds the archive is refused;
+  - a single-file zip is extracted through `createAtomicFile` (0600);
+  - `pathWithin` is shared with `checkOutputOutsideDir`.
+- `internal/crypto.go`: new `DecryptFileWithLimits`. `restoreDirectoryArchive`
+  extracts through `extractToDir` under the limits.
+- `internal/logic-cli.go`: `--max-size` (parsed by `parseSize`, which accepts B, KB–TB
+  and KiB–TiB) and `--max-entries` on `decompress` and `decrypt`, validated before
+  anything else runs. Limit errors say which flag to use (`withLimitHint`).
+- `internal/logic-tui.go`: decrypt and decompress errors from a limit explain that the
+  TUI uses the defaults (`withTUILimitHint`).
+- **Behaviour changes:**
+  - with `--force`, an existing output folder is replaced, not merged into;
+  - the top folder of an extraction has mode 0700, where it was 0755 minus the umask;
+  - a single file extracted from a zip has mode 0600, where it had the archive's mode;
+  - archives over the default limits need the flags.
+- **Tests** that failed against the previous code:
+  - `TestDecompressEnforcesSizeLimit` (gzip, tar.gz, zip, single-file zip);
+  - `TestExtractEnforcesEntryLimit`, `TestDefaultExtractLimits`;
+  - `TestFailedExtractionLeavesNoPartialOutput`, `TestExtractReplacesExistingOutput`
+    (also the SEC-008 symlink case), `TestExtractRefusesToReplaceFolderHoldingInput`;
+  - `TestDecryptDirectoryEnforcesExtractLimits`, `TestFormatSize`;
+  - CLI: `TestParseSize` and `TestExtractLimitFlags`;
+  - TUI: `TestTUILimitHint`.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native, plus linux/arm64,
+    darwin/arm64, darwin/amd64 and windows/amd64) and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 71.5% total coverage;
+  - gosec v2.29.0: 20 findings, down from 25. All four G110 (decompression bomb)
+    findings are gone, and no new rule fires;
+  - real binaries, 10 of 10 checks passed. A 305 KB gzip bomb and a 620 KB tar.gz
+    with 100,001 entries were stopped and cleaned up, and extracted fully with the
+    limits raised. A 300 MiB gzip passed under the defaults. `--force` replaced an
+    existing folder and left it untouched when the limit was hit. The extracted
+    folder was 0700, and an invalid `--max-size` was refused. The TUI reported the
+    entry limit with the hint. The previous build wrote all 300 MiB and all 100,001
+    files.
+- **W9:** the owner applied `cryptare-password-policy-workflows.patch`; the three
+  workflows on disk match the patched versions. It is uncommitted, alongside 0.5.

@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,32 @@ var (
 	// ErrOutputInsideInput is returned when a directory would be archived into a file
 	// inside itself, which would archive its own partial output.
 	ErrOutputInsideInput = errors.New("output is inside the input directory")
+	// ErrInputInsideOutput is returned when extraction would replace an existing
+	// output directory that contains the archive being extracted.
+	ErrInputInsideOutput = errors.New("input is inside the output directory")
+	// ErrExtractLimit is returned when decompression or extraction would exceed its
+	// ExtractLimits. The partial output is removed.
+	ErrExtractLimit = errors.New("extraction limit exceeded")
 )
+
+// Default extraction limits (SEC-007): the most one decompression or extraction may
+// write, as a guard against decompression bombs.
+const (
+	DefaultMaxExtractBytes   int64 = 10 << 30 // 10 GiB
+	DefaultMaxExtractEntries       = 100_000
+)
+
+// ExtractLimits bounds what one decompression or extraction may write. A zero field
+// means no limit.
+type ExtractLimits struct {
+	MaxBytes   int64 // total bytes of file content written
+	MaxEntries int   // archive entries (files and directories) extracted
+}
+
+// DefaultExtractLimits returns the limits used when the caller doesn't set its own.
+func DefaultExtractLimits() ExtractLimits {
+	return ExtractLimits{MaxBytes: DefaultMaxExtractBytes, MaxEntries: DefaultMaxExtractEntries}
+}
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
@@ -145,7 +171,16 @@ func writeGzip(w io.Writer, src string, info fs.FileInfo, level int) (err error)
 
 // DecompressFile decompresses a gzip/zip file at src, writing to dst.
 // Tar-based gzip archives and zip archives are extracted into directories.
-func DecompressFile(src, dst string) (err error) {
+func DecompressFile(src, dst string) error {
+	return DecompressFileWithLimits(src, dst, DefaultExtractLimits())
+}
+
+// DecompressFileWithLimits is DecompressFile with explicit extraction limits. When a
+// limit is hit it returns ErrExtractLimit and leaves no output behind. Archives are
+// extracted into a new hidden directory next to dst, which is then renamed to dst,
+// so an existing dst is replaced as a whole rather than merged into.
+func DecompressFileWithLimits(src, dst string, limits ExtractLimits) (err error) {
+	budget := &extractBudget{limits: limits}
 	if strings.HasSuffix(strings.ToLower(src), zipExt) {
 		if dst == "" {
 			dst = defaultDecompressOutput(src)
@@ -153,7 +188,7 @@ func DecompressFile(src, dst string) (err error) {
 		if err := checkNotSameFile(src, dst); err != nil {
 			return err
 		}
-		return extractZip(src, dst)
+		return extractZip(src, dst, budget)
 	}
 
 	in, err := os.Open(src)
@@ -176,10 +211,9 @@ func DecompressFile(src, dst string) (err error) {
 	}
 
 	if isTarGzArchive(src, gz.Name) {
-		if err := extractTarGz(gz, dst); err != nil {
-			return err
-		}
-		return nil
+		return extractToDir(src, dst, func(dir string) error {
+			return extractTarGz(gz, dir, budget)
+		})
 	}
 
 	out, err := createAtomicFile(dst)
@@ -188,7 +222,10 @@ func DecompressFile(src, dst string) (err error) {
 	}
 	defer out.Abort()
 
-	if _, err := io.Copy(out, gz); err != nil {
+	if err := budget.copy(out, gz); err != nil {
+		if errors.Is(err, ErrExtractLimit) {
+			return err
+		}
 		return fmt.Errorf("decompress data: %w", err)
 	}
 	if err := out.Commit(); err != nil {
@@ -410,7 +447,9 @@ func writeZipFile(zw *zip.Writer, srcPath, zipName string) error {
 	return nil
 }
 
-func extractTarGz(r io.Reader, dst string) error {
+// extractTarGz extracts a tar stream into dst, counting its entries and bytes against
+// budget. Callers extract into a new directory (see extractToDir).
+func extractTarGz(r io.Reader, dst string, budget *extractBudget) error {
 	cleanDst := filepath.Clean(dst)
 	cleanDstWithSep := cleanDst + string(os.PathSeparator)
 	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
@@ -425,6 +464,9 @@ func extractTarGz(r io.Reader, dst string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("read tar header: %w", err)
+		}
+		if err := budget.addEntry(); err != nil {
+			return err
 		}
 
 		archivePath := filepath.Clean(filepath.FromSlash(header.Name))
@@ -452,12 +494,12 @@ func extractTarGz(r io.Reader, dst string) error {
 			if err != nil {
 				return fmt.Errorf("create output file: %w", err)
 			}
-			if _, err := io.Copy(file, tr); err != nil {
+			if err := budget.copy(file, tr); err != nil {
 				closeErr := file.Close()
 				if closeErr != nil {
-					return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeErr))
+					return errors.Join(wrapExtractError(err), fmt.Errorf("close output file: %w", closeErr))
 				}
-				return fmt.Errorf("extract file contents: %w", err)
+				return wrapExtractError(err)
 			}
 			if err := file.Close(); err != nil {
 				return fmt.Errorf("close output file: %w", err)
@@ -468,28 +510,46 @@ func extractTarGz(r io.Reader, dst string) error {
 	}
 }
 
-func extractZip(src, dst string) (err error) {
+func extractZip(src, dst string, budget *extractBudget) (err error) {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return fmt.Errorf("open zip archive: %w", err)
 	}
 	defer closeWithError(&err, r, "close zip reader")
 
+	// The central directory lists every entry, so an archive with too many is refused
+	// before anything is written.
+	if limit := budget.limits.MaxEntries; limit > 0 && len(r.File) > limit {
+		return entryLimitError(limit)
+	}
+
 	singleFile := len(r.File) == 1 && !r.File[0].FileInfo().IsDir() && r.File[0].Mode().IsRegular()
 	cleanDst := filepath.Clean(dst)
 	if singleFile {
 		entryName := filepath.Clean(filepath.FromSlash(r.File[0].Name))
 		if filepath.Base(entryName) == filepath.Base(cleanDst) {
-			return extractZipSingleFile(r.File[0], cleanDst)
+			return extractZipSingleFile(r.File[0], cleanDst, budget)
 		}
 	}
 
+	return extractToDir(src, cleanDst, func(dir string) error {
+		return extractZipEntries(r.File, dir, budget)
+	})
+}
+
+// extractZipEntries extracts zip entries into dst, counting their entries and bytes
+// against budget. Callers extract into a new directory (see extractToDir).
+func extractZipEntries(files []*zip.File, dst string, budget *extractBudget) error {
+	cleanDst := filepath.Clean(dst)
 	cleanDstWithSep := cleanDst + string(os.PathSeparator)
 	if err := os.MkdirAll(cleanDst, 0o755); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
-	for _, file := range r.File {
+	for _, file := range files {
+		if err := budget.addEntry(); err != nil {
+			return err
+		}
 		archivePath := filepath.Clean(filepath.FromSlash(file.Name))
 		target := filepath.Join(cleanDst, archivePath)
 		if target == cleanDst {
@@ -534,19 +594,19 @@ func extractZip(src, dst string) (err error) {
 			}
 			return fmt.Errorf("create output file: %w", err)
 		}
-		if _, err := io.Copy(out, rc); err != nil {
+		if err := budget.copy(out, rc); err != nil {
 			closeOutErr := out.Close()
 			closeReadErr := rc.Close()
 			if closeOutErr != nil && closeReadErr != nil {
-				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr), fmt.Errorf("close zip entry: %w", closeReadErr))
+				return errors.Join(wrapExtractError(err), fmt.Errorf("close output file: %w", closeOutErr), fmt.Errorf("close zip entry: %w", closeReadErr))
 			}
 			if closeOutErr != nil {
-				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr))
+				return errors.Join(wrapExtractError(err), fmt.Errorf("close output file: %w", closeOutErr))
 			}
 			if closeReadErr != nil {
-				return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close zip entry: %w", closeReadErr))
+				return errors.Join(wrapExtractError(err), fmt.Errorf("close zip entry: %w", closeReadErr))
 			}
-			return fmt.Errorf("extract file contents: %w", err)
+			return wrapExtractError(err)
 		}
 		if err := out.Close(); err != nil {
 			closeErr := rc.Close()
@@ -563,10 +623,16 @@ func extractZip(src, dst string) (err error) {
 	return nil
 }
 
-func extractZipSingleFile(file *zip.File, dst string) error {
+// extractZipSingleFile extracts a zip holding one file straight to the file dst. Like
+// other single-file outputs it is written through a temporary file and a rename, so
+// it gets mode 0600 and a failure leaves no partial file.
+func extractZipSingleFile(file *zip.File, dst string, budget *extractBudget) (err error) {
 	mode := file.Mode()
 	if mode&os.ModeSymlink != 0 || !mode.IsRegular() {
 		return fmt.Errorf("extract archive: unsupported entry type %q", file.Name)
+	}
+	if err := budget.addEntry(); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -577,39 +643,178 @@ func extractZipSingleFile(file *zip.File, dst string) error {
 	if err != nil {
 		return fmt.Errorf("open zip entry: %w", err)
 	}
+	defer closeWithError(&err, rc, "close zip entry")
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	out, err := createAtomicFile(dst)
 	if err != nil {
-		closeErr := rc.Close()
-		if closeErr != nil {
-			return errors.Join(fmt.Errorf("create output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
-		}
 		return fmt.Errorf("create output file: %w", err)
 	}
+	defer out.Abort()
 
-	if _, err := io.Copy(out, rc); err != nil {
-		closeOutErr := out.Close()
-		closeReadErr := rc.Close()
-		if closeOutErr != nil && closeReadErr != nil {
-			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr), fmt.Errorf("close zip entry: %w", closeReadErr))
-		}
-		if closeOutErr != nil {
-			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close output file: %w", closeOutErr))
-		}
-		if closeReadErr != nil {
-			return errors.Join(fmt.Errorf("extract file contents: %w", err), fmt.Errorf("close zip entry: %w", closeReadErr))
-		}
-		return fmt.Errorf("extract file contents: %w", err)
+	if err := budget.copy(out, rc); err != nil {
+		return wrapExtractError(err)
 	}
-	if err := out.Close(); err != nil {
-		closeErr := rc.Close()
-		if closeErr != nil {
-			return errors.Join(fmt.Errorf("close output file: %w", err), fmt.Errorf("close zip entry: %w", closeErr))
-		}
-		return fmt.Errorf("close output file: %w", err)
+	if err := out.Commit(); err != nil {
+		return fmt.Errorf("finalise output file: %w", err)
 	}
-	if err := rc.Close(); err != nil {
-		return fmt.Errorf("close zip entry: %w", err)
+	return nil
+}
+
+//--------------------------------------------------extraction limits and output-------------------------------------------------------------------------//
+
+// extractBudget tracks one decompression or extraction against its ExtractLimits.
+type extractBudget struct {
+	limits  ExtractLimits
+	written int64
+	entries int
+}
+
+// addEntry counts one archive entry against the entry limit.
+func (b *extractBudget) addEntry() error {
+	b.entries++
+	if b.limits.MaxEntries > 0 && b.entries > b.limits.MaxEntries {
+		return entryLimitError(b.limits.MaxEntries)
+	}
+	return nil
+}
+
+// copy copies r to w and counts the bytes against the size limit. It reads at most
+// one byte beyond the limit, which is how an overrun is detected.
+func (b *extractBudget) copy(w io.Writer, r io.Reader) error {
+	n := int64(math.MaxInt64)
+	if b.limits.MaxBytes > 0 {
+		n = b.limits.MaxBytes - b.written + 1
+	}
+	copied, err := io.CopyN(w, r, n)
+	b.written += copied
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if b.limits.MaxBytes > 0 && b.written > b.limits.MaxBytes {
+		return fmt.Errorf("%w: the output is larger than %s", ErrExtractLimit, formatSize(b.limits.MaxBytes))
+	}
+	return nil
+}
+
+func entryLimitError(limit int) error {
+	return fmt.Errorf("%w: the archive has more than %d entries", ErrExtractLimit, limit)
+}
+
+// wrapExtractError adds context to an error from copying an entry's contents. Limit
+// errors are returned unchanged so their message stays readable.
+func wrapExtractError(err error) error {
+	if errors.Is(err, ErrExtractLimit) {
+		return err
+	}
+	return fmt.Errorf("extract file contents: %w", err)
+}
+
+// formatSize formats n bytes with the largest unit (binary or decimal) that divides it
+// exactly, such as "10 GiB" or "500 MB", and otherwise in bytes.
+func formatSize(n int64) string {
+	units := []struct {
+		name string
+		size int64
+	}{
+		{"TiB", 1 << 40}, {"TB", 1e12}, {"GiB", 1 << 30}, {"GB", 1e9},
+		{"MiB", 1 << 20}, {"MB", 1e6}, {"KiB", 1 << 10}, {"KB", 1e3},
+	}
+	for _, u := range units {
+		if n >= u.size && n%u.size == 0 {
+			return fmt.Sprintf("%d %s", n/u.size, u.name)
+		}
+	}
+	return fmt.Sprintf("%d bytes", n)
+}
+
+// extractToDir runs extract on a new, empty hidden directory next to dst (mode 0700)
+// and renames it to dst when extract succeeds. A failure, including a limit being
+// hit, leaves no partial output. Because extraction always starts from an empty
+// directory, it can't follow symlinks planted in an existing dst (SEC-008). An
+// existing dst, which the CLI allows only with --force, is replaced as a whole, not
+// merged into; that is refused when dst holds the archive src itself.
+func extractToDir(src, dst string, extract func(dir string) error) (err error) {
+	dst = filepath.Clean(dst)
+	if err := checkInputOutsideOutput(src, dst); err != nil {
+		return err
+	}
+	parent := filepath.Dir(dst)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create parent directory: %w", err)
+	}
+	tmp, err := os.MkdirTemp(parent, "."+filepath.Base(dst)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+
+	if err := extract(tmp); err != nil {
+		return err
+	}
+	return replacePath(tmp, dst)
+}
+
+// replacePath renames newPath to dst. An existing dst is first moved aside and is
+// removed only once newPath is in place, so a failed rename leaves it where it was.
+func replacePath(newPath, dst string) error {
+	if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(newPath, dst); err != nil {
+			return fmt.Errorf("move output into place: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("check output path: %w", err)
+	}
+
+	old := newPath + ".old"
+	if err := os.Rename(dst, old); err != nil {
+		return fmt.Errorf("move existing output aside: %w", err)
+	}
+	if err := os.Rename(newPath, dst); err != nil {
+		if restoreErr := os.Rename(old, dst); restoreErr != nil {
+			return errors.Join(fmt.Errorf("move output into place: %w", err),
+				fmt.Errorf("restore previous output from %s: %w", old, restoreErr))
+		}
+		return fmt.Errorf("move output into place: %w", err)
+	}
+	if err := os.RemoveAll(old); err != nil {
+		return fmt.Errorf("output written to %s, but removing the previous version at %s failed: %w", dst, old, err)
+	}
+	return nil
+}
+
+// checkInputOutsideOutput returns ErrInputInsideOutput when dst is an existing
+// directory (not a symlink, which would be replaced rather than followed) that
+// contains src, because replacing dst would delete src.
+func checkInputOutsideOutput(src, dst string) error {
+	info, err := os.Lstat(dst)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check output path: %w", err)
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	realDst, err := filepath.EvalSymlinks(dst)
+	if err != nil {
+		return fmt.Errorf("resolve output path: %w", err)
+	}
+	realSrc, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return fmt.Errorf("resolve input path: %w", err)
+	}
+	inside, err := pathWithin(realDst, realSrc)
+	if err != nil {
+		return err
+	}
+	if inside {
+		return fmt.Errorf("%w: %s", ErrInputInsideOutput, dst)
 	}
 	return nil
 }
@@ -656,22 +861,32 @@ func checkNotSameFile(src, dst string) error {
 
 // checkOutputOutsideDir returns ErrOutputInsideInput when dst lies inside srcDir.
 func checkOutputOutsideDir(srcDir, dst string) error {
-	absSrc, err := filepath.Abs(srcDir)
+	inside, err := pathWithin(srcDir, dst)
 	if err != nil {
-		return fmt.Errorf("resolve input path: %w", err)
+		return err
 	}
-	absDst, err := filepath.Abs(dst)
-	if err != nil {
-		return fmt.Errorf("resolve output path: %w", err)
-	}
-	rel, err := filepath.Rel(absSrc, absDst)
-	if err != nil {
-		return nil // e.g. different Windows volumes: dst cannot be inside srcDir
-	}
-	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if inside {
 		return fmt.Errorf("%w: %s", ErrOutputInsideInput, dst)
 	}
 	return nil
+}
+
+// pathWithin reports whether path is dir itself or lies inside it, comparing
+// absolute paths lexically.
+func pathWithin(dir, path string) (bool, error) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false, fmt.Errorf("resolve path %s: %w", dir, err)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve path %s: %w", path, err)
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false, nil // e.g. different Windows volumes: path cannot be inside dir
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
 // atomicFile is an output written to a hidden temporary file next to its destination
