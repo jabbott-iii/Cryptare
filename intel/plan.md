@@ -28,16 +28,25 @@ Status: **In progress.**
     SEC-006, SEC-008 and SEC-009 are closed;
   - `e512844`: 2.6 (`--password-file` and the `--password` warning);
   - `3d9384e`: 2.7–2.10 and the W11 workflow patch. Phase 2 is complete.
-- **Owner decisions (2026-09-27):** W10 approved; the optional items 2.4a and 2.12
-  are declined.
-- **Delivered, to apply:** W10 (`cryptare-w10-action-updates.patch`), moving all
-  pinned actions to Node.js 24 releases.
+  - `b520b97`: W10, which moves every pinned action to its Node.js 24 release.
+- **Owner decisions (2026-09-27):**
+  - W10 is approved.
+  - The optional items 2.4a and 2.12 are declined.
+  - For 3.1, the owner chose:
+    - Argon2id with 64 MiB, 3 passes and 4 lanes;
+    - to build the versioned header and the chunked streaming (3.2) together;
+    - to write every kind of artifact in the new format: files, folders, stored keys
+      and key exports;
+    - to keep old formats readable with no time limit, and no migration command.
+- **Uncommitted, for review:** 3.1 and 3.2, the version 2 format (`format_v2.go`).
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** Phase 3, starting with the versioned file format (3.1). Its options
-  were laid out on 2026-09-27 and await the owner's choices. Usable stored keys (3.4) depend on the
-  versioned file format (3.1).
+- **Next up:** the rest of Phase 3:
+  - 3.3: shared key flows for the CLI and TUI;
+  - 3.4: usable stored keys. It will use the header's reserved key source, 2, and its
+    options need the owner's choices first;
+  - 3.5 waits on Q-003.
 
 ## Principles
 
@@ -93,7 +102,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | W7 | darwin/amd64 is cross-compiled and not smoke-tested by CD. Its build info is correct (x86-64 Mach-O, CGO on, v1.0.1), but it hasn't been run on an Intel Mac or under Rosetta. | `cd.yml` |
 | W8 | Check the Codecov dashboard: with `fail_ci_if_error: false`, a missing `CODECOV_TOKEN` wouldn't fail CI. | `ci.yml`, repo settings |
 | W9 | The smoke tests pass `ci-smoke`, `release-smoke` and `docker-smoke`, which the password policy (0.5) rejects. `cryptare-password-policy-workflows.patch` lengthens them to `ci-smoke-passphrase`, `release-smoke-passphrase` and `docker-smoke-passphrase` (test-only values, not secrets). **Applied by the owner and committed with the policy change (`b415ffc`).** | `ci.yml`, `cd.yml`, `docker.yml` |
-| W10 | CI annotations on 2026-09-27: several pinned actions target Node.js 20, which GitHub now forces onto Node.js 24; `github/codeql-action` v3 must move to v4 before its December 2026 deprecation; `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Update the pinned SHAs (needs owner approval as a CI change). **Approved and done 2026-09-27:** delivered as `cryptare-w10-action-updates.patch`: checkout v7.0.1, setup-go v7.0.0, upload-artifact v7.0.1, download-artifact v8.0.1, codecov-action v7.1.1, codeql-action v4.38.2 and action-gh-release v3.0.3 (golangci-lint-action v9.3.0 is already on Node.js 24; gosec is a Docker action). Runner labels are unchanged, so `ubuntu-latest` moves to Ubuntu 26 on 2026-10-19 on its own. | `ci.yml`, `cd.yml`, `docker.yml`, `security.yml` |
+| W10 | CI annotations on 2026-09-27: several pinned actions target Node.js 20, which GitHub now forces onto Node.js 24; `github/codeql-action` v3 must move to v4 before its December 2026 deprecation; `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19. Update the pinned SHAs (needs owner approval as a CI change). **Approved and done 2026-09-27:** delivered as `cryptare-w10-action-updates.patch`: checkout v7.0.1, setup-go v7.0.0, upload-artifact v7.0.1, download-artifact v8.0.1, codecov-action v7.1.1, codeql-action v4.38.2 and action-gh-release v3.0.3 (golangci-lint-action v9.3.0 is already on Node.js 24; gosec is a Docker action). Runner labels are unchanged, so `ubuntu-latest` moves to Ubuntu 26 on 2026-10-19 on its own. Committed by the owner as `b520b97`; CI results not yet reported. | `ci.yml`, `cd.yml`, `docker.yml`, `security.yml` |
 | W11 | Switch the CI, CD and Docker smoke tests from `--password` to `--password-file`, so they exercise it and their logs lose the new warning. **Approved and done 2026-09-27:** delivered as `cryptare-w11-password-file-smoke.patch` for the owner to apply (2.6 is in `e512844`). | `ci.yml`, `cd.yml`, `docker.yml` |
 
 ## Phase 1 — Correctness and critical security (small PRs)
@@ -113,7 +122,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 |---|---|---|
 | 2.1 | Extraction size and entry limits, with clean-up on abort. **Done 2026-09-27 (`b415ffc`).** Owner decisions: defaults of 10 GiB of output and 100,000 entries per run; `--max-size` and `--max-entries` on `decompress` and `decrypt` (0 = no limit); the TUI uses the defaults; the limits also apply to encrypted folders; clean-up through a temporary folder (below). | SEC-007 |
 | 2.2 | Extract via `os.Root`; mask archive modes. Also make extraction atomic (extract to a temporary sibling, then rename), which 2.11 left out because extracted files keep the archive's permissions. **Atomic extraction done 2026-09-27 (`b415ffc`, with 2.1):** `extractToDir` extracts into a new hidden 0700 folder and renames it into place, replacing an existing output with `--force` instead of merging into it; a single-file zip goes through a temporary file (0600). This also removes the planted-symlink risk. **`os.Root` and permissions done 2026-09-27 (`d751967`):** entries are written through an `os.Root` on the extraction folder; the owner chose owner-only permissions, so folders are 0700 and files 0600, or 0700 when marked executable. | SEC-008, BUG-014 |
-| 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext). **Done 2026-09-27 (`d683739`):** `buildDirectoryArchive` replaces the temp file; the format is unchanged. | SEC-006 |
+| 2.3 | Build the directory-encryption tar.gz in memory (no temp plaintext). **Done 2026-09-27 (`d683739`):** `buildDirectoryArchive` replaces the temp file; the format is unchanged. Superseded by 3.2 (2026-09-27): the tar.gz now streams into the encrypted output instead of being held in memory. | SEC-006 |
 | 2.4 | Enable SQLite `secure_delete`; align README wording. **Done 2026-09-27 (`d683739`):** `_secure_delete=on` on every connection; README updated. | SEC-009 |
 | 2.4a | Optional: clear keys deleted by older versions with a one-time `VACUUM` when the database has free pages, run with `temp_store=MEMORY` so no copy lands in the temp folder. **Declined by the owner 2026-09-27.** | SEC-009 |
 | 2.5 | Open the DB lazily (keys commands and TUI only); create it with mode 0600. **Done 2026-09-27 (`d683739`):** `NewRootCmdLazy` with a once-only `DatabaseOpener`; `prepareDatabaseFile` creates it 0600, and (owner decision) tightens an existing database to 0600. | SEC-010, BUG-005 |
@@ -129,8 +138,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs |
 |---|---|---|
-| 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2` | SEC-005 |
-| 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1) | BUG-010 |
+| 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2`. **Done 2026-09-27 (uncommitted), with 3.2.** Owner choices: Argon2id at 64 MiB, 3 passes, 4 lanes; header and streaming together; every artifact written in the new format; old formats readable with no time limit, no migration command. What was built: a 46-byte header (`format_v2.go`, layout in `maint.md` §3) on files, folders, stored keys and key exports; read limits on the header's Argon2id settings; legacy reads kept; `deriveKey` on `crypto/pbkdf2`. | SEC-005 |
+| 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27 (uncommitted), with 3.1:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
 | 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
 | 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
 | 3.5 | Per-user default DB path plus migration, if Q-003 = yes | Q-003 |

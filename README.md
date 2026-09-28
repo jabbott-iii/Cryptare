@@ -5,7 +5,7 @@ Cryptare is a terminal tool for encrypting, decrypting, compressing and extracti
 ## Features
 
 - **File Encryption & Decryption**
-  - Encrypt files with AES-256-GCM
+  - Encrypt files of any size with AES-256-GCM, streamed in authenticated chunks, under a key derived from your password with Argon2id
   - Encrypt directories into a single encrypted archive
   - Decrypt previously encrypted files
   - Decrypt encrypted directory archives back into their original tree
@@ -134,6 +134,8 @@ Examples:
 - cryptare encrypt ./secret.txt --output ./secret.txt.enc
 - cryptare encrypt ./project-dir --output ./project-dir-backup.enc
 - cryptare encrypt ./secret.txt --password-file ~/.config/cryptare/pw.txt
+
+File format: encrypted files and folders, stored keys and key exports are written in Cryptare's versioned format. Each password use runs Argon2id with 64 MiB of memory, 3 passes and 4 lanes, so it takes a moment. Files are encrypted and decrypted as a stream, so memory use doesn't grow with file size. This version still reads files, keys and exports made by earlier versions, and there's nothing to convert. Earlier versions, v1.1.0 included, can't read the new format: they report it as a wrong password or corrupted file. The layout is described in [intel/maint.md](intel/maint.md) §3.
 
 ### decrypt
 
@@ -267,6 +269,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
 ```text
 main.go, database_path.go   entry point and CRYPTARE_DB_PATH handling
 internal/crypto.go          AES-256-GCM encryption, key blobs, key export/import
+internal/format_v2.go       versioned format: header, Argon2id, chunked encryption
 internal/compress.go        gzip, tar.gz and zip creation and extraction
 internal/database.go        SQLite key store (GORM)
 internal/logic-cli.go       Cobra commands

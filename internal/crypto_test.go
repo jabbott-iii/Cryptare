@@ -18,6 +18,7 @@ package internal
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,48 +29,45 @@ import (
 	"testing"
 )
 
-// TestDeriveKey tests the deriveKey function for various scenarios including basic derivation, empty password, and Unicode password.
-// It verifies that the derived key has the expected length and is deterministic for the same inputs.
+// TestDeriveKey checks the legacy PBKDF2-HMAC-SHA256 key derivation (100,000
+// iterations) against known answers computed independently (Python's
+// hashlib.pbkdf2_hmac), so that switching to the standard library's crypto/pbkdf2 keeps
+// legacy files readable.
 func TestDeriveKey(t *testing.T) {
 	tests := []struct {
 		name     string
 		password string
 		salt     []byte
-		wantLen  int
+		wantHex  string
 	}{
 		{
 			name:     "basic derivation",
 			password: "testpassword",
 			salt:     []byte("1234567890123456"),
-			wantLen:  32,
+			wantHex:  "31a0d366a7956779e761485eef16ec05c4f89365bea1439eda37f9f8e1a2aa1d",
 		},
 		{
 			name:     "empty password",
 			password: "",
 			salt:     []byte("1234567890123456"),
-			wantLen:  32,
+			wantHex:  "f24f8a7c580566fa4bf907ecadc7aacb1c48992484ec4e7e3e8b06e359b73bbe",
 		},
 		{
 			name:     "unicode password",
 			password: "pässwörd🔐",
 			salt:     []byte("1234567890123456"),
-			wantLen:  32,
+			wantHex:  "ca55a6916bf56a474bd97f2b39e49ae2ff84352f410cf331b4a6240b7d001f71",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := deriveKey(tt.password, tt.salt)
-			if len(key) != tt.wantLen {
-				t.Errorf("deriveKey() length = %d, want %d", len(key), tt.wantLen)
+			key, err := deriveKey(tt.password, tt.salt)
+			if err != nil {
+				t.Fatalf("deriveKey() error = %v", err)
 			}
-			// Keys should be deterministic
-			key2 := deriveKey(tt.password, tt.salt)
-			for i, b := range key {
-				if key2[i] != b {
-					t.Errorf("deriveKey() not deterministic at byte %d", i)
-					return
-				}
+			if got := hex.EncodeToString(key); got != tt.wantHex {
+				t.Errorf("deriveKey() = %s, want %s", got, tt.wantHex)
 			}
 		})
 	}
@@ -555,9 +553,7 @@ func TestDecryptAcceptsLegacyEmptyPassword(t *testing.T) {
 		t.Fatalf("write inner file: %v", err)
 	}
 	dirArtifact := filepath.Join(tmpDir, "legacy-dir.enc")
-	if err := encryptDirectory(srcDir, dirArtifact, ""); err != nil {
-		t.Fatalf("encryptDirectory: %v", err)
-	}
+	encryptLegacyDirectory(t, srcDir, dirArtifact, "")
 	restored := filepath.Join(tmpDir, "restored")
 	if err := DecryptFile(dirArtifact, restored, ""); err != nil {
 		t.Fatalf("DecryptFile(legacy directory) error = %v", err)
@@ -788,11 +784,11 @@ func writeTestExport(t *testing.T, path string, export KeyExport) {
 	if err != nil {
 		t.Fatalf("marshal export: %v", err)
 	}
-	blob, err := EncryptKeyBlob(raw, testPassword)
+	sealed, err := sealV2(raw, testPassword, contentKeyExport)
 	if err != nil {
 		t.Fatalf("encrypt export: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(sealed)), 0o600); err != nil {
 		t.Fatalf("write export: %v", err)
 	}
 }

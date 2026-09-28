@@ -85,7 +85,7 @@ These apply to all changes.
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | In Progress |
-| SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Open |
+| SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | In Progress |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Closed |
 | SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Closed |
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Closed |
@@ -305,7 +305,56 @@ These apply to all changes.
 
 ### SEC-005 — KDF work factor below current guidance; formats unversioned
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-09-27, uncommitted; plans 3.1 and 3.2):** all four remediation steps
+  are implemented and validated. Owner decisions: Argon2id with 64 MiB, 3 passes and
+  4 lanes (RFC 9106's second recommended setting, above OWASP's minimum of 19 MiB, 2
+  passes, 1 lane); the header and chunked streaming built together; every kind of
+  artifact moves to the new format; old formats stay readable with no migration
+  command.
+  - The new `internal/format_v2.go` writes a 46-byte header (magic, version, content
+    type, key source, KDF, Argon2id memory, passes and lanes, salt, chunk size, nonce
+    prefix), then AES-256-GCM chunks of 64 KiB in the STREAM construction. The whole
+    header is each chunk's additional data. The layout is in `maint.md` §3.
+  - `EncryptFile` (files and folders), `EncryptKeyBlob` and `ExportKeyToFile` write
+    only version 2. `DecryptFile`, `DecryptKeyBlob` and `ImportKeyFromFile` read
+    version 2 and, for anything without the version 2 magic, the legacy layouts.
+  - Hostile headers: settings above 1 GiB of memory, 10 passes or 16 lanes, unknown
+    versions, content types, key sources and KDFs, and odd chunk sizes are refused
+    before any key derivation. A file asking for 4 GiB fails at once.
+  - The content type is authenticated, so a key export can't be decrypted as a file
+    or a stored key imported as an export.
+  - `deriveKey` (legacy only) uses the standard library's `crypto/pbkdf2`, which
+    returns an error where the frozen `x/crypto/pbkdf2` wrapper panicked.
+  - Tests:
+    - `TestEncryptWritesVersion2Format` fails against the previous code: the file,
+      folder, stored key (76 bytes) and export (250 bytes) all lacked the header.
+    - `TestDefaultPasswordKDFIsWritten` checks the 64 MiB / 3 / 4 default.
+    - `TestStreamRejectsTampering`: 12 kinds of tampering on a file and a folder, all
+      refused with nothing written.
+    - `TestDecryptRejectsUnsupportedHeaders` (12 header cases) and
+      `TestDecryptRejectsWrongContentType`.
+    - `TestDeriveKey` now checks PBKDF2 known answers computed with Python's
+      `hashlib`.
+    - Every legacy test still passes.
+  - KDF cost, measured on the 2-vCPU validation VM:
+    - Argon2id at 64 MiB, 3 passes, 4 lanes: about 0.12 s per derivation, 64 MiB of
+      memory;
+    - the legacy PBKDF2 at 100,000 iterations: about 0.02 s.
+
+    A small `encrypt` now takes 0.24 s instead of 0.03 s.
+  - Real binaries:
+    - the previous build's file, folder, stored key and `.ckey` all read correctly
+      with the new build;
+    - version 2 output from the new build is refused by the previous build with the
+      generic error, and nothing is written.
+  - Not covered:
+    - existing `.enc` files, database rows and `.ckey` files keep their 100,000-
+      iteration PBKDF2 protection until they are re-encrypted or re-exported. By the
+      owner's choice there is no migration command;
+    - a legacy file whose random salt happens to begin with the 9-byte magic
+      (probability 2^-72) would be read as version 2 and fail.
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/crypto.go` `deriveKey` (PBKDF2-HMAC-SHA256,
   `pbkdf2Iter = 100_000`) and every format in `maint.md` §3.
 - **Risk:** The OWASP Password Storage Cheat Sheet recommends at least 600,000
@@ -345,6 +394,9 @@ These apply to all changes.
     finishes, as before. Go can't reliably wipe it. Streaming, chunked encryption
     (plan 3.2, with SEC-005) would limit this.
   - Committed in `d683739`; CI passed on `a5edc91` (after a test-only Windows fix); closed 2026-09-27.
+  - Follow-up (2026-09-27, uncommitted; plan 3.2): directory encryption now streams
+    the tar.gz straight into the chunked version 2 format (SEC-005), so the whole
+    archive is no longer held in memory; only the current 64 KiB chunk is.
 - **Affected component:** `internal/crypto.go` `createDirectoryArchiveTempFile`
   (`os.CreateTemp("", "cryptare-dir-*.tar.gz")`) and `encryptDirectory`.
 - **Risk:**
@@ -578,7 +630,9 @@ These apply to all changes.
       `newKeyID` makes);
     - algorithm `AES-256-GCM`;
     - an encrypted key that decodes from base64 to exactly 76 bytes (salt, nonce, a
-      32-byte key and the GCM tag).
+      32-byte key and the GCM tag). Since plan 3.1 (2026-09-27, uncommitted) a
+      version 2 stored key is accepted too: 94 bytes, whose header must pass the
+      format checks and name a stored key (`validStoredKeyBlob`).
 
     Anything else returns `ErrInvalidKeyExport`, and rejected values are quoted with
     `%q`, so control characters are escaped rather than printed.
@@ -620,6 +674,7 @@ These apply to all changes.
     its runtime and for the inputs the workflows pass.
   - The upgrade takes CodeQL to v4, ahead of v3's deprecation in December 2026.
   - Remaining, as before: step 3 (triage in Code Scanning) and step 5 (govulncheck).
+  - The owner committed the patch as `b520b97`; its CI results are not yet reported.
 - **Progress (2026-09-24):** Staged, uncommitted workflow changes cover remediation
   steps 1, 2 and 4, and were verified:
   - all 9 third-party actions are pinned to full commit SHAs, each matching its release

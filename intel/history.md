@@ -705,3 +705,53 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   - actionlint is clean, and the patch applies to the workflows on the owner's
     machine;
   - the workflows themselves weren't run: that needs a push.
+
+## 2026-09-27 — Version 2 format: Argon2id and streaming encryption (plans 3.1 and 3.2)
+
+- The owner committed W10 as `b520b97`.
+- **Decisions** for plan 3.1:
+  - Argon2id with 64 MiB, 3 passes and 4 lanes;
+  - the versioned header and chunked streaming (3.2) built together;
+  - every kind of artifact written in the new format;
+  - old formats readable with no time limit, and no migration command.
+- **Format** (new `internal/format_v2.go`; layout in `maint.md` §3):
+  - a 46-byte header: magic `CRYPTARE\0`, version 2, content type, key source (2 is
+    reserved for plan 3.4), KDF, Argon2id settings, salt, chunk size and nonce prefix;
+  - the data follows in 64 KiB AES-256-GCM chunks (STREAM construction: counter and
+    last-chunk flag in the nonce, the header as additional data).
+- **What writes it:** `EncryptFile` for files and folders (a folder's tar.gz streams
+  straight in), `EncryptKeyBlob` and `ExportKeyToFile`.
+- **What reads it:** `DecryptFile`, `DecryptKeyBlob` and `ImportKeyFromFile` read both
+  versions, and release output only after the final chunk authenticates.
+- **Limits:** header settings above 1 GiB, 10 passes or 16 lanes are refused before
+  any key derivation.
+- **Library:** `deriveKey`, now used only for legacy data, moves to the standard
+  library's `crypto/pbkdf2`. `x/crypto` is kept for `argon2`, so `go.mod` is unchanged.
+- **Code removed:** `encryptBytes`, `encryptBytesWithAAD` and `buildDirectoryArchive`
+  leave production code. Test-only copies of the legacy writers are in
+  `legacy_fixtures_test.go`, whose `TestMain` lowers Argon2id for speed.
+- **Why:** SEC-005 (the KDF was below guidance and the formats had no version) and
+  BUG-010 (whole files were held in memory).
+- **Tests added:**
+  - `TestEncryptWritesVersion2Format`, which failed against the previous code for all
+    four artifact kinds;
+  - `TestDefaultPasswordKDFIsWritten`, `TestStreamRoundTripSizes` and
+    `TestStreamRejectsTampering` (12 kinds of tampering, file and folder);
+  - `TestDecryptRejectsUnsupportedHeaders` and `TestDecryptRejectsWrongContentType`;
+  - `TestDeriveKey` now checks PBKDF2 known answers.
+- **Validation** (Go 1.26.8, linux/amd64):
+  - `gofmt -s`, `go mod tidy` (no diff), `go vet` (native plus four other targets)
+    and golangci-lint v2.13.2 are clean;
+  - `go test -race ./...` passes, with 75.4% coverage of `internal`; both packages
+    also pass as a non-root user;
+  - gosec: the same 10 findings as before;
+  - the pseudo-terminal password checks pass 7 of 7, and the extraction-limit checks
+    10 of 10.
+  - On real binaries:
+    - a 1 GiB file peaked at 77 MiB with the new build, against 3,088 MiB (encrypt)
+      and 2,063 MiB (decrypt) with the previous one;
+    - the previous build's file, folder, stored key and `.ckey` read correctly with
+      the new build;
+    - the previous build refuses version 2 data with the generic error;
+    - the static Linux release build passes the CD smoke steps.
+- Left uncommitted for the owner's review.

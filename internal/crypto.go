@@ -17,10 +17,12 @@ limitations under the License.
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -33,8 +35,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -72,9 +72,14 @@ var (
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
-// deriveKey derives a 32-byte AES key from a password and salt using PBKDF2-SHA256.
-func deriveKey(password string, salt []byte) []byte {
-	return pbkdf2.Key([]byte(password), salt, pbkdf2Iter, keyLen, sha256.New)
+// deriveKey derives the 32-byte AES key of the legacy (version 1) formats from a
+// password and salt with PBKDF2-HMAC-SHA256. New data uses Argon2id (format_v2.go).
+func deriveKey(password string, salt []byte) ([]byte, error) {
+	key, err := pbkdf2.Key(sha256.New, password, salt, pbkdf2Iter, keyLen)
+	if err != nil {
+		return nil, fmt.Errorf("derive key: %w", err)
+	}
+	return key, nil
 }
 
 // CheckPasswordPolicy reports whether password may protect new data: encrypted files
@@ -101,10 +106,12 @@ func CheckPasswordPolicy(password string) error {
 	return nil
 }
 
-// EncryptFile encrypts src with AES-256-GCM using password, writing to dst.
-// If dst is empty, the output path is src + ".enc". The password must meet the
-// password policy (CheckPasswordPolicy).
-func EncryptFile(src, dst, password string) error {
+// EncryptFile encrypts src with AES-256-GCM using password, writing to dst in the
+// version 2 format (format_v2.go): a folder is written as a tar.gz, and either is
+// streamed in authenticated chunks, so its size isn't limited by memory. If dst is
+// empty, the output path is src + ".enc". The password must meet the password policy
+// (CheckPasswordPolicy).
+func EncryptFile(src, dst, password string) (err error) {
 	if err := CheckPasswordPolicy(password); err != nil {
 		return err
 	}
@@ -129,22 +136,70 @@ func EncryptFile(src, dst, password string) error {
 		return err
 	}
 
-	if statInfo.IsDir() {
-		return encryptDirectory(src, dst, password)
-	}
-
-	plaintext, err := os.ReadFile(src)
+	out, err := createAtomicFile(dst)
 	if err != nil {
-		return fmt.Errorf("read source file: %w", err)
+		return fmt.Errorf("create output file: %w", err)
 	}
+	defer out.Abort()
 
-	ciphertext, err := encryptBytes(plaintext, password)
+	if statInfo.IsDir() {
+		err = encryptDirectory(out, src, password)
+	} else {
+		err = encryptSingleFile(out, src, password)
+	}
 	if err != nil {
 		return err
 	}
+	if err := out.Commit(); err != nil {
+		return fmt.Errorf("finalise output file: %w", err)
+	}
+	return nil
+}
 
-	if err := writeFileAtomic(dst, ciphertext); err != nil {
-		return fmt.Errorf("write output file: %w", err)
+// encryptSingleFile streams the file at src, encrypted, to w.
+func encryptSingleFile(w io.Writer, src, password string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
+	defer closeWithError(&err, in, "close source file")
+
+	enc, err := newEncryptingWriter(w, password, contentFile)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(enc, in); err != nil {
+		return fmt.Errorf("encrypt data: %w", err)
+	}
+	return enc.Close()
+}
+
+// encryptDirectory streams a tar.gz of the directory tree at src, encrypted, to w. The
+// archive is never held in memory or written anywhere in plaintext (SEC-006).
+func encryptDirectory(w io.Writer, src, password string) error {
+	enc, err := newEncryptingWriter(w, password, contentFolder)
+	if err != nil {
+		return err
+	}
+	if err := writeDirectoryArchive(enc, src); err != nil {
+		return err
+	}
+	return enc.Close()
+}
+
+// writeDirectoryArchive writes a tar.gz of the directory tree at src to w.
+func writeDirectoryArchive(w io.Writer, src string) error {
+	gz, err := gzip.NewWriterLevel(w, gzip.DefaultCompression)
+	if err != nil {
+		return fmt.Errorf("create gzip writer: %w", err)
+	}
+	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
+
+	if _, err := writeTarGz(gz, src); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return fmt.Errorf("finalise gzip: %w", err)
 	}
 	return nil
 }
@@ -160,11 +215,15 @@ func DecryptFile(src, dst, password string) error {
 // encrypted directory, which is extracted like an archive (see
 // DecompressFileWithLimits). Single files are not affected: their plaintext is
 // never larger than the encrypted file.
-func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) error {
-	data, err := os.ReadFile(src)
+//
+// Version 2 files are decrypted as a stream. Files in the legacy (version 1) formats,
+// which have no header, are still read, whole, as before.
+func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) (err error) {
+	f, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("read source file: %w", err)
+		return fmt.Errorf("open source file: %w", err)
 	}
+	defer func() { _ = f.Close() }() // read-only: a close error can't lose data
 
 	if dst == "" {
 		dst = defaultDecryptOutput(src)
@@ -173,65 +232,64 @@ func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) erro
 		return err
 	}
 
+	r := bufio.NewReader(f)
+	prefix, _ := r.Peek(len(directoryArtifactMagicV1)) // shorter at the end of a small file
+	if isV2(prefix) {
+		h, plain, err := newDecryptingReader(r, password, contentFile, contentFolder)
+		if err != nil {
+			return err
+		}
+		if h.content == contentFolder {
+			return restoreDirectoryArchive(plain, src, dst, limits)
+		}
+		return writeStreamAtomic(dst, plain)
+	}
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read source file: %w", err)
+	}
 	if bytes.HasPrefix(data, []byte(directoryArtifactMagicV1)) {
 		archive, err := decryptBytesWithAAD(data[len(directoryArtifactMagicV1):], password, []byte(directoryArtifactMagicV1))
 		if err != nil {
 			return err
 		}
-		return restoreDirectoryArchive(archive, src, dst, limits)
+		return restoreDirectoryArchive(bytes.NewReader(archive), src, dst, limits)
 	}
 
 	plaintext, err := decryptBytes(data, password)
 	if err != nil {
 		return err
 	}
-
 	if err := writeFileAtomic(dst, plaintext); err != nil {
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
 }
 
-func encryptBytes(plaintext []byte, password string) ([]byte, error) {
-	return encryptBytesWithAAD(plaintext, password, nil)
-}
-
-func encryptBytesWithAAD(plaintext []byte, password string, aad []byte) ([]byte, error) {
-	salt := make([]byte, saltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("generate salt: %w", err)
-	}
-
-	iv := make([]byte, ivLen)
-	if _, err := rand.Read(iv); err != nil {
-		return nil, fmt.Errorf("generate iv: %w", err)
-	}
-
-	key := deriveKey(password, salt)
-	block, err := aes.NewCipher(key)
+// writeStreamAtomic copies r to dst through a temporary file, so dst appears only if
+// the whole stream was read without error.
+func writeStreamAtomic(dst string, r io.Reader) error {
+	out, err := createAtomicFile(dst)
 	if err != nil {
-		return nil, fmt.Errorf("create cipher: %w", err)
+		return fmt.Errorf("create output file: %w", err)
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("create GCM: %w", err)
+	defer out.Abort()
+	if _, err := io.Copy(out, r); err != nil {
+		return err
 	}
-
-	ciphertext := gcm.Seal(nil, iv, plaintext, aad)
-
-	// Layout: [salt (16)] [iv (12)] [ciphertext]
-	out := make([]byte, 0, saltLen+ivLen+len(ciphertext))
-	out = append(out, salt...)
-	out = append(out, iv...)
-	out = append(out, ciphertext...)
-	return out, nil
+	if err := out.Commit(); err != nil {
+		return fmt.Errorf("finalise output file: %w", err)
+	}
+	return nil
 }
 
 func decryptBytes(data []byte, password string) ([]byte, error) {
 	return decryptBytesWithAAD(data, password, nil)
 }
 
+// decryptBytesWithAAD decrypts the legacy (version 1) layout: salt ‖ nonce ‖ ciphertext,
+// with a PBKDF2 key.
 func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, error) {
 	if len(data) < saltLen+ivLen {
 		return nil, errors.New("file too small to be a valid encrypted file")
@@ -241,7 +299,10 @@ func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, erro
 	iv := data[saltLen : saltLen+ivLen]
 	ciphertext := data[saltLen+ivLen:]
 
-	key := deriveKey(password, salt)
+	key, err := deriveKey(password, salt)
+	if err != nil {
+		return nil, err
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)
@@ -254,63 +315,20 @@ func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, erro
 
 	plaintext, err := gcm.Open(nil, iv, ciphertext, aad)
 	if err != nil {
-		return nil, errors.New("decryption failed: wrong password or corrupted file")
+		return nil, errDecrypt
 	}
 	return plaintext, nil
 }
 
-func encryptDirectory(src, dst, password string) error {
-	plaintext, err := buildDirectoryArchive(src)
-	if err != nil {
-		return err
-	}
-
-	ciphertext, err := encryptBytesWithAAD(plaintext, password, []byte(directoryArtifactMagicV1))
-	if err != nil {
-		return err
-	}
-
-	payload := make([]byte, 0, len(directoryArtifactMagicV1)+len(ciphertext))
-	payload = append(payload, directoryArtifactMagicV1...)
-	payload = append(payload, ciphertext...)
-	if err := writeFileAtomic(dst, payload); err != nil {
-		return fmt.Errorf("write output file: %w", err)
-	}
-	return nil
-}
-
-// buildDirectoryArchive returns a tar.gz of the directory tree at src. It is built in
-// memory, so no plaintext copy of the directory is written to disk (SEC-006); the
-// whole archive has to be in memory for encryption anyway.
-func buildDirectoryArchive(src string) ([]byte, error) {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return nil, fmt.Errorf("lstat source path: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("encrypt directory: symlinks are not supported (%s)", src)
-	}
-
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
-	if err != nil {
-		return nil, fmt.Errorf("create gzip writer: %w", err)
-	}
-	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
-
-	if _, err := writeTarGz(gz, src); err != nil {
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("finalise gzip: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
 // restoreDirectoryArchive extracts the decrypted tar.gz of an encrypted directory
-// (read from src) into dst, through extractToDir and within limits.
-func restoreDirectoryArchive(archive []byte, src, dst string, limits ExtractLimits) (err error) {
-	gz, err := gzip.NewReader(bytes.NewReader(archive))
+// (read from src) into dst, through extractToDir and within limits. Whatever follows
+// the archive in r is read too before the output is kept, so that a version 2 stream
+// is authenticated to its final chunk.
+func restoreDirectoryArchive(r io.Reader, src, dst string, limits ExtractLimits) (err error) {
+	gz, err := gzip.NewReader(r)
+	if errors.Is(err, errDecrypt) {
+		return err // a wrong password shows at the first chunk
+	}
 	if err != nil {
 		return fmt.Errorf("read decrypted directory archive: %w", err)
 	}
@@ -318,7 +336,13 @@ func restoreDirectoryArchive(archive []byte, src, dst string, limits ExtractLimi
 
 	budget := &extractBudget{limits: limits}
 	return extractToDir(src, dst, func(dir string) error {
-		return extractTarGz(gz, dir, budget)
+		if err := extractTarGz(gz, dir, budget); err != nil {
+			return err
+		}
+		if _, err := io.Copy(io.Discard, r); err != nil {
+			return err
+		}
+		return nil
 	})
 }
 
@@ -333,76 +357,51 @@ func GenerateKey() ([]byte, error) {
 	return key, nil
 }
 
-// EncryptKeyBlob encrypts rawKey with masterPassword and returns a base64 blob.
-// masterPassword must meet the password policy (CheckPasswordPolicy).
+// EncryptKeyBlob encrypts rawKey with masterPassword and returns a base64 blob in the
+// version 2 format (content type stored key). masterPassword must meet the password
+// policy (CheckPasswordPolicy).
 func EncryptKeyBlob(rawKey []byte, masterPassword string) (string, error) {
 	if err := CheckPasswordPolicy(masterPassword); err != nil {
 		return "", err
 	}
-
-	salt := make([]byte, saltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("generate salt: %w", err)
-	}
-
-	iv := make([]byte, ivLen)
-	if _, err := rand.Read(iv); err != nil {
-		return "", fmt.Errorf("generate iv: %w", err)
-	}
-
-	key := deriveKey(masterPassword, salt)
-	block, err := aes.NewCipher(key)
+	sealed, err := sealV2(rawKey, masterPassword, contentStoredKey)
 	if err != nil {
-		return "", fmt.Errorf("create cipher: %w", err)
+		return "", err
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("create GCM: %w", err)
-	}
-
-	ct := gcm.Seal(nil, iv, rawKey, nil)
-
-	out := make([]byte, 0, saltLen+ivLen+len(ct))
-	out = append(out, salt...)
-	out = append(out, iv...)
-	out = append(out, ct...)
-
-	return base64.StdEncoding.EncodeToString(out), nil
+	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
-// DecryptKeyBlob decrypts a base64 blob previously produced by EncryptKeyBlob.
+// DecryptKeyBlob decrypts a base64 blob produced by EncryptKeyBlob, in the version 2 or
+// the legacy format.
 func DecryptKeyBlob(blob, masterPassword string) ([]byte, error) {
 	data, err := base64.StdEncoding.DecodeString(blob)
 	if err != nil {
 		return nil, fmt.Errorf("decode blob: %w", err)
 	}
+	return openKeyData(data, masterPassword, contentStoredKey)
+}
 
-	if len(data) < saltLen+ivLen {
+// openKeyData decrypts a decoded stored key or key export with masterPassword: version
+// 2 data must hold content, and data without a version 2 header is read in the legacy
+// format.
+func openKeyData(data []byte, masterPassword string, content byte) ([]byte, error) {
+	var plaintext []byte
+	var err error
+	switch {
+	case isV2(data):
+		plaintext, err = openV2(data, masterPassword, content)
+	case len(data) < saltLen+ivLen:
 		return nil, errors.New("blob too small")
+	default:
+		plaintext, err = decryptBytes(data, masterPassword)
 	}
-
-	salt := data[:saltLen]
-	iv := data[saltLen : saltLen+ivLen]
-	ct := data[saltLen+ivLen:]
-
-	key := deriveKey(masterPassword, salt)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("create GCM: %w", err)
-	}
-
-	rawKey, err := gcm.Open(nil, iv, ct, nil)
-	if err != nil {
+	if errors.Is(err, errDecrypt) {
 		return nil, errors.New("decryption failed: wrong master password or corrupted blob")
 	}
-
-	return rawKey, nil
+	if err != nil {
+		return nil, err
+	}
+	return plaintext, nil
 }
 
 //--------------------------------------------------key export/import------------------------------------------------------------------------------------//
@@ -417,8 +416,12 @@ type KeyExport struct {
 }
 
 // ExportKeyToFile writes an encrypted key export to the path using masterPassword,
-// which must meet the password policy (CheckPasswordPolicy).
+// which must meet the password policy (CheckPasswordPolicy). The file is the base64
+// text of version 2 data (content type key export).
 func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
+	if err := CheckPasswordPolicy(masterPassword); err != nil {
+		return fmt.Errorf("encrypt export: %w", err)
+	}
 	export := KeyExport{
 		Version:       1,
 		KeyID:         km.KeyID,
@@ -432,10 +435,11 @@ func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
 		return fmt.Errorf("marshal export: %w", err)
 	}
 
-	blob, err := EncryptKeyBlob(raw, masterPassword)
+	sealed, err := sealV2(raw, masterPassword, contentKeyExport)
 	if err != nil {
 		return fmt.Errorf("encrypt export: %w", err)
 	}
+	blob := base64.StdEncoding.EncodeToString(sealed)
 
 	if path == "" {
 		path = defaultExportPath(km.KeyID)
@@ -466,14 +470,19 @@ func defaultDecryptOutput(src string) string {
 	return src + ".dec"
 }
 
-// ImportKeyFromFile reads an export file and returns a KeyModel (not yet persisted).
+// ImportKeyFromFile reads an export file, in the version 2 or the legacy format, and
+// returns a KeyModel (not yet persisted).
 func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read export file: %w", err)
 	}
+	data, err := base64.StdEncoding.DecodeString(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("decrypt export file: decode blob: %w", err)
+	}
 
-	plaintext, err := DecryptKeyBlob(string(raw), masterPassword)
+	plaintext, err := openKeyData(data, masterPassword, contentKeyExport)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt export file: %w", err)
 	}
@@ -499,16 +508,19 @@ const (
 	keyExportVersion = 1
 	keyAlgorithm     = "AES-256-GCM"
 	keyIDLen         = 16 // hex characters, from newKeyID
-	gcmTagLen        = 16
-	// storedKeyBlobLen is the decoded size of a stored key blob from EncryptKeyBlob:
-	// salt, nonce, and the 32-byte key sealed with a GCM tag.
-	storedKeyBlobLen = saltLen + ivLen + keyLen + gcmTagLen
+	// legacyStoredKeyBlobLen is the decoded size of a legacy stored key blob: salt,
+	// nonce, and the 32-byte key sealed with a GCM tag.
+	legacyStoredKeyBlobLen = saltLen + ivLen + keyLen + gcmTagLen
+	// v2StoredKeyBlobLen is the decoded size of a version 2 stored key blob: the header
+	// and one final chunk holding the 32-byte key.
+	v2StoredKeyBlobLen = v2HeaderLen + keyLen + gcmTagLen
 )
 
 // validateKeyExport checks an imported export's fields before they are stored and
 // shown by keys list and the TUI (SEC-011): the version must be 1, the key ID 16
 // lower-case hex characters as newKeyID makes, the algorithm AES-256-GCM, and the
-// encrypted key a base64 blob of the size EncryptKeyBlob produces. Rejected values
+// encrypted key a base64 blob shaped like one EncryptKeyBlob produces, in the legacy
+// or the version 2 format (validStoredKeyBlob). Rejected values
 // are quoted with %q, so control characters in them are escaped, not printed.
 func validateKeyExport(e KeyExport) error {
 	if e.Version != keyExportVersion {
@@ -521,10 +533,21 @@ func validateKeyExport(e KeyExport) error {
 		return fmt.Errorf("%w: unsupported algorithm %q", ErrInvalidKeyExport, e.Algorithm)
 	}
 	blob, err := base64.StdEncoding.DecodeString(e.EncryptedBlob)
-	if err != nil || len(blob) != storedKeyBlobLen {
+	if err != nil || !validStoredKeyBlob(blob) {
 		return fmt.Errorf("%w: the encrypted key is malformed", ErrInvalidKeyExport)
 	}
 	return nil
+}
+
+// validStoredKeyBlob reports whether blob has the shape of a stored key: a legacy blob
+// of the legacy size, or a version 2 stored-key blob, whose header passes
+// parseV2Header's checks, with exactly one chunk holding a 32-byte key.
+func validStoredKeyBlob(blob []byte) bool {
+	if !isV2(blob) {
+		return len(blob) == legacyStoredKeyBlobLen
+	}
+	h, err := parseV2Header(blob)
+	return err == nil && h.content == contentStoredKey && len(blob) == v2StoredKeyBlobLen
 }
 
 // isKeyID reports whether s has the format of a generated key ID.

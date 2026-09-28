@@ -53,18 +53,71 @@ Rules:
 
 ## 3. On-disk formats (compatibility contract)
 
-Existing artifacts must stay readable. Changing any format below requires a versioned
-header, a legacy read path, and tests covering both.
+Existing artifacts must stay readable. Everything new is written in the version 2 format
+below (plan 3.1/3.2). The version 1 (legacy) layouts are read-only and stay readable
+with no time limit; there is no migration command (owner decision, 2026-09-27). Any
+further change needs a new format version or content type, a read path for everything
+already written, and tests covering both.
 
-| Artifact | Layout | Notes |
+**Version 2** (`internal/format_v2.go`). Every artifact starts with a 46-byte header:
+
+| Offset | Size | Field |
 |---|---|---|
-| Encrypted file (`.enc`) | `salt(16) ‖ nonce(12) ‖ AES-256-GCM ciphertext+tag` | Key = PBKDF2-HMAC-SHA256(password, salt, 100,000 iterations, 32 bytes). No header, version or AAD. |
-| Encrypted directory (`.enc`) | `"CRYPTARE-DIR-ENC\x00" ‖ salt ‖ nonce ‖ ciphertext+tag` | Plaintext is a tar.gz of the tree. The magic string is also the GCM AAD, so a stripped magic can't be decrypted as a single file. |
-| Stored key (`key_models.encrypted_blob`) | base64(`salt ‖ nonce ‖ GCM(32-byte raw key)`) | Encrypted with the master password using the same KDF. |
-| Key export (`.ckey`) | base64(`salt ‖ nonce ‖ GCM(JSON KeyExport{version:1,…})`) | The JSON carries the already-encrypted stored blob; the outer layer uses the export password. Import accepts only version 1, a 16-character lower-case hex key ID, `AES-256-GCM`, and a 76-byte blob (`validateKeyExport`, SEC-011). |
-| Compressed output | `.gz` (single file, gzip header `Name` set), `.tar.gz` (directory), `.zip` | Archive entries use forward-slash relative paths. Symlinks and special files are rejected. |
+| 0 | 9 | magic `"CRYPTARE\x00"` (a legacy folder artifact has `-` at offset 8) |
+| 9 | 1 | format version, `2` |
+| 10 | 1 | content type: `1` file, `2` folder (tar.gz), `3` stored key, `4` key export |
+| 11 | 1 | key source: `1` password (`2` is reserved for stored keys, plan 3.4) |
+| 12 | 1 | KDF: `1` Argon2id |
+| 13 | 4 | Argon2id memory in KiB, big-endian (default 65,536 = 64 MiB) |
+| 17 | 4 | Argon2id passes, big-endian (default 3) |
+| 21 | 1 | Argon2id lanes (default 4) |
+| 22 | 16 | random salt |
+| 38 | 1 | chunk size as a power of two (default 16 = 64 KiB) |
+| 39 | 7 | random nonce prefix |
 
-`TestDecryptLegacyEncryptedFile` guards the single-file format; keep it passing.
+- **Key:** Argon2id(password, salt, the header's settings), 32 bytes, for AES-256-GCM.
+- **Body:** the plaintext in chunks of the chunk size, each sealed with its own 16-byte
+  tag. The last chunk may be shorter or empty; data that ends on a chunk boundary ends
+  with a full last chunk. A chunk's nonce is the prefix, a 4-byte big-endian chunk
+  counter and a byte that is `1` for the last chunk and `0` otherwise. Its additional
+  data is the whole header. So reordering, dropping, truncating or appending chunks,
+  or changing any header byte (including the content type), fails authentication.
+- **Limits on reading:** a header asking for more than 1 GiB of memory, 1–10 passes,
+  1–16 lanes (and at least 8 KiB per lane) or a chunk size outside 2^10–2^24 is refused
+  before any key derivation (`errUnsupportedFormat`), as are unknown versions, content
+  types, key sources and KDFs.
+- **Output:** a file or folder is released only after its last chunk authenticates:
+  decrypted files go through a temporary file and folders through `extractToDir`.
+
+| Artifact | Version 2 (written) | Version 1 (legacy, read-only) |
+|---|---|---|
+| Encrypted file (`.enc`) | header (type 1) ‖ chunks of the file | `salt(16) ‖ nonce(12) ‖ AES-256-GCM ciphertext+tag`. Key = PBKDF2-HMAC-SHA256(password, salt, 100,000 iterations, 32 bytes). No header, version or AAD. |
+| Encrypted directory (`.enc`) | header (type 2) ‖ chunks of a tar.gz of the tree, streamed as it is built | `"CRYPTARE-DIR-ENC\x00" ‖ salt ‖ nonce ‖ ciphertext+tag` with the PBKDF2 key. Plaintext is a tar.gz of the tree. The magic string is also the GCM AAD, so a stripped magic can't be decrypted as a single file. |
+| Stored key (`key_models.encrypted_blob`) | base64(header (type 3) ‖ one chunk holding the 32-byte key): 94 bytes decoded | base64(`salt ‖ nonce ‖ GCM(32-byte raw key)`): 76 bytes, PBKDF2 key from the master password. Existing rows keep this format. |
+| Key export (`.ckey`) | base64(header (type 4) ‖ chunks of the JSON `KeyExport{version:1,…}`) | base64(`salt ‖ nonce ‖ GCM(JSON KeyExport{version:1,…})`), PBKDF2 key. |
+| Compressed output | `.gz` (single file, gzip header `Name` set), `.tar.gz` (directory), `.zip` | (unversioned; unchanged) |
+
+- The export's JSON carries the stored blob as it is in the database (either format);
+  the outer layer uses the export password. Import accepts only version 1, a
+  16-character lower-case hex key ID, `AES-256-GCM`, and a stored blob that is either
+  76 bytes (legacy) or a 94-byte version 2 stored key whose header passes the checks
+  above (`validateKeyExport`, `validStoredKeyBlob`; SEC-011).
+- Readers tell the versions apart by the magic: data starting with `"CRYPTARE\x00"` is
+  version 2, anything else is read as version 1. A legacy file whose random salt starts
+  with those 9 bytes (probability 2^-72) would be misread.
+- Compressed output archive entries use forward-slash relative paths. Symlinks and
+  special files are rejected.
+- Builds from before this change, v1.1.0 included, can't read version 2 data: they take
+  it for a legacy file and report the usual "wrong password or corrupted" error.
+
+Tests that guard this contract; keep them passing:
+- legacy reads: `TestDecryptLegacyEncryptedFile`, `TestDecryptAcceptsLegacyEmptyPassword`,
+  `TestDecryptAcceptsLegacyShortPassword` and `TestLegacyShortPasswordCmds`
+  (`legacy_fixtures_test.go` holds the test-only writers for the legacy layouts);
+- version 2: `TestEncryptWritesVersion2Format`, `TestDefaultPasswordKDFIsWritten`,
+  `TestStreamRoundTripSizes`, `TestStreamRejectsTampering`,
+  `TestDecryptRejectsUnsupportedHeaders` and `TestDecryptRejectsWrongContentType`;
+- the legacy KDF: `TestDeriveKey` (PBKDF2 known answers).
 
 ## 4. Coding conventions
 
@@ -133,8 +186,8 @@ These are observed in the codebase and required for new code:
   - Cobra (CLI)
   - Bubble Tea and Lip Gloss (TUI)
   - GORM with `gorm.io/driver/sqlite`, which uses `github.com/mattn/go-sqlite3` (CGO)
-  - `golang.org/x/crypto`, used for `pbkdf2`. This package is now a frozen wrapper
-    around the standard library's `crypto/pbkdf2`.
+  - `golang.org/x/crypto`, used for `argon2` (the version 2 format). The legacy PBKDF2
+    key uses the standard library's `crypto/pbkdf2` (since plan 3.1).
 
   `github.com/charmbracelet/x/term` (direct since 2026-09-24) provides `ReadPassword` and
   `IsTerminal` for the CLI's hidden password prompt (`readPassword` in `logic-cli.go`).
@@ -149,6 +202,10 @@ These are observed in the codebase and required for new code:
   `tea.KeyMsg` values; follow `internal/logic_tui_test.go`.
 - CLI tests run `NewRootCmd(db)` with `SetArgs`, `SetIn` and `SetOut`; follow
   `internal/logic_cli_test.go`.
+- The `internal` tests write new data with a cheap Argon2id setting (64 KiB, 1 pass,
+  1 lane), set in `TestMain` (`legacy_fixtures_test.go`), so the suite stays fast. The
+  setting is recorded in each header, so reading is unaffected;
+  `TestDefaultPasswordKDFIsWritten` checks the real default.
 - Every security fix needs a regression test that fails before the fix. Record it in
   `intel/cybersec.md`.
 - Baseline on 2026-09-23 (Go 1.26.8, linux/amd64): `go test -race ./...` passes with

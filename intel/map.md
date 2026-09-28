@@ -12,13 +12,14 @@ Cryptare/
 ├── version_test.go          # --version flag test
 ├── lazy_database_test.go    # only keys commands open (and create) the DB
 ├── internal/                # single Go package `internal`
-│   ├── crypto.go            # KDF, AES-GCM file/dir encryption, key blobs, key export/import
+│   ├── crypto.go            # file/dir encryption, legacy (v1) reads, key blobs, key export/import
+│   ├── format_v2.go         # version 2 format: header, Argon2id, chunked AES-GCM stream
 │   ├── compress.go          # gzip / tar.gz / zip create + extract; closeWithError helper
 │   ├── database.go          # GORM + SQLite, KeyModel, key CRUD
 │   ├── logic-cli.go         # Cobra commands, password/confirm prompts, output-name helpers
 │   ├── ui-dashboard.go      # Bubble Tea model types, messages, constructors, Init
 │   ├── logic-tui.go         # Bubble Tea Update/View, forms, vim mode, action commands
-│   └── *_test.go            # unit, CLI and TUI tests
+│   └── *_test.go            # unit, CLI and TUI tests; legacy_fixtures_test.go writes v1 layouts
 ├── .github/workflows/       # ci.yml, cd.yml, docker.yml, security.yml
 ├── .devcontainer/           # Ubuntu + Go + Neovim dev container
 ├── Dockerfile               # CGO build (golang:1.26-alpine) → alpine:3.22 runtime
@@ -36,7 +37,8 @@ Cryptare/
 | Entry | `main`, `newRootCmd`, `databaseOpener`, `version`, `databasePathFromEnv` | Passes a lazy opener; the DB is opened only by the `keys` commands and the TUI. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
 | CLI | `NewRootCmd`, `NewRootCmdLazy`, `DatabaseOpener`, `openOnce`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` (prints a warning) and `--password-file` (`passwordFlags`) on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. |
 | TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd`, `checkTUINewPassword` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. Forms that set a password have a "Confirm password" field. |
-| Crypto | `EncryptFile`, `DecryptFile`, `DecryptFileWithLimits`, `encryptBytesWithAAD`, `encryptDirectory`, `buildDirectoryArchive`, `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `ExportKeyToFile`, `ImportKeyFromFile`, `validateKeyExport`, `CheckPasswordPolicy` | Whole-file, in-memory encryption. Directory mode reuses `writeTarGz` and `extractTarGz`. `CheckPasswordPolicy` guards every path that sets a new password (`maint.md` §4). |
+| Crypto | `EncryptFile`, `DecryptFile`, `DecryptFileWithLimits`, `encryptSingleFile`, `encryptDirectory`, `writeDirectoryArchive`, `restoreDirectoryArchive`, `decryptBytesWithAAD` (legacy), `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `openKeyData`, `ExportKeyToFile`, `ImportKeyFromFile`, `validateKeyExport`, `validStoredKeyBlob`, `CheckPasswordPolicy` | Writes only the version 2 format and streams files and folders; legacy (version 1) data is still read, whole. Directory mode reuses `writeTarGz` and `extractTarGz`. `CheckPasswordPolicy` guards every path that sets a new password (`maint.md` §4). |
+| Format v2 | `v2Header`, `newV2Header`, `parseV2Header`, `argon2Params`, `passwordKDF`, `encryptingWriter`, `decryptingReader`, `sealV2`, `openV2`, `errDecrypt`, `errUnsupportedFormat` | 46-byte header, Argon2id key, 64 KiB AES-256-GCM chunks (STREAM). `parseV2Header` refuses unknown values and Argon2id settings above its limits before deriving a key. Layout in `maint.md` §3. |
 | Compression | `CompressFileWithFormat`, `DecompressFile`, `DecompressFileWithLimits`, `ExtractLimits`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip`, `extractToDir`, `walkSourceTree`, `CheckOutputPath`, `writeFileAtomic` | Rejects symlinks, special files and `..` traversal. Folders are read through an `os.Root` (`walkSourceTree`). `CheckOutputPath` enforces the output-safety rules (`maint.md` §4). Extraction runs under `ExtractLimits` into a temporary folder (`extractToDir`), writes through an `os.Root`, and sets owner-only permissions (`extractDirMode`, `extractFileMode`). |
 | Storage | `NewDatabase`, `prepareDatabaseFile`, `withSecureDelete`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). Connections open with SQLite `secure_delete` on, so deleted rows are overwritten. The file is created 0600, and an existing one is tightened to 0600. |
 
@@ -48,7 +50,7 @@ Cryptare/
 | `github.com/charmbracelet/bubbletea` / `lipgloss` | v1.3.10 / v1.1.0 | TUI |
 | `github.com/charmbracelet/x/term` | v0.2.2 | Hidden password input at the CLI prompt |
 | `gorm.io/gorm` + `gorm.io/driver/sqlite` | v1.31.2 / v1.6.0 | Storage, via `github.com/mattn/go-sqlite3` v1.14.52 (**CGO**) |
-| `golang.org/x/crypto` | v0.56.0 | `pbkdf2` only |
+| `golang.org/x/crypto` | v0.56.0 | `argon2` only (the legacy PBKDF2 key uses the standard library's `crypto/pbkdf2`) |
 
 ## Component dependencies
 
@@ -65,30 +67,43 @@ flowchart TD
   tui --> compress
   tui --> database
   crypto -->|"writeTarGz / extractTarGz"| compress
+  crypto --> format["format_v2.go"]
   database --> dbfile
 ```
 
 ## Encryption data flow
 
+New data (version 2):
+
 ```mermaid
 flowchart LR
-  pw["password"] --> kdf["PBKDF2-HMAC-SHA256<br/>100k iterations, random 16-byte salt"] --> key["256-bit key"]
-  file["file bytes"] --> gcm1["AES-256-GCM<br/>random 12-byte nonce"]
-  key --> gcm1 --> out1["salt ‖ nonce ‖ ciphertext → *.enc"]
-  dir["directory"] --> tmp["plaintext tar.gz<br/>in memory (buildDirectoryArchive)"] --> gcm2["AES-256-GCM<br/>AAD = directory magic"]
-  key --> gcm2 --> out2["magic ‖ salt ‖ nonce ‖ ciphertext → *.enc"]
+  pw["password"] --> kdf["Argon2id<br/>64 MiB, 3 passes, 4 lanes<br/>random 16-byte salt"] --> key["256-bit key"]
+  file["file"] --> chunks
+  dir["directory"] --> tgz["tar.gz stream<br/>(writeDirectoryArchive)"] --> chunks
+  chunks["64 KiB chunks"] --> gcm["AES-256-GCM per chunk<br/>nonce = prefix ‖ counter ‖ last flag<br/>AAD = header"]
+  key --> gcm --> out["header ‖ sealed chunks → *.enc"]
 ```
 
-Decryption reverses the flow. `DecryptFile` checks for the directory magic prefix
-first and restores the tree with `extractTarGz`; otherwise it writes one plaintext file.
+Legacy data (version 1) is still read: `salt ‖ nonce ‖ ciphertext` for files, and the
+same after the `CRYPTARE-DIR-ENC\x00` magic (used as AAD) for folders, with a PBKDF2-
+HMAC-SHA256 key (100,000 iterations). Stored keys and key exports use the same two
+formats with their own content types (`maint.md` §3).
+
+Decryption reverses the flow. `DecryptFileWithLimits` peeks at the first bytes:
+- version 2: it reads the header, checks its limits and content type, then decrypts
+  chunk by chunk. A folder's tar.gz is restored with `extractTarGz` in a temporary
+  folder, and a file goes to a temporary file. Either is kept only after the final
+  chunk authenticates.
+- legacy: it reads the whole file. The directory magic means a folder; anything else
+  is one plaintext file.
 
 ## Key management flow
 
 ```mermaid
 flowchart LR
-  gen["keys generate"] --> rk["GenerateKey<br/>32 random bytes"] --> eb["EncryptKeyBlob<br/>(master password)"] --> row[("key_models row")]
-  row --> exp["keys export"] --> env["JSON KeyExport v1<br/>(holds encrypted blob)"] --> eb2["EncryptKeyBlob<br/>(export password)"] --> ckey["*.ckey"]
-  ckey --> imp["keys import"] --> dec["DecryptKeyBlob → JSON"] --> row
+  gen["keys generate"] --> rk["GenerateKey<br/>32 random bytes"] --> eb["EncryptKeyBlob<br/>(master password, content type 3)"] --> row[("key_models row")]
+  row --> exp["keys export"] --> env["JSON KeyExport v1<br/>(holds encrypted blob)"] --> eb2["sealV2<br/>(export password, content type 4)"] --> ckey["*.ckey"]
+  ckey --> imp["keys import"] --> dec["openKeyData → JSON<br/>validateKeyExport"] --> row
 ```
 
 Stored keys are not used by any encrypt or decrypt path today (Q-002 in `notes.md`).
