@@ -569,7 +569,7 @@ These apply to all changes.
 ### SEC-011 — Imported key metadata not validated before storage and display
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.7):** all four remediation steps are
+- **Progress (2026-09-27, `3d9384e`; plan 2.7):** all four remediation steps are
   implemented and validated.
   - `ImportKeyFromFile` calls the new `validateKeyExport` before returning a key, so
     the CLI and TUI both get it. It requires:
@@ -612,6 +612,14 @@ These apply to all changes.
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
 - **Status:** In Progress
+- **Progress (2026-09-27, W10, delivered as a patch):** every pinned action that ran
+  on Node.js 20 moves to its current release on Node.js 24, still pinned to a full
+  commit SHA.
+  - The SHAs were read from each project's release tags (`git ls-remote`, following
+    annotated tags to their commits), and each commit's `action.yml` was checked for
+    its runtime and for the inputs the workflows pass.
+  - The upgrade takes CodeQL to v4, ahead of v3's deprecation in December 2026.
+  - Remaining, as before: step 3 (triage in Code Scanning) and step 5 (govulncheck).
 - **Progress (2026-09-24):** Staged, uncommitted workflow changes cover remediation
   steps 1, 2 and 4, and were verified:
   - all 9 third-party actions are pinned to full commit SHAs, each matching its release
@@ -664,7 +672,7 @@ These apply to all changes.
 ### SEC-014 — Symlink race (TOCTOU) when archiving a directory tree
 
 - **Status:** In Progress
-- **Progress (2026-09-27, uncommitted; plan 2.8):** the remediation is implemented and
+- **Progress (2026-09-27, `3d9384e`; plan 2.8):** the remediation is implemented and
   validated.
   - The new `walkSourceTree` in `compress.go` walks the tree with `fs.WalkDir` over an
     `os.Root` opened on the source directory, and opens each file through that root.

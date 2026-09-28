@@ -674,3 +674,34 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   - the pseudo-terminal password checks still pass 7 of 7, including the TUI
     mismatch-then-match flow.
 - With 2.10, Phase 2 is complete apart from the optional items 2.4a and 2.12.
+
+## 2026-09-27 — Owner decisions; W10 action updates
+
+- The owner committed 2.7–2.10 with the W11 workflow patch as `3d9384e`.
+- **Decisions:** W10 approved. Optional items 2.4a (a one-time `VACUUM` for keys
+  deleted by older versions) and 2.12 (a TUI overwrite option) are declined.
+- **W10** (`cryptare-w10-action-updates.patch`): every action that ran on Node.js 20
+  moves to its current release on Node.js 24, pinned to a full commit SHA:
+  - `actions/checkout` v4.4.0 → v7.0.1. v6 keeps persisted credentials in a separate
+    file; v7 refuses fork checkouts under `pull_request_target`/`workflow_run`, which
+    these workflows don't use;
+  - `actions/setup-go` v5.6.0 → v7.0.0. The toolchain directive is honoured and the
+    cache key is based on `go.mod` unless `cache-dependency-path` is set (`ci.yml`
+    sets `go.sum`);
+  - `actions/upload-artifact` v4.6.2 → v7.0.1 (archiving stays on by default);
+  - `actions/download-artifact` v4.3.0 → v8.0.1 (`pattern` plus `merge-multiple` are
+    unchanged; a digest mismatch now fails the download);
+  - `codecov/codecov-action` v5.5.5 → v7.1.1 (it now calls `actions/github-script`
+    v8, on Node.js 24);
+  - `github/codeql-action` v3.38.1 → v4.38.2 (init, autobuild, analyze and
+    upload-sarif);
+  - `softprops/action-gh-release` v2.6.2 → v3.0.3;
+  - golangci-lint-action v9.3.0 already runs on Node.js 24, and gosec is a Docker
+    action, so both are unchanged.
+- **Validation:**
+  - each new SHA is the commit behind its release tag (`git ls-remote`), and its
+    `action.yml` declares Node.js 24 (or is a composite action);
+  - every input the workflows pass exists in the new `action.yml`;
+  - actionlint is clean, and the patch applies to the workflows on the owner's
+    machine;
+  - the workflows themselves weren't run: that needs a push.
