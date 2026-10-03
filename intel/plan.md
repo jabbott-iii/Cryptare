@@ -3,7 +3,7 @@
 Active implementation plans and follow-on work. IDs refer to
 [`cybersec.md`](cybersec.md) (SEC-…) and [`notes.md`](notes.md) (BUG-…, Q-…).
 
-Last updated: 2026-09-27
+Last updated: 2026-10-03
 
 Status: **In progress.**
 - **Released:**
@@ -38,15 +38,24 @@ Status: **In progress.**
     - to write every kind of artifact in the new format: files, folders, stored keys
       and key exports;
     - to keep old formats readable with no time limit, and no migration command.
-- **Uncommitted, for review:** 3.1 and 3.2, the version 2 format (`format_v2.go`).
+- **Committed 2026-09-27 (`0c57aef`):** 3.1 and 3.2, the version 2 format
+  (`format_v2.go`). Its CI results haven't been reported yet.
 - **In progress:**
   - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
-- **Next up:** the rest of Phase 3:
-  - 3.3: shared key flows for the CLI and TUI;
-  - 3.4: usable stored keys. It will use the header's reserved key source, 2, and its
-    options need the owner's choices first;
-  - 3.5 waits on Q-003.
+- **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
+  (BUG-015–BUG-024), gaps in five existing items and five owner questions
+  (Q-008–Q-012). They are planned in
+  [Phase 5](#phase-5--remediation-from-the-2026-10-03-analysis).
+- **Next up:**
+  1. Phase 5 Tier A (5.1–5.5): data loss, a broken feature, possibly vulnerable
+     release binaries, and plaintext left behind on interruption. Then a patch release.
+  2. The rest of Phase 3:
+     - 3.3: shared key flows for the CLI and TUI (with 5.17);
+     - 3.4: usable stored keys. It will use the header's reserved key source, 2, and
+       its options need the owner's choices first;
+     - 3.5 waits on Q-003, which SEC-016 makes more urgent.
+  3. Phase 5 Tiers B–D.
 
 ## Principles
 
@@ -138,8 +147,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs |
 |---|---|---|
-| 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2`. **Done 2026-09-27 (uncommitted), with 3.2.** Owner choices: Argon2id at 64 MiB, 3 passes, 4 lanes; header and streaming together; every artifact written in the new format; old formats readable with no time limit, no migration command. What was built: a 46-byte header (`format_v2.go`, layout in `maint.md` §3) on files, folders, stored keys and key exports; read limits on the header's Argon2id settings; legacy reads kept; `deriveKey` on `crypto/pbkdf2`. | SEC-005 |
-| 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27 (uncommitted), with 3.1:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
+| 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2`. **Done 2026-09-27, with 3.2; committed in `0c57aef`.** Owner choices: Argon2id at 64 MiB, 3 passes, 4 lanes; header and streaming together; every artifact written in the new format; old formats readable with no time limit, no migration command. What was built: a 46-byte header (`format_v2.go`, layout in `maint.md` §3) on files, folders, stored keys and key exports; read limits on the header's Argon2id settings; legacy reads kept; `deriveKey` on `crypto/pbkdf2`. | SEC-005 |
+| 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27, with 3.1; committed in `0c57aef`:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
 | 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
 | 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
 | 3.5 | Per-user default DB path plus migration, if Q-003 = yes | Q-003 |
@@ -158,3 +167,70 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 4.7 | Replace the README's release "known issue" callout with a note that v1.0.0 is broken and v1.0.1+ works, and re-verify the install steps. **Unblocked:** v1.0.1 works. Waiting for the owner to pull `3c80050` so the README edit doesn't conflict. | BUG-001 |
 | 4.8 | Doc follow-ups from the 2026-09-24 review. The owner has fixed the `AGENTS.md` typo and `golang.md`'s `gofmt -s`, and `map.md` already covers `intel/` as a directory. **Remaining (owner):** add `intel/golang.md` to the "Repository Intelligence Documents" list in `AGENTS.md`. | `AGENTS.md`, `intel/` |
 | 4.9 | Post-merge doc updates. **Done 2026-09-24:** the CI/CD table in `map.md`, `maint.md` §6, and the CI description in `CONTRIBUTING.md`. **Remaining:** the README release table (W6), after the owner pulls `3c80050`. | W3, W6 |
+
+## Phase 5 — Remediation from the 2026-10-03 analysis
+
+Covers SEC-015 to SEC-019 ([`cybersec.md`](cybersec.md)), BUG-015 to BUG-024
+([`notes.md`](notes.md)), the gaps recorded in SEC-003, SEC-005, SEC-010, SEC-011 and
+SEC-013, and questions Q-008 to Q-012. The [Principles](#principles) apply: one issue
+per PR, a regression test that fails before the fix, formats and flags kept compatible,
+and owner approval for CI, `go.mod`, `Dockerfile` and dependency changes.
+
+**Order.** Tier A first: it covers data loss, a broken feature, possibly vulnerable
+release binaries and plaintext left behind on interruption. Cut a patch release once
+Tier A is merged. Then Tier B (hardening) and Tier C (minor bugs). Tier D (tooling and
+docs) can run alongside.
+
+### Tier A — fix first
+
+| # | Change | Refs | Acceptance | Approval |
+|---|---|---|---|---|
+| 5.1 | **Toolchain and vulnerability scanning.** Confirm first: `go version -m` on the v1.1.0 release binaries; `govulncheck ./...` and `govulncheck -mode=binary`. Then: `toolchain go1.26.<latest>` in `go.mod` (or `go-version: '1.26.x'` with `check-latest: true`); a govulncheck job in `security.yml` that fails on reachable findings; the same Go version for the Docker builder; Dependabot for `gomod` and `github-actions`. Optional: `-trimpath` and release attestations. | SEC-018, SEC-012 step 5 | New release binaries report the latest 1.26.x; govulncheck passes in CI; CI, CD and Docker use one Go version | Yes: `go.mod`, CI, Dockerfile |
+| 5.2 | **`keys export` output safety.** Call `CheckOutputPath` in the CLI (overwrite only with a new `--force`) and in the TUI (always refuse, like the other forms). Refuse the key database file itself, even with `--force` (`os.SameFile`). | BUG-017 | CLI and TUI tests: an existing file is refused without `--force` and left intact; the database path is always refused; the default name still works | Behaviour change: confirm |
+| 5.3 | **Folder-encryption output containment.** One default-output helper for the core, CLI and TUI that writes next to the folder (`dir/` → `dir.enc`; `.` → `<parent>/<name>.enc`). Refuse an output inside the folder with `ErrOutputInsideInput`, as `compress` does. | BUG-016, BUG-013 | Core, CLI and TUI tests for `dir/`, `.` and an explicit output inside the folder; existing round trips pass | Behaviour change: confirm |
+| 5.4 | **Latin-1-safe gzip names.** Store the name in the gzip header only when Latin-1 can hold it. Otherwise use a fallback: an ASCII name ending in `.tar` for a folder (so `isTarGzArchive` still recognises it), or no name for a file. No format change, because restoring a folder doesn't use the name. | BUG-015 | Round-trip tests with Chinese, Cyrillic and emoji names for gzip, tar.gz and folder encryption; artifacts from older builds still read | No |
+| 5.5 | **Cancellation and clean-up.** Pass a `context.Context` through the core file operations, checked between chunks and entries (add `…Context` variants and keep today's functions as wrappers). Run the CLI file commands under `signal.NotifyContext` (SIGINT, SIGTERM, SIGHUP) and exit with 128 + the signal after clean-up. In the TUI, quitting cancels a running action and exits once it reports back. Extend the password prompt's handler to SIGTERM, SIGQUIT and SIGHUP. Update the README and `maint.md` §4. | SEC-015, BUG-018 | The tests listed under SEC-015's validation; a pseudo-terminal check that echo comes back after each signal | No (internal API only) |
+
+### Tier B — hardening
+
+| # | Change | Refs | Acceptance | Approval |
+|---|---|---|---|---|
+| 5.6 | **Database trust.** On Unix, refuse (or warn about, per Q-010) a database or side file that the user doesn't own or that group or others can write. Escape control characters in every stored field that `keys list` and the TUI show. Bring 3.5 (Q-003) forward. | SEC-016, SEC-011 | The tests listed under SEC-016's validation | Q-010 |
+| 5.7 | **Quiet database layer.** Silence GORM's logger (`logger.Silent`, or parameterised and on stderr only when enabled). Turn "record not found" and UNIQUE-constraint errors into clear messages. | SEC-017 | Failed key commands print nothing on stdout; errors name the key ID | No |
+| 5.8 | **Database path handling.** Build the DSN so the driver opens exactly the file `prepareDatabaseFile` prepared (for example a `file:` URI with the path escaped, plus `_secure_delete=on`), or refuse paths containing `?`. Prepare the file behind a `file:` URI as well. | SEC-010 gap | Tests with `?` in a folder name and with a `file:` URI: the database holding the keys is 0600 and no stray file is left | No |
+| 5.9 | **Repository and container hygiene.** Add `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm` to `.gitignore`. Add a `.dockerignore`. Drop `sqlite-libs` and `ca-certificates` from the runtime image, and stamp its version. Do it together with 4.2 (SEC-013: non-root user, digest pins). | SEC-003, SEC-013 | `git check-ignore` matches the new patterns; the Docker smoke test passes; `docker run --entrypoint id <image> -u` isn't 0 | Yes: Dockerfile |
+| 5.10 | **Windows permissions.** State in the README and `maint.md` §4 that on Windows the output inherits the permissions of the folder it is written to. Optionally set owner-only ACLs (Q-012). | SEC-019 | README review; with ACLs, a Windows CI test reads an output's DACL | Q-012; `go.mod` if ACLs |
+
+### Tier C — lower-severity bugs
+
+| # | Change | Refs | Acceptance |
+|---|---|---|---|
+| 5.11 | **Containment by file identity.** In `checkOutputOutsideDir` and `checkInputOutsideOutput`, walk up from the output's or input's parent comparing folders with `os.SameFile`, instead of comparing spellings. Reuse it in 5.3. | BUG-019 | Tests with a symlinked spelling; a letter-case test on the macOS and Windows runners |
+| 5.12 | **Validate compression options.** Refuse an explicit `--format` that contradicts the output's extension, and a `--level` outside 1–9 (−1 stays the default), in the CLI and TUI. Behaviour change for scripts: owner to confirm, README note. | BUG-020 | CLI and TUI tests for each case |
+| 5.13 | **Shorter temporary names.** Cap the part of the output name copied into temporary file and folder names (for example 64 bytes, cut at a UTF-8 boundary). | BUG-021 | Encrypt, decrypt, compress and extract all succeed with a 251-byte name |
+| 5.14 | **Explicit empty password.** Treat `--password` as given when `Flags().Changed("password")`. | BUG-023 | CLI test: `--password ""` decrypts a legacy empty-password file without reading stdin |
+| 5.15 | **Size caps for whole-file reads.** Refuse a `.ckey` above a small limit (for example 1 MiB). Refuse a legacy-format input above a cap the owner chooses, before reading it, with a clear error. | BUG-024 | Oversized inputs fail fast with a clear message |
+| 5.16 | **Single `.tar` files.** Per Q-011: a gunzip-only option, recording the input type, or documentation. | BUG-022, Q-011 | `compress x.tar` followed by `decompress` gives `x.tar` back, or the documented route does |
+| 5.17 | **Export password clarity.** Name the prompt and flag help for what they set (the password that protects the export file), and check the key's master password before exporting. Do it with 3.3. | BUG-011 | CLI and TUI tests: a wrong master password is refused; the prompts name the right password |
+
+### Tier D — tooling and documentation
+
+| # | Change | Refs |
+|---|---|---|
+| 5.18 | Run what the 2026-10-03 analysis couldn't: golangci-lint v2.13.2, gosec v2.29.0 and govulncheck. Triage gosec in Code Scanning (4.1). | SEC-012, SEC-018 |
+| 5.19 | Run `go test -race` in CI on Linux and macOS. Needs owner approval (CI change). | `maint.md` §7 |
+| 5.20 | Docs: the README claims that don't hold yet (`notes.md` §3) and `CONTRIBUTING.md`'s CGO statement. Until 5.2–5.5 ship, add README notes on Unicode folder names, `keys export` overwriting and interrupted runs. | `notes.md` §3 |
+| 5.21 | Fuzz the code that reads untrusted input with Go's built-in fuzzing: `parseV2Header` and `decryptingReader`, `validateKeyExport`, `parseSize`, `extractTarGz` and `extractZipEntries`. | `maint.md` §5 |
+
+### Decisions and approvals Phase 5 needs
+
+- **Approvals:** 5.1 (`go.mod`, CI, Dockerfile), 5.9 (Dockerfile), 5.19 (CI), and 5.10 if
+  ACLs are wanted (`go.mod`).
+- **Behaviour changes to confirm:** 5.2 (export refuses an existing file), 5.3 (default
+  output for `dir/` and `.` moves next to the folder) and 5.12 (invalid options
+  refused).
+- **Questions:** Q-003 (now more urgent because of SEC-016), Q-008 (Argon2id read limit),
+  Q-009 (Unicode normalisation), Q-010 (database trust policy), Q-011 (single `.tar`
+  files), Q-012 (Windows ACLs).
+- **Release:** a patch release once Tier A is merged. Its notes should also carry
+  SEC-002's outstanding migration notes.

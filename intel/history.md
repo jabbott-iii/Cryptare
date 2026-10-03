@@ -755,3 +755,59 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
     - the previous build refuses version 2 data with the generic error;
     - the static Linux release build passes the CD smoke steps.
 - Left uncommitted for the owner's review.
+
+## 2026-10-03 — Repository re-analysis: SEC-015–SEC-019, BUG-015–BUG-024, plan Phase 5
+
+- **Why:** the owner asked for an analysis of the repository's bugs and security
+  issues, and a plan to handle all of them.
+- **Scope:** every Go source at `0c57aef` (including the version 2 format), the tests
+  that guard the format, the workflows, `Dockerfile`, `.gitignore`, `.devcontainer/`
+  and the README's security claims. Each finding was checked against the existing
+  register, so only new issues and gaps in earlier fixes were added.
+- **Status found:** plans 3.1 and 3.2 had been committed in `0c57aef`; entries written
+  before then called them uncommitted. `plan.md` and SEC-005 are corrected.
+- **New security items** (`cybersec.md`):
+  - SEC-015 (Medium): an interrupted decrypt leaves partial plaintext in hidden
+    temporary files or folders, after Ctrl+C or another signal in the CLI, or after
+    quitting the TUI while an action runs;
+  - SEC-016 (Low): the key database in the working folder is used even when another
+    user owns it, and its rows are printed raw, which allows terminal escape
+    injection;
+  - SEC-017 (Low): GORM's default logger prints SQL with bound values, including
+    encrypted key blobs, to stdout;
+  - SEC-018 (Medium): CI, release and local builds use Go 1.26.0, so later security
+    releases aren't picked up, and govulncheck isn't run;
+  - SEC-019 (Low): the owner-only permissions the README promises don't apply on
+    Windows.
+- **Gaps in existing items:**
+  - SEC-003: `*.ckey` exports and SQLite side files aren't git-ignored;
+  - SEC-005: committed; the worst-case read cost was measured (about 1 GiB and 1.9 s
+    per attempt from a 62-byte file);
+  - SEC-010: a `?` in the database path or a `file:` URI bypasses the 0600 file;
+  - SEC-011: display-side escaping moves to SEC-016;
+  - SEC-013: no `.dockerignore`, and unused runtime packages.
+- **New defects** (`notes.md`):
+  - BUG-015: names outside Latin-1 break gzip compression and folder encryption;
+  - BUG-016: folder encryption can write its output inside the folder (`encrypt dir/`
+    gives `dir/.enc`);
+  - BUG-017: `keys export` overwrites any file, including the key database;
+  - lower severity, BUG-018 to BUG-024: prompt signals other than SIGINT,
+    text-based containment checks, silently overridden compression options, long
+    names, single `.tar` files, `--password ""`, and uncapped whole-file reads;
+  - BUG-011 gains a note on the misleading export prompt.
+- **Questions:** Q-008 to Q-012 added; Q-003 is more urgent.
+- **Plan:** Phase 5 in `plan.md`, in four tiers. Tier A (5.1–5.5) comes first,
+  followed by a patch release.
+- **Validation** (owner's machine, Go 1.26.0, linux/amd64, non-root):
+  - `gofmt -s -l .` and `go vet ./...` are clean;
+  - `go test -race -count=1 ./...` passes, with 75.0% (`main`) and 75.4%
+    (`internal`) coverage;
+  - `go mod verify` reports all modules verified;
+  - each finding was reproduced with probe tests or real binaries built from a scratch
+    copy outside the repository, except where the item says it comes from code review.
+- **Not run:** golangci-lint, gosec and govulncheck (they need downloads that weren't
+  approved), Windows, macOS, the Docker build, fuzzing.
+- **Changed:** `intel/cybersec.md`, `intel/notes.md`, `intel/plan.md` and this file.
+  No code, tests, configuration, CI, dependencies or git history were changed.
+  `map.md` and `maint.md` are unchanged: nothing structural changed, and their rule
+  updates belong with the fixes.

@@ -1,98 +1,131 @@
 # Engineering Notes
 
 Durable engineering notes and unresolved technical questions. Security issues are
-tracked in [`cybersec.md`](cybersec.md), and work sequencing in [`plan.md`](plan.md).
+tracked in [`cybersec.md`](cybersec.md), work sequencing in [`plan.md`](plan.md), and
+the record of past work, including resolved defects and answered questions, in
+[`history.md`](history.md).
 
-Last updated: 2026-09-27
+Last updated: 2026-10-03
 
-## 1. Baseline snapshot (2026-09-23)
+## 1. Current snapshot (2026-10-03)
 
-- **Branch state.** Local `main` was one commit ahead of `origin/main` (`aa27461`
-  "stash", which deletes `cryptare.db`). The working tree had uncommitted changes:
-  - `CONTRIBUTING.md` emptied (since rebuilt; see `history.md`);
-  - the third-party list in `NOTICE` removed;
-  - `.idea/Cryptare.iml` modified;
-  - `.idea/inspectionProfiles/` untracked.
-- **Tags.** `v1.0.0` (annotated, on `768f4cd`, 2026-09-13) is pushed, and a GitHub
-  Release with CD-built assets exists.
-- **Validation performed.** This was done in an isolated analysis environment, not on
-  the owner's machine. Go 1.26.8 was built from source. All modules were fetched and
-  checked against `go.sum`, and `go mod verify` reported "all modules verified".
+- **Branch state.** `main` is at `0c57aef`, level with `origin/main`.
+- **Toolchain.** `go.mod` declares `go 1.26.0` and has no `toolchain` line. A machine
+  whose own Go is older (the owner's has 1.22.2), and CI's `setup-go`, therefore build
+  with exactly Go 1.26.0 (SEC-018).
+- **Validation** on the owner's machine (linux/amd64, non-root):
 
   | Check | Result |
   |---|---|
   | `gofmt -s -l .` | no files listed |
-  | `go mod tidy` | no diff |
   | `go vet ./...` | clean |
   | `golangci-lint run` (v2.13.2) | 0 issues |
-  | `go test -race -count=1 ./...` | pass; total coverage 59.8% |
-  | `go build` (CGO on) | ok |
-  | `CGO_ENABLED=0 go build` | builds, but fails at runtime (BUG-001) |
-  | gosec v2.29.0 | 30 findings, triaged into `cybersec.md` |
+  | `go test -race -count=1 ./...` | pass; coverage 75.0% (`main`), 75.4% (`internal`) |
+  | `go mod verify` | all modules verified |
+  | gosec v2.29.0 | 10 findings, triaged under SEC-012 |
+  | govulncheck v1.8.0 | go1.26.0: 3 reachable standard-library vulnerabilities; go1.26.8: none (SEC-018) |
+  | Probe tests and real-binary checks | recorded under SEC-015–SEC-019 and BUG-015–BUG-024 |
 
-- **Not verified.**
-  - Windows and macOS behaviour.
-  - The Docker image build.
-  - Recent GitHub Actions run results.
-  - govulncheck (its database was unreachable).
+- **Not verified:** Windows and macOS behaviour, the Docker build, fuzzing, and the Go
+  version inside the published release binaries.
+- **Lowest coverage:** `View` and `actionTitle` (0%), `readTerminalPassword` (20%),
+  `readPassword` (46%), `Update` (54%), `replacePath` (56%), `writeZipFile` (59%).
 
-## 2. Confirmed defects (non-security)
+## 2. Open defects (non-security)
 
 | ID | Defect | Evidence | Location |
 |---|---|---|---|
-| BUG-001 | Release binaries don't work: every command, including `--help`, exits with `go-sqlite3 requires cgo to work. This is a stub`. **Fixed in v1.0.1 (2026-09-24):** every release target is built natively with CGO; the v1.0.1 assets were checked (build info, checksums, and a run of the linux/amd64 binary). The broken v1.0.0 assets are still published (Q-007). | Downloaded the v1.0.0 `cryptare_linux_amd64.tar.gz` (checksum matched `checksums.txt`) and ran it; a local `CGO_ENABLED=0` build behaves the same way. | `.github/workflows/cd.yml` (`CGO_ENABLED=0`); `ci.yml` cross-builds the same way and never runs the binaries |
-| BUG-002 | The TUI crashes (panics) when an unhandled key is pressed in a form: Left, Right, Delete, Home, End, Ctrl+U, and other key types not listed in the switch. **Fixed 2026-09-24 (`18ea97a`):** unhandled form keys are now ignored; see plan 1.3. | A probe called `updateForm` with each key type; each one panicked with `unhandled default case`. | `internal/logic-tui.go` `updateForm` default branch; similar `panic` defaults in `Update` and `buildActionCmd` |
-| BUG-003 | `compress <file> --output <same file>` destroys the source: the output is opened with `O_TRUNC` before the source is read. **Fixed 2026-09-24 (`c47a94f`, v1.1.0):** every operation refuses an output that is its own input (`ErrSameInputOutput`), even with `--force`; see plan 1.5. | Probe: a 4096-byte file became a gzip stream that decompresses to 0 bytes; no error was returned. | `internal/compress.go` `CompressFileWithFormat` |
-| BUG-004 | Existing outputs are overwritten silently, and writes are not atomic. Decrypting `x.enc` replaces an existing `x`; compress, decompress and extract truncate existing files; a failure mid-write leaves partial output. **Partly fixed 2026-09-24 (`c47a94f`, v1.1.0):** existing outputs are refused unless `--force` is given (`ErrOutputExists`); the TUI always refuses. Atomic writes remain (plan 2.11). **Single-file outputs made atomic 2026-09-26 (`b4cd66f`, plan 2.11):** they're written to a hidden temporary file and renamed into place, so a failure leaves no partial output and an existing file survives a failed `--force` run. Archive extraction still writes in place (plan 2.2). **Extraction made atomic 2026-09-27 (`b415ffc`, plans 2.1/2.2):** archives and encrypted folders are extracted into a new hidden folder and renamed into place, so a failure leaves no partial output; with `--force` an existing folder is replaced, not merged into. | Code review | `crypto.go` `DecryptFile`, `EncryptFile`; `compress.go` writers |
-| BUG-005 | Every command opens (and creates) the SQLite database, including commands that don't use it. **Fixed 2026-09-27 (`d683739`, plan 2.5):** only the `keys` commands and the TUI open it. | `cryptare --help` created `cryptare.db` | `main.go` (also SEC-010) |
-| BUG-006 | `keys export` without `--output` reports a filename built from a second `time.Now()` call, which can differ from the file actually written. **Fixed 2026-09-27 (`3d9384e`, plan 2.9):** the CLI and TUI compute the default name once (`defaultExportPath`) and pass it to `ExportKeyToFile`. | Code review | `logic-cli.go` `newKeysExportCmd`; `logic-tui.go` export action; `crypto.go` `ExportKeyToFile` |
-| BUG-007 | Extension handling is inconsistent. `.zip` detection ignores case, but `.gz`/`.tgz`/`.tar.gz` detection and default output naming are case-sensitive. For example, `FOO.ZIP` extracts to `FOO.ZIP.dec/`, and an uppercase `.TAR.GZ` without a `.tar` gzip header name is written out as a raw tar file. **Fixed 2026-09-27 (`3d9384e`, plan 2.9):** `.gz`, `.tgz`, `.tar.gz`, `.zip` and `.enc` are matched in any case (`hasSuffixFold`), for default output names and for spotting a tar archive (including the name in the gzip header). | Code review | `compress.go` `DecompressFile`, `defaultDecompressOutput`, `isTarGzArchive` |
-| BUG-008 | `DashboardModel.busy` is set but never checked, so a second TUI action can be started while one is still running. **Fixed 2026-09-27 (`3d9384e`, plan 2.10):** a form submitted while an action is running is refused with a message and stays open. | Code review | `ui-dashboard.go`, `logic-tui.go` |
-| BUG-009 | `-ldflags -X main.version=…` in CD has no effect (no such variable), and there is no `--version` flag. **Fixed 2026-09-24 (`5286920`, v1.0.1):** `main.version` (default `dev`) and `--version`/`-v`; see plan 3.6. | `go version -m` on a probe build; `cryptare --version` → `unknown flag` | `main.go`, `cd.yml` |
-| BUG-010 | Encryption and decryption read whole files into memory, so memory use grows with file size and large inputs can exhaust RAM. **Fixed 2026-09-27 (uncommitted, plan 3.2, with 3.1):** files and folders are encrypted and decrypted as a stream of 64 KiB authenticated chunks (the version 2 format, `maint.md` §3). Peak memory no longer depends on file size; it is mostly the 64 MiB Argon2id derivation. Files in the legacy format are still read whole. | Code review (`os.ReadFile`). Measured on a 1 GiB file: the previous build peaked at 3,088 MiB (encrypt) and 2,063 MiB (decrypt); the new build peaked at 77 MiB for each. | `crypto.go`, `format_v2.go` |
-| BUG-011 | `keys export` doesn't check that the export password matches the key's master password, and `keys import` doesn't check that the inner blob decrypts. A `.ckey` can therefore need two different passwords to be usable. | Code review | `crypto.go` `ExportKeyToFile`, `ImportKeyFromFile` |
-| BUG-012 | Pressing Ctrl+C at the hidden password prompt kills the process before it restores the terminal, so echo stays off afterwards (Unix). Introduced 2026-09-24 by the SEC-002 fix (plan 1.1). Fix: restore the terminal state on interrupt (a signal handler plus a goroutine that ends when the read returns), then exit with status 130. **Fixed 2026-09-24 (`ed46150`), before it shipped:** `readTerminalPassword` restores the terminal on Ctrl+C and exits with status 130; see plan 1.1a. | In a pseudo-terminal, the fixed binary left `ECHO` off after Ctrl+C; the old binary didn't. | `logic-cli.go` `readPassword` |
-| BUG-013 | Compressing a folder into an archive inside that folder archives its own partial output: a silent self-containing archive, or `write too long` and a corrupt partial file. **Fixed 2026-09-24 (`c47a94f`, v1.1.0):** refused with `ErrOutputInsideInput`; see plan 1.5. | Probe: `compress dir --output dir/self.tar.gz` exited 0 and left the archive inside `dir` (larger files failed with `write too long`). | `compress.go` `CompressFileWithFormat` |
-| BUG-014 | As a non-root user, extracting an archive that contains a read-only folder (for example mode 0500) with files in it fails with "permission denied", because the folder is created with the archive's mode before its contents. Found 2026-09-27 while testing plan 2.2. **Fixed 2026-09-27 (`d751967`, plan 2.2):** extracted folders are always 0700. | Running `TestExtractMasksArchivePermissions` as a non-root user against `b415ffc`; also a real binary with umask 000. Running as root hides it. | `compress.go` `extractTarGz`, `extractZipEntries` |
+| BUG-011 | `keys export` doesn't check that the export password matches the key's master password, and `keys import` doesn't check that the inner blob decrypts. A `.ckey` can therefore need two different passwords to be usable. The CLI prompt for the export password reads "Enter master password:" and the flag help says "master password for export encryption", although the value only protects the export file, so users can't tell the two passwords apart. | Code review | `crypto.go` `ExportKeyToFile`, `ImportKeyFromFile`; `logic-cli.go` `newKeysExportCmd` |
+| BUG-015 | **(Medium)** Names with characters outside Latin-1 (Chinese, Japanese, Cyrillic, Greek, emoji and so on) break gzip: such a file can't be gzip-compressed, and such a folder can't be compressed to tar.gz or **encrypted**. Go's gzip writer refuses a non-Latin-1 header name ("gzip.Write: non-Latin-1 header string"), and `writeGzip` and `writeDirectoryArchive` copy the file or folder name into `gz.Name`. Zip compression and single-file encryption work. | Probe: `日本語.txt`, `данные.txt` and `lock-🔒.txt` failed gzip; the folders `日本語` and `данные` failed tar.gz and `EncryptFile`; `résumé-dir` (Latin-1) worked. | `compress.go` `writeGzip`; `crypto.go` `writeDirectoryArchive` |
+| BUG-016 | **(Medium)** Encrypting a folder can put the output inside that folder. The default output is `src + ".enc"` with the path left as typed, so `encrypt secret/` (as tab completion types it) writes the hidden file `secret/.enc`, and `encrypt .` writes `..enc` inside `.`. An explicit output inside the folder isn't refused either: BUG-013's `ErrOutputInsideInput` check covers `compress` only. The folder's archive then contains the half-written temporary output, and deleting the folder after encrypting it also deletes the only encrypted copy. Affects the CLI, the TUI and the core. | Probe: `encrypt secret/` reported `secret/ → secret/.enc`; decrypting it restored an extra 46-byte `..enc.1926573653.tmp`. `EncryptFile(tree2, tree2/out.enc)` behaved the same, while `compress` refused the equivalent. | `logic-cli.go` `newEncryptCmd`; `logic-tui.go` encrypt action; `crypto.go` `EncryptFile` |
+| BUG-017 | **(Medium)** `keys export` (CLI and TUI) never calls `CheckOutputPath`, so `--output` replaces an existing file without `--force`. That contradicts the README ("Commands don't overwrite anything by default") and `maint.md` §4, and it includes the key database: exporting onto `cryptare.db` replaces the whole key store with one export. | Probe: `keys export … --output precious.txt` replaced the file; `--output <database path>` succeeded, and reopening the database then failed with "file is not a database". | `logic-cli.go` `newKeysExportCmd`; `logic-tui.go` export action; `crypto.go` `ExportKeyToFile` |
+| BUG-018 | **(Low)** The hidden password prompt restores the terminal only on SIGINT (BUG-012's fix). SIGTERM, SIGQUIT (Ctrl+\\, which also dumps goroutines) and SIGHUP end the process with echo still off. | Pseudo-terminal probe: SIGINT gave exit 130 with echo restored; SIGTERM, SIGQUIT (exit 2) and SIGHUP left echo off. | `logic-cli.go` `readTerminalPassword` |
+| BUG-019 | **(Low)** The output-containment checks compare paths as text. `checkOutputOutsideDir` (BUG-013) misses an output reached through a symlink, or one spelled in different letter case on a case-insensitive file system (the macOS and Windows defaults). `checkInputOutsideOutput` resolves symlinks but compares case-sensitively, so on those systems `--force` could replace a folder that holds the archive, deleting the archive with it. | Probe: `compress tree --output link/self.tar.gz` with `link → tree` wasn't refused and failed with "archive/tar: write too long"; a small tree can instead embed its own partial output. The letter-case cases are from code review; not run on macOS or Windows. | `compress.go` `pathWithin`, `checkOutputOutsideDir`, `checkInputOutsideOutput` |
+| BUG-020 | **(Low)** Compression options are silently overridden. `--format gzip --output x.zip` writes a zip, because `resolveCompressFormat` lets the `.zip` extension win over an explicit `gzip`. `--level` values outside 1–9 (0, 10, 42, −7) are accepted and replaced by the default. The TUI behaves the same. | Probe: zip magic `504b` from `--format gzip`; all four levels exited 0. | `compress.go` `resolveCompressFormat`, `CompressFileWithFormat`; `logic-cli.go` `newCompressCmd`; `logic-tui.go` compress action |
+| BUG-021 | **(Low)** Names within about 20 bytes of the 255-byte limit can't be written, because the temporary name `.<name>.<random>.tmp` is too long ("file name too long"). Affects every output: encrypt, decrypt, compress, single-file decompress, extraction folders and key export. | Probe: a 240-character name (244 with `.enc`) failed both encrypt and compress; 236 worked. | `compress.go` `createAtomicFile`, `extractToDir` |
+| BUG-022 | **(Low)** A single file whose name ends in `.tar` doesn't round-trip. `compress backup.tar` writes `backup.tar.gz`, which `decompress` treats as a tarball and extracts into `backup/` instead of restoring `backup.tar`. A tarball holding symlinks (common) fails with "unsupported entry type", so Cryptare can't give the file back at all. | Probe: a tar with a symlink entry, compressed and then decompressed: `extract archive: unsupported entry type "latest"`. | `compress.go` `isTarGzArchive`, `DecompressFileWithLimits` |
+| BUG-023 | **(Low)** `--password ""` counts as "not given" and falls back to the prompt, which reads stdin. A script therefore can't pass an explicitly empty password, which decrypting a legacy empty-password file without a terminal needs; with no stdin the command fails with "read password: EOF". | Probe: `decrypt x.enc --password ""` → `read password: EOF`. | `logic-cli.go` `passwordFlags.get` |
+| BUG-024 | **(Low)** Legacy decrypt and key import read their whole input with no size cap (`io.ReadAll`, `os.ReadFile`). Pointing `decrypt` at a large file that isn't a version 2 artifact, or `keys import` at a large file, exhausts memory instead of failing fast; real `.ckey` files are under 1 KiB. | Code review | `crypto.go` `DecryptFileWithLimits` (legacy branch), `ImportKeyFromFile` |
+
+### Resolved defects
+
+Kept as an index because other documents refer to these IDs. The evidence and
+validation for each fix are in `history.md`.
+
+| ID | Defect | Fixed in |
+|---|---|---|
+| BUG-001 | Release binaries built without CGO didn't run | v1.0.1 (`5286920`) |
+| BUG-002 | The TUI panicked on unhandled keys in forms | `18ea97a` |
+| BUG-003 | `compress` onto its own input destroyed the input | `c47a94f` (v1.1.0) |
+| BUG-004 | Existing outputs were overwritten silently, and writes weren't atomic | `c47a94f`, `b4cd66f`, `b415ffc` |
+| BUG-005 | Every command opened, and created, the key database | `d683739` |
+| BUG-006 | `keys export` reported a different file name from the one it wrote | `3d9384e` |
+| BUG-007 | Archive and `.enc` extensions were matched case-sensitively | `3d9384e` |
+| BUG-008 | A second TUI action could start while one was running | `3d9384e` |
+| BUG-009 | No `--version`, and `-X main.version` had no effect | v1.0.1 (`5286920`) |
+| BUG-010 | Encryption and decryption held whole files in memory | `0c57aef` (legacy reads: BUG-024) |
+| BUG-012 | Ctrl+C at the hidden prompt left echo off | `ed46150` (other signals: BUG-018) |
+| BUG-013 | A folder could be compressed into an archive inside itself | `c47a94f` (gaps: BUG-016, BUG-019) |
+| BUG-014 | A read-only folder in an archive blocked extraction for non-root users | `d751967` |
 
 ## 3. Design observations
 
-- **Stored keys are never used for file encryption.** `encrypt` and `decrypt` derive
-  keys from passwords only, and no code path consumes `key_models`. Key management is
-  currently standalone. The owner wants stored keys usable (Q-002, 2026-09-26; plan 3.4).
+- **Stored keys aren't used for file encryption.** `encrypt` and `decrypt` derive keys
+  from passwords only, and no code path consumes `key_models`. The owner wants stored
+  keys usable (plan 3.4).
 - **CLI and TUI duplicate flows.** Key generate, export and import are implemented
-  twice (`logic-cli.go` and `logic-tui.go` `buildActionCmd`). They had already
-  drifted: the TUI accepted empty passwords and the CLI didn't (fixed by SEC-001).
-  The password policy is enforced in core for the same reason; only the confirmation
-  step is implemented in each interface.
+  twice (`logic-cli.go` and `logic-tui.go` `buildActionCmd`), so a change to one must be
+  mirrored in the other until plan 3.3 shares them. Checks that protect data, such as
+  the password policy, live in core for this reason; only the confirmation step is
+  implemented in each interface.
 - **Dead code.** The `Storage` interface is declared but unused.
 - **Stale comment.** `ImportKeyFromFile` says "Parse minimal JSON manually to avoid
   import cycle", but it uses `encoding/json`.
-- **Leftovers from another project.** `database_path_test.go` uses `tasks.db`
-  (cosmetic). The Munus names in the workflows, including the `munus:<sha>` image in
-  `docker.yml`, are fixed in the 2026-09-24 workflow patch (plan W3).
+- **Leftover from another project.** `database_path_test.go` uses a `tasks.db` fixture
+  (cosmetic; plan 4.6).
 - **IDE files.** `.idea/` is tracked (`.gitignore` has `# .idea/` commented out).
   `.junie/plans/` is an empty, untracked agent workspace.
-- **README drift.** The previous install section named `cryptare-<os>-<arch>`
-  binaries, but CD publishes `cryptare_<os>_<arch>.tar.gz`/`.zip` plus
-  `checksums.txt`, including `windows_arm64`. Also, zip support (2026-09-16) and vim
-  bindings (2026-09-17) were added after `v1.0.0` (2026-09-13).
-- **NOTICE is incomplete.** The working tree ends at "This product includes
-  third-party software:" with an empty list (Q-006).
+- **NOTICE is incomplete.** It ends at "This product includes third-party software:"
+  with an empty list (Q-006).
 - **TUI password field.** It masks input with one `*` per character, which reveals the
   password's length.
+- **Documentation drift.**
+  - The README still says every published release is broken ("Known issue", BUG-001),
+    although v1.0.1 and later work (plan 4.7), and its release table lists
+    `cryptare_windows_arm64.zip`, which isn't built (W6).
+  - `CONTRIBUTING.md` says CGO-less builds "fail on every command at runtime"; only the
+    `keys` commands and the TUI fail (`maint.md` §6).
+  - Some README guarantees don't hold: "Commands don't overwrite anything by default"
+    (BUG-017), "a command that fails part-way leaves no partial output" (SEC-015) and
+    "everything the tool writes is private to you" (SEC-019 on Windows; parent folders
+    are created 0755, SEC-012's G301 triage).
+- **CI runs `go test` without `-race`,** although every CI runner has a C toolchain and
+  `maint.md` §7 asks for it when one is available. The code's concurrency is small (the
+  password prompt's signal goroutine, Bubble Tea commands), but the check is cheap.
+- **Dev container.** The `docker-outside-of-docker` feature hands the container the
+  host's Docker socket, so anything run inside it (tests, tools, dependencies) can
+  control the host's Docker daemon. A convenience trade-off worth knowing about before
+  running untrusted code there.
+- **Release integrity.** Releases publish `checksums.txt` beside the archives, with no
+  signature or provenance attestation, so the checksums only catch accidental
+  corruption (SEC-018 step 5).
 
 ## 4. Open questions (owner decisions)
 
 | ID | Question | Why it matters |
 |---|---|---|
-| Q-001 | How should releases handle CGO? (a) Build each target natively with CGO, using an OS matrix or a cross C toolchain (e.g. zig cc). (b) Switch to a pure-Go SQLite driver, which adds a new dependency. (c) Drop SQLite. **2026-09-24: option (a) chosen.** The staged `cd.yml` builds each target natively with CGO (static Linux binaries; darwin/amd64 cross-compiled on Apple silicon). **Closed 2026-09-24:** verified by the working v1.0.1 release. | Blocks BUG-001, which means every published binary is unusable. |
-| Q-002 | Should stored keys be usable for file encryption (e.g. `encrypt --key <id>`), or is the key store meant to stay standalone? **Answered 2026-09-26: yes** (plan 3.4). | Decides the value of the key-management feature and shapes the format work (SEC-005). |
-| Q-003 | Should the default database move from `./cryptare.db` to a per-user location (e.g. `os.UserConfigDir()/cryptare/cryptare.db`)? How should existing `./cryptare.db` files be migrated? | SEC-010; a behaviour change for existing users. |
-| Q-004 | What password policy applies on encrypt: a minimum length, and confirmation (typing it twice)? **2026-09-24:** empty passwords are now rejected on every encryption path (SEC-001); a minimum length and confirmation are still undecided. **Answered 2026-09-27:** the owner asked for a default policy. New passwords (encrypt, keys generate, keys export) need at least 15 Unicode code points and must not be one repeated character, with no composition rules and no maximum (NIST SP 800-63B-4 §3.1.1.2). Typed passwords are confirmed in the CLI (terminal input only) and the TUI. Decrypt and import accept any password. Implemented in `b415ffc` (plan 0.5). | SEC-001/SEC-002; a typo on encrypt currently makes data unrecoverable. |
+| Q-003 | Should the default database move from `./cryptare.db` to a per-user location (e.g. `os.UserConfigDir()/cryptare/cryptare.db`)? How should existing `./cryptare.db` files be migrated? | SEC-010 and SEC-016: the working-folder default is what lets a planted database be used. A behaviour change for existing users. |
 | Q-005 | Should `cryptare.db` be purged from git history and force-pushed? | SEC-003; irreversible, so it is the owner's call. |
 | Q-006 | Was the `NOTICE` third-party list removed on purpose, to be regenerated? The file now ends mid-sentence. Where dependency attributions and license texts should live (NOTICE, or a bundled licenses file with the binaries) is a licensing decision for the owner. | Licensing hygiene. |
-| Q-007 | What should happen to the broken v1.0.0 release: mark it as broken, remove its assets, or supersede it with v1.0.1? v1.0.1 (working) is now available as the replacement. **Closed 2026-09-26:** v1.1.0 is released, and the owner decided to leave v1.0.0 as it is. | Users downloading v1.0.0 get non-working binaries. |
+| Q-008 | Should the Argon2id settings accepted when reading (up to 1 GiB of memory, 10 passes, 16 lanes) be lowered, for example to 256 MiB (four times the 64 MiB default), or made configurable? | A crafted 62-byte file costs about 1 GiB of memory and 2 s per attempt (SEC-005), enough to kill a small VM or container. A lower limit restricts stronger settings in the future. |
+| Q-009 | Should passwords for new data be Unicode-normalised (NFC, or NFKC as NIST SP 800-63B suggests), and should a UTF-8 byte-order mark at the start of a `--password-file` be dropped? | The same-looking password typed on another system or input method can produce different bytes, so a file may not decrypt there. Normalising needs a header or KDF flag so existing data stays readable, and possibly `golang.org/x/text` (already an indirect dependency) as a direct one. |
+| Q-010 | For SEC-016: refuse a key database that another user owns or that others can write to, or only warn? | Refusing is safer; warning keeps unusual set-ups, such as a shared service account, working. |
+| Q-011 | For BUG-022: add a gunzip-only option (for example `decompress --raw`), record in the archive that the input was a single file, or only document the behaviour? | Decides how `compress x.tar` round-trips without changing how ordinary tarballs are extracted. |
+| Q-012 | For SEC-019: set owner-only access-control lists on Windows (needs `golang.org/x/sys/windows` as a direct dependency), or only document the limitation? | Windows output currently inherits the permissions of the folder it is written to. |
+
+Answered or closed: Q-001 (release builds use native CGO per OS), Q-002 (stored keys
+should be usable; plan 3.4), Q-004 (the default password policy, `maint.md` §4) and
+Q-007 (v1.0.0 is left as it is). Their discussion is in `history.md`.
 
 ## 5. Reproducing the validation locally
 
@@ -104,5 +137,13 @@ go mod tidy && git diff --exit-code go.mod go.sum
 go vet ./...
 golangci-lint run          # v2.13.2
 go test -race -count=1 ./...
-CGO_ENABLED=0 go build -o /tmp/cryptare-nocgo . && (cd "$(mktemp -d)" && /tmp/cryptare-nocgo --help)   # demonstrates BUG-001
+gosec ./...                # v2.29.0
+govulncheck ./...          # checks the toolchain that go.mod selects
 ```
+
+Run probes that can use a lot of memory, such as decompression or allocation bombs,
+inside a memory-capped cgroup, for example
+`systemd-run --user --scope -p MemoryMax=768M -p MemorySwapMax=0 <command>`. An
+address-space limit (`ulimit -v`) is no substitute: a low one breaks Go binaries (cgo
+thread creation fails) before memory runs out, and on 2026-10-03 a probe limited only
+by `ulimit -v` exhausted the whole machine's memory.

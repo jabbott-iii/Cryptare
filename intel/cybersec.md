@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-09-27
+Last updated: 2026-10-03
 
 ## 1. Security requirements
 
@@ -77,6 +77,32 @@ These apply to all changes.
 - **Not run:** govulncheck (vulnerability database unreachable from the analysis
   environment), fuzzing, Windows and macOS behaviour, Docker build.
 
+### 3a. Re-analysis (2026-10-03)
+
+- **Scope:** all Go sources at `0c57aef` (including the version 2 format), the tests
+  that guard the format, workflows, `Dockerfile`, `.gitignore`, `.devcontainer/` and
+  the README's security claims, checked against the register below so that only new
+  issues or gaps in earlier fixes are added.
+- **Probes:** scratch tests and real binaries built from a copy of the tree, outside
+  the repository. Go 1.26.0 (the toolchain `go.mod` resolves to) on linux/amd64, as
+  a non-root user.
+- **Tools:** `gofmt -s -l` and `go vet ./...` clean; `go test -race -count=1 ./...`
+  passes (75.0% coverage for `main`, 75.4% for `internal`); `go mod verify` reports
+  all modules verified (offline, against the module cache).
+- **Scanners**, run once the owner approved the downloads (installed in a scratch
+  folder, built with Go 1.26.8):
+  - golangci-lint v2.13.2 (CI's version, default linters): 0 issues;
+  - gosec v2.29.0: the same 10 findings as on 2026-09-27, triaged under SEC-012;
+  - govulncheck v1.8.0 (database of 2026-10-01): with the go1.26.0 toolchain that
+    `go.mod` selects, 3 standard-library vulnerabilities are reachable from Cryptare's
+    code, 6 more sit in imported packages but aren't called, and 25 apply only at
+    module level. With go1.26.8, none are reachable or imported (SEC-018).
+- **Not run:** Windows and macOS; the Docker build; fuzzing.
+- **Result:** SEC-015 to SEC-019 added; gaps recorded in SEC-003, SEC-005, SEC-010,
+  SEC-011 and SEC-013. No flaw was found in the version 2 construction itself (STREAM
+  nonces, last-chunk flag, header as additional data, header limits checked before key
+  derivation, folder streams drained to the final chunk).
+
 ## 4. Summary
 
 | ID | Title | Severity | Status |
@@ -95,6 +121,11 @@ These apply to all changes.
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | In Progress |
+| SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Open |
+| SEC-016 | Key database files from untrusted locations are trusted | Low | Open |
+| SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Open |
+| SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | Open |
+| SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Open |
 
 ## 5. Issue register
 
@@ -231,6 +262,12 @@ These apply to all changes.
 ### SEC-003 — Encrypted key material committed to the public repository
 
 - **Status:** In Progress
+- **Gap found (2026-10-03 analysis):** `.gitignore` covers `*.db` but not SQLite's
+  side files (`*.db-journal`, `*.db-wal`, `*.db-shm`), which can hold copies of
+  database pages, or key exports (`*.ckey`), which `keys export` writes to the current
+  directory by default. Working inside a repository checkout, as happened here, can
+  still commit key material. Recommended addition to step 3: ignore those patterns,
+  and cover them in step 5's CI check (plan 5.9).
 - **Progress (2026-09-26):**
   - Step 1 is done: the removal was pushed on 2026-09-23, and `origin/main` no longer
     tracks the file.
@@ -306,6 +343,14 @@ These apply to all changes.
 ### SEC-005 — KDF work factor below current guidance; formats unversioned
 
 - **Status:** In Progress
+- **Update (2026-10-03 analysis):** plans 3.1 and 3.2 were committed in `0c57aef`
+  (2026-09-27, "fix: reformated outputs"); its CI results haven't been reported, so
+  this stays open until they are green. The re-analysis found no flaw in the
+  construction. Measured worst case of the read limits: a crafted 62-byte `.enc` or
+  `.ckey` asking for the maximum (1 GiB, 10 passes, 16 lanes) made `decrypt` and
+  `keys import` use about 1 GiB of memory and 1.9 s per attempt on a 16-core machine.
+  That is the intended bound, but it is 16 times the default setting and can exhaust
+  small machines or containers (owner question Q-008).
 - **Progress (2026-09-27, uncommitted; plans 3.1 and 3.2):** all four remediation steps
   are implemented and validated. Owner decisions: Argon2id with 64 MiB, 3 passes and
   4 lanes (RFC 9106's second recommended setting, above OWASP's minimum of 19 MiB, 2
@@ -417,6 +462,11 @@ These apply to all changes.
 ### SEC-007 — Unbounded decompression and extraction (decompression bomb)
 
 - **Status:** Closed (2026-09-27)
+- **Note (2026-10-03):** builds made with Go older than 1.26.2, which includes what CI
+  produces from this tree today, can be driven to exhaust memory by a crafted `.tar.gz`
+  inside `tar.Reader.Next`, before this item's limits apply (GO-2026-4869, verified).
+  The code-level remediation stands. The toolchain fix is tracked as SEC-018, so the
+  status is unchanged.
 - **Progress (2026-09-27, `b415ffc`; plan 2.1):** all three remediation steps are
   implemented and validated. The owner approved the defaults (10 GiB and 100,000
   entries), the flags, cleanup through a temporary folder, and applying the limits
@@ -464,6 +514,11 @@ These apply to all changes.
 ### SEC-008 — Extraction follows existing symlinks in the destination and overwrites files
 
 - **Status:** Closed (2026-09-27)
+- **Note (2026-10-03):** the `os.Root` confinement depends on the Go version. Builds
+  older than 1.26.5 carry GO-2026-4970: a path ending in `/` can follow a symlink out of
+  a root. Cryptare's extraction never produces such paths and its extraction roots hold
+  no symlinks, so this isn't exploitable today. Release builds must still use a fixed
+  Go version (SEC-018). Status unchanged.
 - **Progress (2026-09-27, `d751967`; plan 2.2):** steps 1 and 3 are implemented and
   validated, so all remediation steps are done. The owner chose owner-only
   permissions.
@@ -576,6 +631,19 @@ These apply to all changes.
 ### SEC-010 — Database created world-readable in the current directory on every run
 
 - **Status:** In Progress
+- **Gap found (2026-10-03 analysis):** step 2 is incomplete for two kinds of path.
+  - A path containing `?`: `prepareDatabaseFile` creates and checks the literal path,
+    but go-sqlite3 cuts a non-URI DSN at its first `?` and opens a different file,
+    which SQLite creates with the umask's mode. Probe, umask 022:
+    `CRYPTARE_DB_PATH=a?b/keys.db` left an empty 0600 `a?b/keys.db` while the keys
+    went into a new 0644 file `a`; `keys2.db?_journal_mode=WAL` left an empty 0600
+    file of that name and a 0644 `keys2.db` holding the keys.
+  - `file:` URIs are skipped by design, so they are also created with the umask's
+    mode.
+
+  Fix in plan 5.8: build the DSN so the driver opens exactly the file that was
+  prepared, or refuse such paths. A database file owned by someone else is a separate
+  issue, SEC-016.
 - **Progress (2026-09-27, `d683739`; plan 2.5):** steps 1 and 2 are implemented and
   validated. Step 3, a per-user default path, is still an owner decision (Q-003,
   plan 3.5), so this item stays open.
@@ -621,6 +689,12 @@ These apply to all changes.
 ### SEC-011 — Imported key metadata not validated before storage and display
 
 - **Status:** In Progress
+- **Note (2026-10-03 analysis):** the "not covered" case below, rows that weren't
+  checked on import being printed raw, is reachable without any import: the default
+  database is whatever `cryptare.db` the current folder holds, so a planted database
+  can inject terminal sequences through `keys list` and the TUI (verified). Escaping
+  stored fields on display is tracked as SEC-016 step 2. This item's own remediation
+  is unchanged.
 - **Progress (2026-09-27, `3d9384e`; plan 2.7):** all four remediation steps are
   implemented and validated.
   - `ImportKeyFromFile` calls the new `validateKeyExport` before returning a key, so
@@ -666,6 +740,17 @@ These apply to all changes.
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
 - **Status:** In Progress
+- **Progress (2026-10-03):** step 3's triage was done locally, and step 5's govulncheck
+  was run (results under SEC-018). gosec v2.29.0 reports the same 10 findings as on
+  2026-09-27; golangci-lint v2.13.2 reports 0 issues.
+
+  | Rule | Where | Disposition |
+  |---|---|---|
+  | G304 ×8: file path taken from a variable | `compress.go` `writeGzip`, `DecompressFileWithLimits`, `writeZipFile`; `crypto.go` `encryptSingleFile`, `DecryptFileWithLimits`, `ImportKeyFromFile`; `database.go` `prepareDatabaseFile`; `logic-cli.go` `readPasswordFile` | Accepted by design: each path is one the user chose (a command argument, `--password-file`, `CRYPTARE_DB_PATH` or a TUI field), and a file tool has to open it. Dismiss in Code Scanning as "won't fix", or annotate with `#nosec G304 -- user-selected path`. |
+  | G301 ×2: `MkdirAll` with 0755 | `compress.go` `extractZipSingleFile`, `extractToDir` | These create missing *parent* folders of the chosen output path, not archive content (which is 0700/0600). That matches `maint.md` §4, but the README says everything written is private. Either create parents 0700, or narrow the README's claim (owner's choice; plan 5.20). |
+
+  Remaining: apply these dispositions in Code Scanning, and add the govulncheck job
+  (SEC-018 step 3).
 - **Progress (2026-09-27, W10, delivered as a patch):** every pinned action that ran
   on Node.js 20 moves to its current release on Node.js 24, still pinned to a full
   commit SHA.
@@ -711,6 +796,16 @@ These apply to all changes.
 ### SEC-013 — Container runs as root; base images not pinned
 
 - **Status:** Open
+- **Additional hardening found (2026-10-03 analysis), for the same approved change:**
+  - there is no `.dockerignore`, so `COPY . .` sends the whole working tree into the
+    builder stage, including `.git` and any local `*.db`, `*.ckey` or password files.
+    Only the binary reaches the final image, but the builder layers and the build
+    context hold the rest;
+  - the runtime image installs `sqlite-libs` and `ca-certificates`, which Cryptare
+    doesn't use: go-sqlite3 compiles SQLite into the binary, and the tool makes no
+    network connections;
+  - the image isn't version-stamped (`--version` prints `dev`) and the builder's Go
+    version floats with `golang:1.26-alpine` (SEC-018).
 - **Affected component:** `Dockerfile`.
 - **Risk:** The container process runs as root, so files it writes into mounted
   volumes are root-owned, and a compromise of the process has root in the container.
@@ -727,6 +822,10 @@ These apply to all changes.
 ### SEC-014 — Symlink race (TOCTOU) when archiving a directory tree
 
 - **Status:** In Progress
+- **Note (2026-10-03):** `walkSourceTree` reaches GO-2026-4970 (fixed in Go 1.26.5) and
+  GO-2026-4602 (fixed in 1.26.1). Through `fs.FS` paths, which can't end in `/`, only
+  GO-2026-4602's leak of file metadata applies. Building with a current Go (SEC-018)
+  removes both.
 - **Progress (2026-09-27, `3d9384e`; plan 2.8):** the remediation is implemented and
   validated.
   - The new `walkSourceTree` in `compress.go` walks the tree with `fs.WalkDir` over an
@@ -763,4 +862,242 @@ These apply to all changes.
   entry's metadata.
 - **Validation:** A regression test using a swap hook, or a code review demonstrating
   root-scoped opens; G122 resolved.
+- **Resolution:** —
+
+### SEC-015 — Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files
+
+- **Status:** Open
+- **Affected component:**
+  - `internal/logic-cli.go`: no signal handling outside the password prompt;
+  - `internal/logic-tui.go` `Update`: `q` and Ctrl+C quit even while `busy`;
+  - `internal/compress.go` `createAtomicFile`/`Abort` and `extractToDir`, and
+    `internal/crypto.go` `writeStreamAtomic`/`restoreDirectoryArchive`: clean-up
+    runs only through deferred calls.
+- **Risk:** Ctrl+C (SIGINT), `kill` (SIGTERM), closing the terminal (SIGHUP), or
+  quitting the TUI while an action runs ends the process without the deferred clean-up.
+  A cancelled decrypt leaves the plaintext decrypted so far in a hidden
+  `.<name>.<random>.tmp` file next to the output. For an encrypted folder it leaves a
+  hidden `.<name>.<random>.tmp/` folder.
+  - The user saw the command cancelled and believes no plaintext was written. The
+    hidden copy stays in synced, backed-up or shared folders until someone finds it.
+  - It contradicts the README ("a command that fails part-way leaves no partial
+    output"); `maint.md` §4 only expects leftovers after power loss or `kill -9`.
+  - Owner-only modes (0600/0700) limit exposure to other local users on Unix, but not
+    on Windows (SEC-019).
+  - Interrupted encrypt, compress and decompress runs leave partial ciphertext or
+    archive data: wasted space, but no plaintext.
+- **Evidence (2026-10-03):** real binary built from `0c57aef`.
+  - A 3 GiB file was encrypted, then `timeout -s INT 1 cryptare decrypt big.bin.enc`.
+    The process ended on SIGINT and `.big.bin.2834428048.tmp` remained: mode 0600,
+    652,148,736 bytes of plaintext.
+  - A folder holding a 27-byte marker file and 1.5 GB of data was encrypted, then
+    `timeout -s INT 0.5 cryptare decrypt tree.enc --output restored`.
+    `.restored.164086144.tmp/` (0700) remained, holding the marker file in plaintext
+    and 590 MB of the large file.
+  - TUI, by code inspection: `Update` returns `tea.Quit` for `q` and Ctrl+C whatever
+    `busy` is, and Bubble Tea v1.3.10 doesn't wait for running commands ("Don't wait
+    on these goroutines", `tea.go` `handleCommands`), so the process exits mid-action.
+- **Required remediation:**
+  1. Make file operations cancellable. Pass a `context.Context` (as `golang.md`
+     requires for blocking I/O) from the CLI and TUI into `EncryptFile`,
+     `DecryptFileWithLimits`, `CompressFileWithFormat` and `DecompressFileWithLimits`,
+     and check it between chunks and archive entries. Cancellation then returns an
+     error and the existing `Abort`/`RemoveAll` clean-up runs.
+  2. CLI: run the file commands under `signal.NotifyContext` for SIGINT, SIGTERM and
+     SIGHUP (`os.Interrupt` and `syscall.SIGTERM` on Windows). After clean-up, exit
+     with 128 + the signal number (130 for SIGINT), as `readTerminalPassword` does.
+  3. TUI: while `busy`, `q` and Ctrl+C cancel the running action and quit only after
+     it has reported back, showing "Cancelling…" meanwhile; or ask for confirmation.
+  4. Update the README and `maint.md` §4: only `kill -9` and power loss can still
+     leave temporary files.
+- **Validation:**
+  - A core test cancels the context in the middle of a file decrypt and a folder
+    decrypt and finds no temporary files (`tempLeftovers`).
+  - A CLI test (Unix) sends SIGINT to a subprocess mid-decrypt and checks exit status
+    130 and no leftovers.
+  - A TUI test quits while busy and checks that the action was cancelled and cleaned
+    up.
+  - The real-binary checks above leave nothing behind.
+- **Resolution:** —
+
+### SEC-016 — Key database files from untrusted locations are trusted
+
+- **Status:** Open
+- **Affected component:** `internal/database.go` `prepareDatabaseFile` and
+  `NewDatabase`; `database_path.go` (default `./cryptare.db`); `internal/logic-cli.go`
+  `newKeysListCmd`; `internal/logic-tui.go` `View` (key table).
+- **Risk:** The default key store is `cryptare.db` in the current folder (SEC-010,
+  Q-003), so which file is used depends on where the command runs. A shared or
+  attacker-writable folder (such as `/tmp`), a cloned repository (compare SEC-003) or
+  an extracted archive can supply it.
+  - `prepareDatabaseFile` tightens permissions only on files the user owns. A
+    database owned by someone else is left as it is, then opened and written. `keys
+    generate` and `keys import` then store the user's encrypted keys in a file that
+    another user owns and can read, giving them the blobs to attack offline (SEC-005).
+  - Stored rows are printed as they are. `keys list` and the TUI write `KeyID` and
+    `Algorithm` raw, so a planted database, or rows from before SEC-011's import
+    checks, can inject terminal control sequences: a changed window title, a cleared
+    or spoofed screen, and on terminals that honour OSC 52, a write to the clipboard.
+- **Evidence (2026-10-03):**
+  - Probe test: a row with key ID `ESC ]0;PWNED BEL ESC [31m…` and algorithm
+    `ESC [2J` was printed raw by `keys list` (the output contains `0x1b`) and appeared
+    raw in the TUI key screen (`View`).
+  - The ownership case is from code review: `os.Chmod` failing with
+    `fs.ErrPermission` is ignored and the file is opened. It wasn't run, because
+    creating a file owned by another user needs a second account.
+- **Required remediation:**
+  1. On Unix, refuse a database, or its `-journal`, `-wal` or `-shm` file, that the
+     current user doesn't own or that is group- or world-writable, as OpenSSH's
+     `StrictModes` does. The error gives the reason and suggests `CRYPTARE_DB_PATH`.
+     Whether to refuse or only warn is an owner decision (Q-010).
+  2. Escape control characters in every stored field that `keys list` and the TUI
+     show (for example with `strconv.Quote`, or by replacing non-printable runes).
+     This is in addition to SEC-011's import checks.
+  3. Prioritise Q-003 / plan 3.5 (a per-user default path), which stops the key store
+     depending on the current folder.
+- **Validation:**
+  - Tests: a row with control characters is listed escaped by the CLI and the TUI.
+  - A unit test of the ownership and permission check with synthetic file
+    information: another owner's file and a 0666 file are refused, and a private file
+    owned by the user is accepted.
+  - The existing database tests still pass.
+- **Resolution:** —
+
+### SEC-017 — GORM's default logger prints SQL with bound values to stdout
+
+- **Status:** Open
+- **Affected component:** `internal/database.go` `NewDatabase`: `gorm.Open(…,
+  &gorm.Config{})` uses GORM's `logger.Default`.
+- **Risk:** GORM's default logger writes to **stdout**: failed statements, "record not
+  found" lookups, and statements slower than 200 ms. It uses ANSI colours and includes
+  the bound values and the build machine's source path.
+  - A failed `keys import` (the key ID is already stored) prints the whole `INSERT`,
+    with the encrypted key blob. `keys export <unknown id>` prints the `SELECT` with
+    the key ID.
+  - Encrypted key material therefore ends up in terminal scrollback, CI logs, or files
+    that stdout is redirected to.
+  - Scripts that parse stdout get unexpected lines, and in the TUI the output
+    corrupts the screen.
+  - On a slow disk, an ordinary `keys generate` can hit the slow-statement log, which
+    prints the blob too.
+- **Evidence (2026-10-03):** real binary.
+  - `keys export ffffffffffffffff` printed `…/internal/database.go:161 record not found
+    … SELECT * FROM key_models WHERE key_id = "ffffffffffffffff" …` on stdout; the
+    command's own error went to stderr.
+  - Importing a key that was already stored printed `INSERT INTO key_models (…,
+    encrypted_blob, …) VALUES (…, "Q1JZUFRBUkUA…")` on stdout.
+- **Required remediation:**
+  1. Open the database with `gorm.Config{Logger: logger.Default.LogMode(logger.Silent)}`,
+     or with a logger that sets `ParameterizedQueries: true` and writes to stderr only
+     when explicitly enabled.
+  2. Turn the errors that the CLI and TUI show into clear messages, since the log no
+     longer explains them. For example: "key … not found" for a missing record, and
+     "a key with ID … is already stored" for the UNIQUE constraint.
+- **Validation:** CLI tests: `keys export <unknown id>` and a duplicate `keys import`
+  write nothing to stdout; the error names the key ID; no output contains the blob.
+- **Resolution:** —
+
+### SEC-018 — Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities
+
+- **Status:** Open. Blocks the next release (plan 5.1).
+- **Confirmed (2026-10-03, after the owner approved the scanner downloads):**
+  govulncheck v1.8.0 (database of 2026-10-01), run with the go1.26.0 toolchain, finds
+  three vulnerabilities that Cryptare's code reaches.
+  - **GO-2026-4869** (CVE-2026-32288), `archive/tar`, fixed in 1.26.2: unbounded
+    allocation for "old GNU sparse" maps, reached through `tar.Reader.Next` in
+    `extractTarGz`. **Exploitable:** a crafted `.tar.gz` makes `decompress` allocate
+    memory in proportion to its decompressed size before Cryptare sees the entry, so
+    SEC-007's `--max-size` and `--max-entries` never apply.
+    - Bounded probe, run inside a memory-capped cgroup with
+      `--max-size 1MB --max-entries 1`: a 117 KB archive took the go1.26.0 build to
+      69 MiB and a 468 KB one to 245 MiB, about 530 times the compressed size.
+    - The go1.26.8 build refused both at once ("archive/tar: sparse map too long",
+      14 MiB).
+    - An earlier 1.9 MB version of the probe, limited only by `ulimit -v`,
+      exhausted the analysis machine's memory, and the kernel's OOM killer ended an
+      unrelated process.
+  - **GO-2026-4970** (CVE-2026-39822), `os`, fixed in 1.26.5: `os.Root` follows a
+    symlink out of the root when a path ends in `/`. Reached from `extractTarGz`
+    (`os.Root.OpenFile`) and `walkSourceTree`. Not exploitable through today's code:
+    entry names are cleaned (no trailing `/`), `fs.FS` paths can't end in `/`, and
+    extraction roots contain no symlinks. It is still a latent bypass of SEC-008's and
+    SEC-014's confinement.
+  - **GO-2026-4602** (CVE-2026-27139), `os`, fixed in 1.26.1: `ReadDir` on a root can
+    return metadata (lstat) of files outside it. Reached from `walkSourceTree`;
+    metadata only.
+  - The other 31 are in packages Cryptare imports but doesn't call (6), or apply only
+    at module level (25): x509, TLS, HTTP, `html/template` and similar, plus an
+    advisory against `golang.org/x/crypto/openpgp`, which Cryptare doesn't import. The
+    highest fix version among all 34 is 1.26.6.
+  - With go1.26.8, already cached on the owner's machine, govulncheck reports no
+    reachable or imported vulnerabilities.
+  - Still not verified: the Go version inside the published release binaries
+    (`go version -m` needs a release asset to be downloaded). `setup-go` gives CI and
+    CD exactly 1.26.0 for this `go.mod`.
+- **Affected component:**
+  - `go.mod`: `go 1.26.0` and no `toolchain` directive;
+  - `.github/workflows/ci.yml` and `cd.yml`: `actions/setup-go` with
+    `go-version-file: go.mod`;
+  - `Dockerfile`: `golang:1.26-alpine`, a tag that moves;
+  - `security.yml`: no govulncheck.
+- **Risk:** setup-go takes the version from the `go` directive, and `1.26.0` names an
+  exact release. CI and the release builds therefore compile with Go 1.26.0 and its
+  standard library.
+  - Go's patch releases regularly fix security issues in packages Cryptare relies on:
+    `archive/tar`, `archive/zip`, `compress/*`, `os` (including `os.Root`),
+    `crypto/*` and `path/filepath`. The project's own validation used 1.26.8 in
+    September 2026.
+  - Published binaries keep any such issue until they are rebuilt with a newer
+    toolchain.
+  - Docker builds use whichever 1.26.x is current, so the pipelines don't agree on the
+    toolchain.
+  - govulncheck, which would report this, isn't run (SEC-012 step 5).
+- **Evidence (2026-10-03):** `go version` in the repository resolves to
+  `golang.org/toolchain@v0.0.1-go1.26.0`; `go.mod` has no `toolchain` line; both
+  workflows pass `go-version-file: go.mod`. Which vulnerabilities apply was
+  established later the same day; see **Confirmed** above.
+- **Required remediation:**
+  1. Confirm the version with `go version -m` on a published release binary. Run
+     `govulncheck ./...` and `govulncheck -mode=binary` on that binary.
+  2. Add `toolchain go1.26.<latest>` to `go.mod`, or set `go-version: '1.26.x'` with
+     `check-latest: true` in the workflows. Keep it current, for example with
+     Dependabot for `gomod` and `github-actions`.
+  3. Add a govulncheck job to `security.yml` that fails on reachable vulnerabilities.
+  4. Build the Docker image with the same Go version, pinned by digest (with SEC-013).
+  5. Optional, in the same change: build with `-trimpath` (binaries embed the build
+     machine's paths, as SEC-017's output shows), and add GitHub artifact
+     attestations for the release archives.
+
+  Changing CI, `go.mod` or the `Dockerfile` needs owner approval (`AGENTS.md`).
+- **Validation:** `go version -m` on new release binaries shows the latest 1.26.x
+  release; the govulncheck job runs and passes; CI, CD and Docker report the same Go
+  version.
+- **Resolution:** —
+
+### SEC-019 — Owner-only permission guarantees don't hold on Windows
+
+- **Status:** Open
+- **Affected component:** every output path (`createAtomicFile`, `extractToDir`,
+  `extractDirMode`, `extractFileMode`); `prepareDatabaseFile`, which skips Windows; the
+  README ("everything the tool writes is private to you"; the key store is "readable
+  only by you").
+- **Risk:** On Windows, Go's permission bits only set or clear the read-only
+  attribute. Files and folders that Cryptare writes inherit the access-control list of
+  the folder they are written to.
+  - In the user's own profile that is usually private.
+  - Decrypted plaintext written to a shared location (`C:\Users\Public`, a shared
+    drive, or a folder an administrator created) is readable by anyone who can read
+    that folder. The same applies to the key database.
+  - The README promises owner-only output with no caveat, and Windows binaries are
+    published.
+- **Evidence (2026-10-03):** code review and Go's `os` documentation: on Windows,
+  `Chmod` uses only the 0200 bit, and `prepareDatabaseFile` returns early ("Unix
+  permission bits don't apply"). Not run on Windows.
+- **Required remediation:**
+  1. Document the limitation in the README and in `maint.md` §4.
+  2. Owner decision (Q-012): set an owner-only DACL on created files and folders on
+     Windows with `golang.org/x/sys/windows`. That module is already an indirect
+     dependency; making it direct is a `go.mod` change that needs approval.
+- **Validation:** README review. If step 2 is done, a Windows CI test reads the DACL of
+  an output file and of an extracted folder.
 - **Resolution:** —
