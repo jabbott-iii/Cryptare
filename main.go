@@ -32,8 +32,19 @@ var version = "dev"
 func main() {
 	rootCmd := newRootCmd(databaseOpener())
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode is the exit status for a command that failed with err: 128 plus the
+// signal's number for one stopped by a signal (130 for Ctrl+C), as shells report, and
+// 1 otherwise.
+func exitCode(err error) int {
+	var interrupted *internal.InterruptedError
+	if errors.As(err, &interrupted) {
+		return interrupted.ExitCode()
+	}
+	return 1
 }
 
 // databaseOpener opens the key database at CRYPTARE_DB_PATH (default ./cryptare.db).

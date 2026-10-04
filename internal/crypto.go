@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/pbkdf2"
@@ -109,9 +110,17 @@ func CheckPasswordPolicy(password string) error {
 // EncryptFile encrypts src with AES-256-GCM using password, writing to dst in the
 // version 2 format (format_v2.go): a folder is written as a tar.gz, and either is
 // streamed in authenticated chunks, so its size isn't limited by memory. If dst is
-// empty, the output path is src + ".enc". The password must meet the password policy
-// (CheckPasswordPolicy).
-func EncryptFile(src, dst, password string) (err error) {
+// empty, the output path is defaultEncryptOutput(src). An output inside a folder being
+// encrypted is refused with ErrOutputInsideInput (BUG-016). The password must meet the
+// password policy (CheckPasswordPolicy).
+func EncryptFile(src, dst, password string) error {
+	return EncryptFileContext(context.Background(), src, dst, password)
+}
+
+// EncryptFileContext is EncryptFile that stops once ctx is done, checked between reads
+// and archive entries. The partial output is then removed and an existing dst is left
+// as it was (SEC-015).
+func EncryptFileContext(ctx context.Context, src, dst, password string) (err error) {
 	if err := CheckPasswordPolicy(password); err != nil {
 		return err
 	}
@@ -130,9 +139,12 @@ func EncryptFile(src, dst, password string) (err error) {
 	}
 
 	if dst == "" {
-		dst = src + encExt
+		dst = defaultEncryptOutput(src)
 	}
 	if err := checkNotSameFile(src, dst); err != nil {
+		return err
+	}
+	if err := checkOutputOutsideFolder(src, dst); err != nil {
 		return err
 	}
 
@@ -143,11 +155,14 @@ func EncryptFile(src, dst, password string) (err error) {
 	defer out.Abort()
 
 	if statInfo.IsDir() {
-		err = encryptDirectory(out, src, password)
+		err = encryptDirectory(ctx, out, src, password)
 	} else {
-		err = encryptSingleFile(out, src, password)
+		err = encryptSingleFile(ctx, out, src, password)
 	}
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := out.Commit(); err != nil {
@@ -157,7 +172,7 @@ func EncryptFile(src, dst, password string) (err error) {
 }
 
 // encryptSingleFile streams the file at src, encrypted, to w.
-func encryptSingleFile(w io.Writer, src, password string) (err error) {
+func encryptSingleFile(ctx context.Context, w io.Writer, src, password string) (err error) {
 	in, err := os.Open(src) // #nosec G304 -- src is the file the user chose to encrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
@@ -168,7 +183,7 @@ func encryptSingleFile(w io.Writer, src, password string) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(enc, in); err != nil {
+	if _, err := copyContext(ctx, enc, in); err != nil {
 		return fmt.Errorf("encrypt data: %w", err)
 	}
 	return enc.Close()
@@ -176,26 +191,26 @@ func encryptSingleFile(w io.Writer, src, password string) (err error) {
 
 // encryptDirectory streams a tar.gz of the directory tree at src, encrypted, to w. The
 // archive is never held in memory or written anywhere in plaintext (SEC-006).
-func encryptDirectory(w io.Writer, src, password string) error {
+func encryptDirectory(ctx context.Context, w io.Writer, src, password string) error {
 	enc, err := newEncryptingWriter(w, password, contentFolder)
 	if err != nil {
 		return err
 	}
-	if err := writeDirectoryArchive(enc, src); err != nil {
+	if err := writeDirectoryArchive(ctx, enc, src); err != nil {
 		return err
 	}
 	return enc.Close()
 }
 
 // writeDirectoryArchive writes a tar.gz of the directory tree at src to w.
-func writeDirectoryArchive(w io.Writer, src string) error {
+func writeDirectoryArchive(ctx context.Context, w io.Writer, src string) error {
 	gz, err := gzip.NewWriterLevel(w, gzip.DefaultCompression)
 	if err != nil {
 		return fmt.Errorf("create gzip writer: %w", err)
 	}
-	gz.Name = filepath.Base(filepath.Clean(src)) + ".tar"
+	gz.Name = gzipFolderName(src)
 
-	if _, err := writeTarGz(gz, src); err != nil {
+	if _, err := writeTarGz(ctx, gz, src); err != nil {
 		return err
 	}
 	if err := gz.Close(); err != nil {
@@ -218,7 +233,14 @@ func DecryptFile(src, dst, password string) error {
 //
 // Version 2 files are decrypted as a stream. Files in the legacy (version 1) formats,
 // which have no header, are still read, whole, as before.
-func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) (err error) {
+func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) error {
+	return DecryptFileWithLimitsContext(context.Background(), src, dst, password, limits)
+}
+
+// DecryptFileWithLimitsContext is DecryptFileWithLimits that stops once ctx is done,
+// checked between reads and archive entries. The partial plaintext is then removed and
+// an existing dst is left as it was (SEC-015).
+func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string, limits ExtractLimits) (err error) {
 	f, err := os.Open(src) // #nosec G304 -- src is the file the user chose to decrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
@@ -240,25 +262,31 @@ func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) (err
 			return err
 		}
 		if h.content == contentFolder {
-			return restoreDirectoryArchive(plain, src, dst, limits)
+			return restoreDirectoryArchive(ctx, plain, src, dst, limits)
 		}
-		return writeStreamAtomic(dst, plain)
+		return writeStreamAtomic(ctx, dst, plain)
 	}
 
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return fmt.Errorf("read source file: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if bytes.HasPrefix(data, []byte(directoryArtifactMagicV1)) {
 		archive, err := decryptBytesWithAAD(data[len(directoryArtifactMagicV1):], password, []byte(directoryArtifactMagicV1))
 		if err != nil {
 			return err
 		}
-		return restoreDirectoryArchive(bytes.NewReader(archive), src, dst, limits)
+		return restoreDirectoryArchive(ctx, bytes.NewReader(archive), src, dst, limits)
 	}
 
 	plaintext, err := decryptBytes(data, password)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := writeFileAtomic(dst, plaintext); err != nil {
@@ -269,13 +297,16 @@ func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) (err
 
 // writeStreamAtomic copies r to dst through a temporary file, so dst appears only if
 // the whole stream was read without error.
-func writeStreamAtomic(dst string, r io.Reader) error {
+func writeStreamAtomic(ctx context.Context, dst string, r io.Reader) error {
 	out, err := createAtomicFile(dst)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
 	defer out.Abort()
-	if _, err := io.Copy(out, r); err != nil {
+	if _, err := copyContext(ctx, out, r); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := out.Commit(); err != nil {
@@ -324,7 +355,7 @@ func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, erro
 // (read from src) into dst, through extractToDir and within limits. Whatever follows
 // the archive in r is read too before the output is kept, so that a version 2 stream
 // is authenticated to its final chunk.
-func restoreDirectoryArchive(r io.Reader, src, dst string, limits ExtractLimits) (err error) {
+func restoreDirectoryArchive(ctx context.Context, r io.Reader, src, dst string, limits ExtractLimits) (err error) {
 	gz, err := gzip.NewReader(r)
 	if errors.Is(err, errDecrypt) {
 		return err // a wrong password shows at the first chunk
@@ -335,11 +366,11 @@ func restoreDirectoryArchive(r io.Reader, src, dst string, limits ExtractLimits)
 	defer closeWithError(&err, gz, "close directory archive reader")
 
 	budget := &extractBudget{limits: limits}
-	return extractToDir(src, dst, func(dir string) error {
-		if err := extractTarGz(gz, dir, budget); err != nil {
+	return extractToDir(ctx, src, dst, func(dir string) error {
+		if err := extractTarGz(ctx, gz, dir, budget); err != nil {
 			return err
 		}
-		if _, err := io.Copy(io.Discard, r); err != nil {
+		if _, err := copyContext(ctx, io.Discard, r); err != nil {
 			return err
 		}
 		return nil
@@ -459,6 +490,38 @@ var timeNow = time.Now
 // it on, so the name they report is the file written (BUG-006).
 func defaultExportPath(keyID string) string {
 	return fmt.Sprintf("%s-%d.ckey", keyID, timeNow().Unix())
+}
+
+// defaultEncryptOutput returns the output EncryptFile writes when none is given: src +
+// ".enc" for a file, and for a folder a file next to it rather than inside it
+// (BUG-016), so "dir/" gives "dir.enc" and "." gives "<parent>/<name>.enc". The CLI
+// and the TUI use it too, so the name they report is the file written.
+func defaultEncryptOutput(src string) string {
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return src + encExt // EncryptFile reports a missing source
+	}
+	clean := filepath.Clean(src)
+	switch filepath.Base(clean) {
+	case ".", "..", string(filepath.Separator):
+		abs, err := filepath.Abs(clean)
+		if err != nil {
+			return clean + encExt // refused as inside the folder, which is safe
+		}
+		return filepath.Join(filepath.Dir(abs), filepath.Base(abs)+encExt)
+	}
+	return clean + encExt
+}
+
+// checkOutputOutsideFolder returns ErrOutputInsideInput when src is a folder and dst
+// lies inside it (BUG-016): the archive would then hold its own partial output, and
+// deleting the folder afterwards would delete the encrypted copy too.
+func checkOutputOutsideFolder(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return nil // EncryptFile reports a missing source
+	}
+	return checkOutputOutsideDir(src, dst)
 }
 
 // defaultDecryptOutput strips the ".enc" extension from src, in any letter case

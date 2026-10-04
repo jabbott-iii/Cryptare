@@ -1625,3 +1625,97 @@ func TestKeysListEscapesControlCharacters(t *testing.T) {
 		}
 	}
 }
+
+// TestKeysExportRefusesExistingOutput is the regression test for BUG-017: keys export
+// leaves an existing file alone unless --force is given, and never writes over the
+// key database, even with --force.
+func TestKeysExportRefusesExistingOutput(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "keys.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	t.Cleanup(func() { closeTestDatabase(t, db) })
+	const keyID = "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: validStoredBlob(t), CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	pwFile := writePasswordFile(t, testPassword)
+	export := func(args ...string) error {
+		rootCmd := NewRootCmd(db)
+		rootCmd.SetArgs(append([]string{"keys", "export", keyID, "--password-file", pwFile}, args...))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+
+	precious := filepath.Join(t.TempDir(), "precious.txt")
+	if err := os.WriteFile(precious, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := export("--output", precious); !errors.Is(err, ErrOutputExists) {
+		t.Fatalf("export onto an existing file: err = %v, want ErrOutputExists", err)
+	}
+	if got, _ := os.ReadFile(precious); string(got) != "keep me" {
+		t.Fatalf("existing file changed to %q", got)
+	}
+	if err := export("--output", precious, "--force"); err != nil {
+		t.Fatalf("export --force: %v", err)
+	}
+	if _, err := ImportKeyFromFile(precious, testPassword); err != nil {
+		t.Fatalf("forced export isn't a valid export: %v", err)
+	}
+
+	for _, extra := range [][]string{nil, {"--force"}} {
+		args := append([]string{"--output", dbPath}, extra...)
+		if err := export(args...); !errors.Is(err, ErrOutputIsKeyDatabase) {
+			t.Fatalf("export %v: err = %v, want ErrOutputIsKeyDatabase", args, err)
+		}
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+		t.Fatalf("key database after refused exports: %d keys (err %v), want 1", len(keys), err)
+	}
+}
+
+// TestEncryptCmdFolderOutputStaysOutside checks BUG-016 through the CLI: "encrypt dir/"
+// writes and reports dir.enc next to the folder, and an --output inside it is refused.
+func TestEncryptCmdFolderOutputStaysOutside(t *testing.T) {
+	parent := t.TempDir()
+	folder := filepath.Join(parent, "secret")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "a.txt"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pwFile := writePasswordFile(t, testPassword)
+	run := func(args ...string) (string, error) {
+		rootCmd := NewRootCmd(newTestDatabase(t, false))
+		rootCmd.SetArgs(args)
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		err := rootCmd.Execute()
+		return out.String(), err
+	}
+
+	out, err := run("encrypt", folder+string(filepath.Separator), "--password-file", pwFile)
+	if err != nil {
+		t.Fatalf("encrypt secret/: %v", err)
+	}
+	if !strings.Contains(out, "→ "+folder+encExt) {
+		t.Fatalf("output %q doesn't report %s", out, folder+encExt)
+	}
+	if _, err := os.Stat(folder + encExt); err != nil {
+		t.Fatalf("secret.enc wasn't written: %v", err)
+	}
+
+	inside := filepath.Join(folder, "x.enc")
+	if _, err := run("encrypt", folder, "--output", inside, "--password-file", pwFile); !errors.Is(err, ErrOutputInsideInput) {
+		t.Fatalf("encrypt into the folder: err = %v, want ErrOutputInsideInput", err)
+	}
+	if _, err := os.Stat(inside); !os.IsNotExist(err) {
+		t.Fatalf("output inside the folder exists (stat err %v)", err)
+	}
+}

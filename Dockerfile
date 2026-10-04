@@ -1,4 +1,5 @@
-FROM golang:1.26-alpine AS builder
+# Same Go release as the toolchain line in go.mod (SEC-018).
+FROM golang:1.26.8-alpine AS builder
 
 WORKDIR /src
 

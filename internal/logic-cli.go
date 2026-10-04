@@ -18,6 +18,7 @@ package internal
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -60,9 +62,15 @@ func NewRootCmdLazy(open DatabaseOpener) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			p := tea.NewProgram(NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: vim}), tea.WithAltScreen())
-			_, err = p.Run()
-			return err
+			model := NewDashboardModelWithOptions(db, dashboardOptions{vimEnabled: vim})
+			return runCancellable(cmd, func(ctx context.Context) error {
+				p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
+				_, err := p.Run()
+				// However the program ended, let a running action finish its clean-up
+				// before the process exits (SEC-015).
+				model.runner.shutdown()
+				return err
+			})
 		},
 	}
 
@@ -93,10 +101,13 @@ func newEncryptCmd() *cobra.Command {
 			src := args[0]
 			dst := output
 			if dst == "" {
-				dst = src + encExt
+				dst = defaultEncryptOutput(src)
 			}
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
+			}
+			if err := checkOutputOutsideFolder(src, dst); err != nil {
+				return err
 			}
 			password, given, err := pw.get(cmd)
 			if err != nil {
@@ -108,7 +119,9 @@ func newEncryptCmd() *cobra.Command {
 					return err
 				}
 			}
-			if err := EncryptFile(src, dst, password); err != nil {
+			if err := runCancellable(cmd, func(ctx context.Context) error {
+				return EncryptFileContext(ctx, src, dst, password)
+			}); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Encrypted: %s → %s\n", src, dst); err != nil {
@@ -118,7 +131,7 @@ func newEncryptCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc, next to a folder)")
 	pw.register(cmd, "encryption password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	return cmd
@@ -159,7 +172,9 @@ func newDecryptCmd() *cobra.Command {
 					return err
 				}
 			}
-			if err := DecryptFileWithLimits(src, dst, password, limits); err != nil {
+			if err := runCancellable(cmd, func(ctx context.Context) error {
+				return DecryptFileWithLimitsContext(ctx, src, dst, password, limits)
+			}); err != nil {
 				return withLimitHint(err)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst); err != nil {
@@ -200,7 +215,9 @@ func newCompressCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			if err := CompressFileWithFormat(src, dst, format, level); err != nil {
+			if err := runCancellable(cmd, func(ctx context.Context) error {
+				return CompressFileWithFormatContext(ctx, src, dst, format, level)
+			}); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Compressed: %s → %s\n", src, dst); err != nil {
@@ -241,7 +258,9 @@ func newDecompressCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			if err := DecompressFileWithLimits(src, dst, limits); err != nil {
+			if err := runCancellable(cmd, func(ctx context.Context) error {
+				return DecompressFileWithLimitsContext(ctx, src, dst, limits)
+			}); err != nil {
 				return withLimitHint(err)
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decompressed: %s → %s\n", src, dst); err != nil {
@@ -372,6 +391,7 @@ func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
 func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 	var output string
 	var pw passwordFlags
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "export [key-id]",
@@ -389,6 +409,13 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 				return fmt.Errorf("key not found: %w", err)
 			}
 
+			if output == "" {
+				output = defaultExportPath(keyID)
+			}
+			if err := checkExportOutput(db, output, force); err != nil {
+				return withForceHint(err)
+			}
+
 			password, given, err := pw.get(cmd)
 			if err != nil {
 				return err
@@ -400,9 +427,6 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 				}
 			}
 
-			if output == "" {
-				output = defaultExportPath(keyID)
-			}
 			if err := ExportKeyToFile(km, password, output); err != nil {
 				return err
 			}
@@ -415,7 +439,26 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <key-id>-<timestamp>.ckey)")
 	pw.register(cmd, "master password for export encryption")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists (never the key database)")
 	return cmd
+}
+
+// checkExportOutput applies the output rules to a key export (BUG-017), for the CLI
+// and the TUI: the key database, or a SQLite file next to it, is never written over,
+// and any other existing file only when overwrite is set.
+func checkExportOutput(db *Database, output string, overwrite bool) error {
+	for _, p := range db.files() {
+		if _, err := os.Stat(p); err != nil {
+			continue // a side file that isn't there can't be written over
+		}
+		if err := checkNotSameFile(p, output); err != nil {
+			if errors.Is(err, ErrSameInputOutput) {
+				return fmt.Errorf("%w: %s", ErrOutputIsKeyDatabase, output)
+			}
+			return err
+		}
+	}
+	return checkOutputFree(output, overwrite)
 }
 
 func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
@@ -738,10 +781,15 @@ func terminalInput(cmd *cobra.Command) (*os.File, bool) {
 	return f, true
 }
 
-// readTerminalPassword reads one line from the terminal fd without echo. Ctrl+C
-// would otherwise kill the process with echo still off, so while the read is in
-// progress an interrupt restores the terminal and exits with status 130
-// (128 + SIGINT), matching what the shell reports for an interrupted command.
+// promptSignals end the hidden password prompt with the terminal restored: Ctrl+C
+// (BUG-012), and kill, Ctrl+\ and a closed terminal (BUG-018). A platform that doesn't
+// send one of them simply never delivers it.
+var promptSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP}
+
+// readTerminalPassword reads one line from the terminal fd without echo. A signal
+// would otherwise end the process with echo still off, so while the read is in
+// progress any of promptSignals restores the terminal and exits with status 128 plus
+// the signal's number (130 for Ctrl+C), matching what the shell reports.
 func readTerminalPassword(fd uintptr, out io.Writer) ([]byte, error) {
 	state, err := term.GetState(fd)
 	if err != nil {
@@ -749,25 +797,94 @@ func readTerminalPassword(fd uintptr, out io.Writer) ([]byte, error) {
 	}
 
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
+	signal.Notify(interrupt, promptSignals...)
 	done := make(chan struct{})
 	defer func() {
 		signal.Stop(interrupt)
 		close(done)
 	}()
 
-	// Owned by this call: it ends when the read returns (done) or after handling Ctrl+C.
+	// Owned by this call: it ends when the read returns (done) or after handling a signal.
 	go func() {
 		select {
-		case <-interrupt:
+		case sig := <-interrupt:
 			_ = term.Restore(fd, state)
 			_, _ = fmt.Fprintln(out)
-			os.Exit(130)
+			os.Exit(signalExitCode(sig))
 		case <-done:
 		}
 	}()
 
 	return term.ReadPassword(fd)
+}
+
+// interruptSignals stop a running file command, or the TUI, so that unfinished output
+// is removed before the process ends (SEC-015). A platform that doesn't send one of
+// them simply never delivers it.
+var interruptSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
+// InterruptedError reports that a command was stopped by a signal, after its unfinished
+// output was removed (SEC-015).
+type InterruptedError struct {
+	Signal os.Signal
+}
+
+func (e *InterruptedError) Error() string {
+	return fmt.Sprintf("interrupted (%v); unfinished output was removed", e.Signal)
+}
+
+// ExitCode is 128 plus the signal's number, as shells report a process ended by a
+// signal: 130 for Ctrl+C.
+func (e *InterruptedError) ExitCode() int {
+	return signalExitCode(e.Signal)
+}
+
+// signalExitCode is the exit status for a process ended by sig: 128 plus its number.
+func signalExitCode(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
+}
+
+// runCancellable runs op with a context that is cancelled when one of
+// interruptSignals arrives (SEC-015), so a file operation stops and removes its partial
+// output instead of the process ending with it in place. After the first signal the
+// default handling is restored, so a second one ends the process at once. When op
+// fails after a signal, the result is an *InterruptedError, which main turns into exit
+// status 128 plus the signal's number.
+func runCancellable(cmd *cobra.Command, op func(ctx context.Context) error) error {
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, interruptSignals...)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(signals)
+		close(done)
+	}()
+	// Owned by this call: it ends when op returns (done) or after the first signal.
+	go func() {
+		select {
+		case sig := <-signals:
+			signal.Stop(signals)
+			cancel(&InterruptedError{Signal: sig})
+		case <-done:
+		}
+	}()
+
+	err := op(ctx)
+	var interrupted *InterruptedError
+	if err != nil && errors.As(context.Cause(ctx), &interrupted) {
+		cmd.SilenceUsage = true
+		return interrupted
+	}
+	return err
 }
 
 func confirmAction(cmd *cobra.Command, prompt string) (bool, error) {

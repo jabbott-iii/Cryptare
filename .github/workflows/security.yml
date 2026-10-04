@@ -48,3 +48,26 @@ jobs:
         with:
           sarif_file: results.sarif
           category: gosec
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # Fails when Cryptare's code reaches a known vulnerability, including one in the
+      # Go standard library of the toolchain go.mod selects (SEC-018). The version is
+      # pinned, and the Go checksum database verifies the module that is downloaded.
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

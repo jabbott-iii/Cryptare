@@ -42,15 +42,19 @@ Status: **In progress.**
   (`format_v2.go`). Its CI results haven't been reported yet.
 - **In progress:**
   - 4.1: the 10 open gosec alerts in Code Scanning are resolved in code (2026-10-03,
-    not yet committed) and close once pushed; govulncheck is still to decide.
+    not yet committed) and close once pushed; the govulncheck job is added with 5.1.
+  - Phase 5 Tier A (5.1–5.5) and 5.6's first two steps are implemented and validated in
+    the working tree, not yet committed.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
 - **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
   (BUG-015–BUG-024), gaps in five existing items and five owner questions
   (Q-008–Q-012). They are planned in
   [Phase 5](#phase-5--remediation-from-the-2026-10-03-analysis).
 - **Next up:**
-  1. Phase 5 Tier A (5.1–5.5): data loss, a broken feature, possibly vulnerable
-     release binaries, and plaintext left behind on interruption. Then a patch release.
+  1. Commit and push the Tier A work (5.1–5.5) and check that CI, CD's build, Docker
+     and Security (including the new govulncheck job) pass. Then cut the patch
+     release, whose notes carry the README's upgrade notes and SEC-002's migration
+     notes.
   2. The rest of Phase 3:
      - 3.3: shared key flows for the CLI and TUI (with 5.17);
      - 3.4: usable stored keys. It will use the header's reserved key source, 2, and
@@ -186,11 +190,11 @@ docs) can run alongside.
 
 | # | Change | Refs | Acceptance | Approval |
 |---|---|---|---|---|
-| 5.1 | **Toolchain and vulnerability scanning.** Confirm first: `go version -m` on the v1.1.0 release binaries; `govulncheck ./...` and `govulncheck -mode=binary`. Then: `toolchain go1.26.<latest>` in `go.mod` (or `go-version: '1.26.x'` with `check-latest: true`); a govulncheck job in `security.yml` that fails on reachable findings; the same Go version for the Docker builder; Dependabot for `gomod` and `github-actions`. Optional: `-trimpath` and release attestations. | SEC-018, SEC-012 step 5 | New release binaries report the latest 1.26.x; govulncheck passes in CI; CI, CD and Docker use one Go version | Yes: `go.mod`, CI, Dockerfile |
-| 5.2 | **`keys export` output safety.** Call `CheckOutputPath` in the CLI (overwrite only with a new `--force`) and in the TUI (always refuse, like the other forms). Refuse the key database file itself, even with `--force` (`os.SameFile`). | BUG-017 | CLI and TUI tests: an existing file is refused without `--force` and left intact; the database path is always refused; the default name still works | Behaviour change: confirm |
-| 5.3 | **Folder-encryption output containment.** One default-output helper for the core, CLI and TUI that writes next to the folder (`dir/` → `dir.enc`; `.` → `<parent>/<name>.enc`). Refuse an output inside the folder with `ErrOutputInsideInput`, as `compress` does. | BUG-016, BUG-013 | Core, CLI and TUI tests for `dir/`, `.` and an explicit output inside the folder; existing round trips pass | Behaviour change: confirm |
-| 5.4 | **Latin-1-safe gzip names.** Store the name in the gzip header only when Latin-1 can hold it. Otherwise use a fallback: an ASCII name ending in `.tar` for a folder (so `isTarGzArchive` still recognises it), or no name for a file. No format change, because restoring a folder doesn't use the name. | BUG-015 | Round-trip tests with Chinese, Cyrillic and emoji names for gzip, tar.gz and folder encryption; artifacts from older builds still read | No |
-| 5.5 | **Cancellation and clean-up.** Pass a `context.Context` through the core file operations, checked between chunks and entries (add `…Context` variants and keep today's functions as wrappers). Run the CLI file commands under `signal.NotifyContext` (SIGINT, SIGTERM, SIGHUP) and exit with 128 + the signal after clean-up. In the TUI, quitting cancels a running action and exits once it reports back. Extend the password prompt's handler to SIGTERM, SIGQUIT and SIGHUP. Update the README and `maint.md` §4. | SEC-015, BUG-018 | The tests listed under SEC-015's validation; a pseudo-terminal check that echo comes back after each signal | No (internal API only) |
+| 5.1 | **Toolchain and vulnerability scanning.** Confirm first: `go version -m` on the v1.1.0 release binaries; `govulncheck ./...` and `govulncheck -mode=binary`. Then: `toolchain go1.26.<latest>` in `go.mod` (or `go-version: '1.26.x'` with `check-latest: true`); a govulncheck job in `security.yml` that fails on reachable findings; the same Go version for the Docker builder; Dependabot for `gomod` and `github-actions`. Optional: `-trimpath` and release attestations. **Done 2026-10-03, not yet committed (owner approved):** v1.1.0's linux/amd64 binary confirmed built with go1.26.0; `toolchain go1.26.8` in `go.mod`; `golang:1.26.8-alpine` builder; a govulncheck v1.8.0 job in `security.yml`; `.github/dependabot.yml` for `gomod` and `github-actions`. Not done: `govulncheck -mode=binary` (database unreachable here), the digest pin (with 4.2), and the optional `-trimpath` and attestations (SEC-018). | SEC-018, SEC-012 step 5 | New release binaries report the latest 1.26.x; govulncheck passes in CI; CI, CD and Docker use one Go version | Yes: `go.mod`, CI, Dockerfile |
+| 5.2 | **`keys export` output safety.** Call `CheckOutputPath` in the CLI (overwrite only with a new `--force`) and in the TUI (always refuse, like the other forms). Refuse the key database file itself, even with `--force` (`os.SameFile`). **Done 2026-10-03, not yet committed (behaviour change confirmed by the owner):** `checkExportOutput` in the CLI (`--force`) and the TUI (never overwrites); the key database and its SQLite files are always refused (`ErrOutputIsKeyDatabase`). | BUG-017 | CLI and TUI tests: an existing file is refused without `--force` and left intact; the database path is always refused; the default name still works | Behaviour change: confirm |
+| 5.3 | **Folder-encryption output containment.** One default-output helper for the core, CLI and TUI that writes next to the folder (`dir/` → `dir.enc`; `.` → `<parent>/<name>.enc`). Refuse an output inside the folder with `ErrOutputInsideInput`, as `compress` does. **Done 2026-10-03, not yet committed (confirmed by the owner):** `defaultEncryptOutput` and `checkOutputOutsideFolder`, used by the core, the CLI and the TUI. | BUG-016, BUG-013 | Core, CLI and TUI tests for `dir/`, `.` and an explicit output inside the folder; existing round trips pass | Behaviour change: confirm |
+| 5.4 | **Latin-1-safe gzip names.** Store the name in the gzip header only when Latin-1 can hold it. Otherwise use a fallback: an ASCII name ending in `.tar` for a folder (so `isTarGzArchive` still recognises it), or no name for a file. No format change, because restoring a folder doesn't use the name. **Done 2026-10-03, not yet committed:** `gzipHeaderName` / `gzipFolderName` (fallback `archive.tar`). | BUG-015 | Round-trip tests with Chinese, Cyrillic and emoji names for gzip, tar.gz and folder encryption; artifacts from older builds still read | No |
+| 5.5 | **Cancellation and clean-up.** Pass a `context.Context` through the core file operations, checked between chunks and entries (add `…Context` variants and keep today's functions as wrappers). Run the CLI file commands under `signal.NotifyContext` (SIGINT, SIGTERM, SIGHUP) and exit with 128 + the signal after clean-up. In the TUI, quitting cancels a running action and exits once it reports back. Extend the password prompt's handler to SIGTERM, SIGQUIT and SIGHUP. Update the README and `maint.md` §4. **Done 2026-10-03, not yet committed:** as described, with a small signal handler of its own (`runCancellable`) instead of `signal.NotifyContext`, so the exit status can name the signal. See SEC-015. | SEC-015, BUG-018 | The tests listed under SEC-015's validation; a pseudo-terminal check that echo comes back after each signal | No (internal API only) |
 
 ### Tier B — hardening
 
@@ -225,11 +229,11 @@ docs) can run alongside.
 
 ### Decisions and approvals Phase 5 needs
 
-- **Approvals:** 5.1 (`go.mod`, CI, Dockerfile), 5.9 (Dockerfile), 5.19 (CI), and 5.10 if
-  ACLs are wanted (`go.mod`).
-- **Behaviour changes to confirm:** 5.2 (export refuses an existing file), 5.3 (default
-  output for `dir/` and `.` moves next to the folder) and 5.12 (invalid options
-  refused).
+- **Approvals:** 5.1 (`go.mod`, CI, Dockerfile; approved 2026-10-03), 5.9 (Dockerfile),
+  5.19 (CI), and 5.10 if ACLs are wanted (`go.mod`).
+- **Behaviour changes to confirm:** 5.2 (export refuses an existing file) and 5.3
+  (default output for `dir/` and `.` moves next to the folder) were confirmed on
+  2026-10-03; 5.12 (invalid options refused) is still to confirm.
 - **Questions:** Q-003 (now more urgent because of SEC-016), Q-008 (Argon2id read limit),
   Q-009 (Unicode normalisation), Q-010 (answered 2026-10-03: refuse), Q-011 (single `.tar`
   files), Q-012 (Windows ACLs).

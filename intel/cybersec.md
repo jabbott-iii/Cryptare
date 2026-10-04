@@ -32,6 +32,8 @@ These apply to all changes.
      (default 10 GiB and 100,000 entries, SEC-007).
    - Outputs are created with mode `0o600`.
    - Plaintext is not staged outside the user-chosen locations.
+   - A command stopped by a signal, or a TUI action cancelled by quitting, removes its
+     unfinished output (SEC-015).
 5. **Key storage.**
    - Key material is stored only in encrypted form.
    - The database is not world-readable.
@@ -41,7 +43,8 @@ These apply to all changes.
      (SEC-016).
    - Deleted keys are not recoverable from the database file.
 6. **Supply chain and CI.** Security scanning results are visible and actionable.
-   Third-party actions and base images are pinned.
+   Third-party actions and base images are pinned. Builds use a pinned, current Go
+   toolchain, and govulncheck runs in CI (SEC-018).
 7. **No regression.** A change must not weaken a remediation recorded below.
 
 ## 2. Existing controls (verified 2026-09-23)
@@ -125,10 +128,10 @@ These apply to all changes.
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | In Progress |
-| SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Open |
+| SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | In Progress |
 | SEC-016 | Key database files from untrusted locations are trusted | Low | In Progress |
 | SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Open |
-| SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | Open |
+| SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | In Progress |
 | SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Open |
 
 ## 5. Issue register
@@ -746,6 +749,8 @@ These apply to all changes.
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
 - **Status:** In Progress
+- **Progress (2026-10-03, step 5; not yet committed):** the govulncheck job is in
+  `security.yml` (SEC-018 step 3).
 - **Progress (2026-10-03, dispositions applied in code; not yet committed):** the 10
   open gosec alerts in Code Scanning (#14, #17, #18, #25, #31–#33, #35–#37) are the 10
   findings triaged below.
@@ -890,7 +895,51 @@ These apply to all changes.
 
 ### SEC-015 — Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files
 
-- **Status:** Open
+- **Status:** In Progress (all four steps implemented and validated locally; not yet
+  committed, so CI hasn't run them)
+- **Progress (2026-10-03, plan 5.5; uncommitted):**
+  - Step 1: `EncryptFileContext`, `DecryptFileWithLimitsContext`,
+    `CompressFileWithFormatContext` and `DecompressFileWithLimitsContext`, with the
+    old functions as wrappers. The context is checked before each read
+    (`copyContext`, 32 KiB at most), at each archive entry (`extractBudget.addEntry`
+    and the source walk), and before the final rename or `Commit`, so cancelling runs
+    the existing `Abort`/`RemoveAll` clean-up and leaves an existing output as it was.
+    The context is passed as a parameter, never stored (`golang.md`).
+  - Step 2: the four file commands run under `runCancellable`: SIGINT, SIGTERM and
+    SIGHUP cancel the context, the command prints `interrupted (<signal>); unfinished
+    output was removed` without the usage text, and `main` exits with 128 plus the
+    signal's number (`InterruptedError`). After the first signal the default handling
+    is restored, so a second one ends the process at once. Signals are caught only
+    while a file operation runs, so prompts and `keys` commands behave as before.
+  - Step 3: in the TUI, `q` and Ctrl+C while an action runs cancel it, show
+    "Cancelling…" and quit when it reports back (`actionRunner`, `quit`). However the
+    program ends (including Bubble Tea's own SIGINT/SIGTERM handling, and SIGHUP
+    through `runCancellable`), the launcher cancels and waits for the running action
+    before the process exits.
+  - Step 4: README ("Stopping a command") and `maint.md` §4 (Cancellation).
+  - With it, BUG-018: the hidden prompt also restores the terminal on SIGTERM,
+    SIGQUIT and SIGHUP, exiting with 128 plus the signal's number.
+  - Validation (scratch copy, Go 1.26.8 and 1.26.0, linux/amd64, non-root):
+    - `TestCancelledOperationsLeaveNothingBehind`: encrypt (file and folder),
+      decrypt (file and folder), gzip, tar.gz, zip, gunzip, and tar.gz, zip and
+      single-file zip extraction, each stopped partway through by a context that
+      reports cancellation after five checks: `context.Canceled`, no output, no
+      temporary file or folder, and an existing output left unchanged (22 cases);
+    - `TestDecryptInterruptedBySignal` (Unix): cryptare as a subprocess decrypting
+      from a named pipe gets SIGINT mid-stream and exits 130 with nothing left;
+    - `TestRunCancellableStopsOnSignal`, `TestRunCancellableWithoutSignal`,
+      `TestExitCode`, `TestDashboardQuitWhileBusyCancelsAction` (menu `q`, menu and
+      form Ctrl+C), `TestDashboardQuitWhenIdle`, `TestActionRunnerShutdownWaitsForAction`;
+    - real binaries, input through a named pipe and the signal sent while the hidden
+      temporary output existed: the old build was killed by SIGINT, SIGTERM and SIGHUP
+      and left `.out.<n>.tmp` (about 2.1 MB of plaintext for a file; a folder for an
+      encrypted folder) each time; the new build exited 130, 143 and 129 and left
+      nothing;
+    - BUG-018 in a pseudo-terminal: the old build restored echo only on SIGINT; the
+      new one restored it on SIGINT, SIGTERM, SIGQUIT and SIGHUP (exits 130, 143, 131,
+      129).
+  - Not run: Windows and macOS (signals there are covered by the build checks only),
+    a TUI session driven in a real terminal.
 - **Affected component:**
   - `internal/logic-cli.go`: no signal handling outside the password prompt;
   - `internal/logic-tui.go` `Update`: `q` and Ctrl+C quit even while `busy`;
@@ -1056,7 +1105,33 @@ These apply to all changes.
 
 ### SEC-018 — Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities
 
-- **Status:** Open. Blocks the next release (plan 5.1).
+- **Status:** In Progress. Steps 1–3 are done in the working tree (not yet committed);
+  the digest pin in step 4 waits for SEC-013, and step 5 is optional. Still blocks
+  the next release until the new toolchain is in a pushed build.
+- **Progress (2026-10-03, plan 5.1; owner approved the `go.mod`, CI and `Dockerfile`
+  changes; uncommitted):**
+  - Step 1: `go version -m` on the published v1.1.0 `cryptare_linux_amd64` (archive
+    checksum matches `checksums.txt`) reports `go1.26.0`, confirming the risk.
+    `govulncheck -mode=binary` wasn't run: the vulnerability database
+    (`vuln.go.dev`) isn't reachable from the analysis environment.
+  - Step 2: `go.mod` has `toolchain go1.26.8`, the latest 1.26 release (the
+    `golang/go` tags and `actions/go-versions` agree). `setup-go` in CI and CD reads
+    it through `go-version-file`. `.github/dependabot.yml` proposes `gomod` and
+    `github-actions` updates weekly.
+  - Step 3: `security.yml` has a `govulncheck` job (`go run
+    golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` on the `go.mod` toolchain, job
+    permissions `contents: read`), which fails when Cryptare's code reaches a known
+    vulnerability.
+  - Step 4, partly: the `Dockerfile` builder is `golang:1.26.8-alpine`, the same
+    release; the tag's existence wasn't checked from here (Docker Hub isn't
+    reachable), and pinning by digest stays with SEC-013 (plan 4.2).
+  - Validation: the full test suite passes with `-race` on Go 1.26.8; `go vet` and
+    test builds pass for linux, windows, darwin and freebsd; actionlint 1.7.12
+    reports nothing in the four workflows. govulncheck itself wasn't run here (see
+    step 1); the earlier 2026-10-03 run found nothing reachable with go1.26.8.
+  - Remaining: push and confirm CI, CD and Docker build with 1.26.8 and the
+    govulncheck job passes; `go version -m` on the next release's binaries; the digest
+    pin with SEC-013; optionally `-trimpath` and release attestations.
 - **Confirmed (2026-10-03, after the owner approved the scanner downloads):**
   govulncheck v1.8.0 (database of 2026-10-01), run with the go1.26.0 toolchain, finds
   three vulnerabilities that Cryptare's code reaches.

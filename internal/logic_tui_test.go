@@ -17,11 +17,13 @@ limitations under the License.
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1142,5 +1144,180 @@ func TestKeyScreenEscapesControlCharacters(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("key screen lacks %s: %q", want, view)
 		}
+	}
+}
+
+// TestDashboardExportRefusesExistingOutput mirrors the CLI check for BUG-017: the TUI's
+// export form never writes over an existing file or the key database.
+func TestDashboardExportRefusesExistingOutput(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "keys.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase: %v", err)
+	}
+	t.Cleanup(func() { closeTestDatabase(t, db) })
+	const keyID = "0123456789abcdef"
+	if err := db.SaveKey(&KeyModel{KeyID: keyID, Algorithm: "AES-256-GCM", EncryptedBlob: validStoredBlob(t), CreatedAt_: 1}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	precious := filepath.Join(t.TempDir(), "precious.txt")
+	if err := os.WriteFile(precious, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, tc := range []struct {
+		output string
+		want   error
+	}{
+		{precious, ErrOutputExists},
+		{dbPath, ErrOutputIsKeyDatabase},
+	} {
+		m := NewDashboardModel(db)
+		m.startForm(actionKeysExport, screenKeys)
+		result := submitForm(t, m, keyID, tc.output, testPassword, testPassword)
+		if !errors.Is(result.err, tc.want) {
+			t.Fatalf("export to %s: err = %v, want %v", tc.output, result.err, tc.want)
+		}
+	}
+	if got, _ := os.ReadFile(precious); string(got) != "keep me" {
+		t.Fatalf("existing file changed to %q", got)
+	}
+	if keys, err := db.ListKeys(); err != nil || len(keys) != 1 {
+		t.Fatalf("key database after refused exports: %d keys (err %v), want 1", len(keys), err)
+	}
+}
+
+// TestDashboardEncryptFolderOutputStaysOutside mirrors the CLI check for BUG-016 in the
+// TUI's encrypt form.
+func TestDashboardEncryptFolderOutputStaysOutside(t *testing.T) {
+	parent := t.TempDir()
+	folder := filepath.Join(parent, "secret")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "a.txt"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	db := newTestDatabase(t, false)
+
+	m := NewDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	result := submitForm(t, m, folder+string(filepath.Separator), "", testPassword, testPassword)
+	if result.err != nil {
+		t.Fatalf("encrypt secret/: %v", result.err)
+	}
+	if !strings.HasSuffix(result.message, "→ "+folder+encExt) {
+		t.Fatalf("message %q doesn't report %s", result.message, folder+encExt)
+	}
+
+	m = NewDashboardModel(db)
+	m.startForm(actionEncrypt, screenMain)
+	result = submitForm(t, m, folder, filepath.Join(folder, "x.enc"), testPassword, testPassword)
+	if !errors.Is(result.err, ErrOutputInsideInput) {
+		t.Fatalf("encrypt into the folder: err = %v, want ErrOutputInsideInput", result.err)
+	}
+}
+
+// TestDashboardQuitWhileBusyCancelsAction checks SEC-015 in the TUI: quitting while an
+// action runs, from the menu or from a form, cancels the action and ends the program
+// only once the action has reported back, so its clean-up isn't cut short.
+func TestDashboardQuitWhileBusyCancelsAction(t *testing.T) {
+	quitKeys := []struct {
+		name string
+		form bool
+		key  tea.KeyMsg
+	}{
+		{"q on a menu", false, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}},
+		{"ctrl+c on a menu", false, tea.KeyMsg{Type: tea.KeyCtrlC}},
+		{"ctrl+c in a form", true, tea.KeyMsg{Type: tea.KeyCtrlC}},
+	}
+	for _, tc := range quitKeys {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewDashboardModel(newTestDatabase(t, false))
+			started := make(chan struct{})
+			cmd := m.runner.cmd(func(ctx context.Context) tea.Msg {
+				close(started)
+				<-ctx.Done()
+				return actionResultMsg{err: ctx.Err()}
+			})
+			m.busy = true
+			if tc.form {
+				m.startForm(actionDecrypt, screenMain)
+			}
+			results := make(chan tea.Msg, 1)
+			go func() { results <- cmd() }()
+			<-started
+
+			next, quitCmd := m.Update(tc.key)
+			m = next.(DashboardModel)
+			if quitCmd != nil {
+				t.Fatal("quitting while busy ended the program at once; want it to wait for the action")
+			}
+			if !m.quitting || m.status != "Cancelling…" {
+				t.Fatalf("quitting = %v, status = %q; want true and \"Cancelling…\"", m.quitting, m.status)
+			}
+
+			var msg tea.Msg
+			select {
+			case msg = <-results:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the action wasn't cancelled")
+			}
+			if result, ok := msg.(actionResultMsg); !ok || !errors.Is(result.err, context.Canceled) {
+				t.Fatalf("action result = %#v, want context.Canceled", msg)
+			}
+			next, finalCmd := m.Update(msg)
+			m = next.(DashboardModel)
+			if finalCmd == nil {
+				t.Fatal("no command after the cancelled action reported back; want tea.Quit")
+			}
+			if _, ok := finalCmd().(tea.QuitMsg); !ok {
+				t.Fatal("the program didn't quit after the cancelled action reported back")
+			}
+		})
+	}
+}
+
+// TestDashboardQuitWhenIdle checks that quitting without a running action still ends
+// the program at once.
+func TestDashboardQuitWhenIdle(t *testing.T) {
+	m := NewDashboardModel(newTestDatabase(t, false))
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Fatal("q did nothing")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("q didn't quit")
+	}
+}
+
+// TestActionRunnerShutdownWaitsForAction checks what the TUI launcher relies on when
+// the program ends some other way, such as on a signal (SEC-015): shutdown cancels the
+// running action and returns only after it has returned, and later actions don't run.
+func TestActionRunnerShutdownWaitsForAction(t *testing.T) {
+	r := &actionRunner{}
+	started := make(chan struct{})
+	var cleanedUp atomic.Bool
+	cmd := r.cmd(func(ctx context.Context) tea.Msg {
+		close(started)
+		<-ctx.Done()
+		cleanedUp.Store(true)
+		return actionResultMsg{err: ctx.Err()}
+	})
+	go cmd()
+	<-started
+
+	r.shutdown()
+	if !cleanedUp.Load() {
+		t.Fatal("shutdown returned before the running action had finished")
+	}
+
+	ran := false
+	msg := r.cmd(func(context.Context) tea.Msg { ran = true; return nil })()
+	if ran {
+		t.Fatal("an action ran after shutdown")
+	}
+	if result, ok := msg.(actionResultMsg); !ok || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("result after shutdown = %#v, want context.Canceled", msg)
 	}
 }

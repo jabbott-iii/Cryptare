@@ -844,3 +844,65 @@ func TestImportKeyRejectsInvalidMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestEncryptFolderOutputStaysOutside is the regression test for BUG-016: the default
+// output for "dir/" and for "." is written next to the folder, and an explicit output
+// inside the folder is refused without writing anything there.
+func TestEncryptFolderOutputStaysOutside(t *testing.T) {
+	parent := t.TempDir()
+	folder := filepath.Join(parent, "secret")
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "a.txt"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	onlyOriginal := func(dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "a.txt" {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Fatalf("%s holds %v, want only a.txt", dir, names)
+		}
+	}
+	encrypted := folder + encExt
+
+	// "secret/", as shell tab completion types it.
+	if err := EncryptFile(folder+string(filepath.Separator), "", testPassword); err != nil {
+		t.Fatalf("encrypt secret/: %v", err)
+	}
+	if _, err := os.Stat(encrypted); err != nil {
+		t.Fatalf("secret.enc wasn't written next to the folder: %v", err)
+	}
+	onlyOriginal(folder)
+	restored := filepath.Join(parent, "restored")
+	if err := DecryptFile(encrypted, restored, testPassword); err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	onlyOriginal(restored)
+
+	// ".", from inside the folder.
+	if err := os.Remove(encrypted); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	t.Chdir(folder)
+	if err := EncryptFile(".", "", testPassword); err != nil {
+		t.Fatalf("encrypt .: %v", err)
+	}
+	if _, err := os.Stat(encrypted); err != nil {
+		t.Fatalf("<parent>/secret.enc wasn't written: %v", err)
+	}
+	onlyOriginal(folder)
+
+	// An explicit output inside the folder.
+	if err := EncryptFile(folder, filepath.Join(folder, "inside.enc"), testPassword); !errors.Is(err, ErrOutputInsideInput) {
+		t.Fatalf("encrypt into the folder: err = %v, want ErrOutputInsideInput", err)
+	}
+	onlyOriginal(folder)
+}

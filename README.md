@@ -40,7 +40,7 @@ Cryptare is a terminal tool for encrypting, decrypting, compressing and extracti
 
 ## Prerequisites
 
-- To build from source: Go 1.26 or newer, plus a C compiler (gcc or clang) with CGO enabled. The SQLite driver used for the key store requires CGO. On Windows this means a CGO-capable toolchain such as MinGW-w64.
+- To build from source: Go 1.26 or newer (`go.mod` selects Go 1.26.8, which an older `go` command downloads automatically unless `GOTOOLCHAIN=local` is set), plus a C compiler (gcc or clang) with CGO enabled. The SQLite driver used for the key store requires CGO. On Windows this means a CGO-capable toolchain such as MinGW-w64.
 - Optional: Docker, to build and run the container image.
 
 ## Installation
@@ -91,11 +91,13 @@ cryptare                             # opens the interactive TUI
 
 - Commands don't overwrite anything by default:
   - if the output file or folder already exists, the command stops; add `--force` to overwrite it;
-  - an output that is the input itself is always refused, even with `--force`, as is compressing a folder into an archive inside that folder;
+  - an output that is the input itself is always refused, even with `--force`, as is compressing or encrypting a folder into a file inside that folder;
+  - `keys export` follows the same rule (`--force` to overwrite), and never writes over the key store itself;
   - the TUI never overwrites, so choose a different output path there;
-  - a command that fails part-way leaves no partial output, and a file or folder it was replacing with `--force` is kept;
+  - a command that fails part-way, or that you stop, leaves no partial output, and a file or folder it was replacing with `--force` is kept;
   - with `--force`, an existing output folder is replaced as a whole, not merged into: files in it that aren't in the archive are removed. Extracting into the folder that holds the archive itself is refused;
   - everything the tool writes is private to you: output files are mode 0600, and extracted or decrypted folders are 0700 with files inside at 0600 (0700 for files the archive marks executable). Permissions stored in an archive are otherwise ignored.
+- Stopping a command: Ctrl+C (or `kill`, or closing the terminal) during `encrypt`, `decrypt`, `compress` or `decompress` stops it and removes its unfinished output. It exits with status 128 plus the signal number (130 for Ctrl+C), and a second Ctrl+C ends it at once. At the hidden password prompt, any of these signals ends the command with your terminal's echo restored. Quitting the TUI while an action runs cancels the action first ("Cancelling…"). Only a forced kill (`kill -9`) or a power loss can still leave a hidden `.<name>.*.tmp` file or folder behind.
 - Extraction is limited to protect against decompression bombs: `decompress`, and `decrypt` for an encrypted folder, stop after 10 GiB of output or 100,000 archive entries, and remove what they wrote. Change the limits with `--max-size` and `--max-entries` (`0` means no limit). The TUI always uses the defaults.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
 - New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
@@ -109,7 +111,9 @@ cryptare                             # opens the interactive TUI
   - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
   - `--password` now prints a warning on stderr; switch scripts to `--password-file` or piped input;
   - on Linux and macOS, the `keys` commands and the TUI refuse a key store that another user owns or that others can write to (see `CRYPTARE_DB_PATH` under [Configuration](#configuration));
-  - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above).
+  - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above);
+  - `keys export` refuses an existing output file unless you add `--force`, and always refuses the key store;
+  - `encrypt dir/` and `encrypt .` now write the encrypted file next to the folder (`dir.enc`, `<parent>/<name>.enc`) instead of inside it, and an `--output` inside the folder being encrypted is refused.
 
 ## Core CLI capabilities
 
@@ -194,6 +198,7 @@ Examples:
 - cryptare keys delete [key-id] --yes — delete non-interactively (automation)
 - cryptare keys delete [key-id] --force — delete non-interactively (automation)
 - `generate`, `export` and `import` also take `--password-file [file]` (or `--password [value]`, which prints a warning)
+- `export` takes `--force` to overwrite an existing output file; it never writes over the key store
 
 Examples:
 - cryptare keys list

@@ -886,3 +886,72 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `internal/logic_cli_test.go`, `internal/logic_tui_test.go` and
   `lazy_database_test.go`; `README.md`, `intel/cybersec.md`, `intel/maint.md`,
   `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-03 — Phase 5 Tier A: toolchain, export and encrypt outputs, Unicode names, cancellation (plans 5.1–5.5)
+
+- **Owner decisions:** 5.1 approved (`go.mod`, CI and `Dockerfile` changes); the
+  behaviour changes in 5.2 and 5.3 confirmed; downloads of Go 1.26.8 and actionlint
+  for validation approved.
+- **5.4 / BUG-015:** gzip header names go through `gzipHeaderName`, which keeps a
+  Latin-1 name and otherwise stores a fallback: `archive.tar` for a folder's tar.gz
+  (so it is still recognised as a tarball) and no name for a file. Compressing and
+  encrypting files and folders named in Chinese, Cyrillic or with emoji now works;
+  reading is unchanged.
+- **5.2 / BUG-017:** `keys export` checks its output with the new `checkExportOutput`
+  before asking for the password: an existing file only with the new `--force` (the
+  TUI never overwrites), and never the key database or its SQLite files
+  (`ErrOutputIsKeyDatabase`; `Database` now remembers its path). `CheckOutputPath`'s
+  existing-output check moved into `checkOutputFree`.
+- **5.3 / BUG-016:** `defaultEncryptOutput` writes a folder's default output next to
+  it (`dir/` → `dir.enc`, `.` → `<parent>/<name>.enc`), and `checkOutputOutsideFolder`
+  refuses an output inside the folder (`ErrOutputInsideInput`), in the core, the CLI
+  (before the password prompt) and the TUI.
+- **5.5 / SEC-015, BUG-018:** `…Context` variants of the four file operations, checked
+  before each read (`copyContext`), at each archive entry and before the final rename;
+  `runCancellable` and `InterruptedError` in the CLI (exit 128 + signal); the TUI's
+  `actionRunner` and `quit` (cancel, "Cancelling…", quit after the action reports
+  back; the launcher waits for it however the program ends); the password prompt
+  restores the terminal on SIGINT, SIGTERM, SIGQUIT and SIGHUP.
+- **5.1 / SEC-018:** confirmed the v1.1.0 linux/amd64 release binary was built with
+  go1.26.0; `toolchain go1.26.8` in `go.mod`; `golang:1.26.8-alpine` in the
+  `Dockerfile`; a govulncheck v1.8.0 job in `security.yml`; `.github/dependabot.yml`.
+- **Tests:** `TestNonLatin1NamesRoundTrip`, `TestGzipHeaderName`,
+  `TestKeysExportRefusesExistingOutput`, `TestDashboardExportRefusesExistingOutput`,
+  `TestEncryptFolderOutputStaysOutside`, `TestEncryptCmdFolderOutputStaysOutside`,
+  `TestDashboardEncryptFolderOutputStaysOutside`, `TestCancelledOperationsLeaveNothingBehind`
+  (22 cases), `TestUncancelledContextOperationsComplete`,
+  `TestDashboardQuitWhileBusyCancelsAction`, `TestDashboardQuitWhenIdle`,
+  `TestActionRunnerShutdownWaitsForAction`, `TestRunCancellableStopsOnSignal`,
+  `TestRunCancellableWithoutSignal` (Unix), `TestExitCode` and
+  `TestDecryptInterruptedBySignal` (Unix, a subprocess fed through a named pipe).
+  The six 5.2–5.4 tests fail on the tree before these changes.
+- **Validation** on scratch copies outside the repository (linux/amd64, non-root;
+  modules as in the gosec entry above):
+  - Go 1.26.8: `gofmt -s -l .` and `go vet ./...` clean; `go vet` and test builds pass
+    for windows, darwin and freebsd (CGO off); `go test -race -count=1 ./...` passes;
+    gosec v2.29.0 reports 0 issues (8 `#nosec`); actionlint 1.7.12 reports nothing in
+    the four workflows. The suite also passes on Go 1.26.0.
+  - Real binaries, old (the tree before these changes) against new:
+    - names in Japanese and Russian: the old build failed to gzip, tar.gz or encrypt
+      them; the new one round-trips them;
+    - `encrypt secret/`: old wrote `secret/.enc` inside the folder; new writes
+      `secret.enc` beside it;
+    - `keys export --output precious.txt`: old replaced the file; new refuses it
+      (exit 1). `--output keys.db`: old destroyed the key database; new refuses;
+    - SIGINT, SIGTERM and SIGHUP mid-decrypt (file and folder, input through a named
+      pipe): old was killed and left a hidden temporary file or folder of plaintext
+      every time; new exited 130, 143 and 129 and left nothing;
+    - SIGINT, SIGTERM, SIGQUIT and SIGHUP at the hidden prompt, in a pseudo-terminal:
+      old restored echo only on SIGINT; new restored it every time.
+- **Not run:** golangci-lint, govulncheck (its database isn't reachable from here),
+  `go mod tidy` (needs the module proxy), Windows and macOS, the Docker build, a TUI
+  session in a real terminal.
+- **Changed:** `go.mod`, `Dockerfile`, `.github/workflows/security.yml`, new
+  `.github/dependabot.yml`; `main.go`, `internal/compress.go`, `internal/crypto.go`,
+  `internal/database.go`, `internal/logic-cli.go`, `internal/logic-tui.go`,
+  `internal/ui-dashboard.go`; tests in `internal/compress_test.go`,
+  `internal/crypto_test.go`, `internal/logic_cli_test.go`, `internal/logic_tui_test.go`,
+  `internal/legacy_fixtures_test.go`, new `internal/cancel_test.go`,
+  `internal/logic_cli_unix_test.go`, `interrupt_test.go` and `interrupt_unix_test.go`;
+  `README.md`, `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.

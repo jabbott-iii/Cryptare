@@ -95,6 +95,11 @@ type DashboardModel struct {
 	formOrigin dashboardScreen
 	formMode   formInputMode
 	vimEnabled bool
+
+	// runner runs form actions so they can be cancelled; quitting is set when the
+	// user quit while an action ran, and the program ends once it reports back.
+	runner   *actionRunner
+	quitting bool
 }
 
 var mainMenuItems = []string{
@@ -124,6 +129,7 @@ func NewDashboardModelWithOptions(db *Database, opts dashboardOptions) Dashboard
 		db:         db,
 		formMode:   formModeInsert,
 		vimEnabled: opts.vimEnabled,
+		runner:     &actionRunner{},
 	}
 }
 

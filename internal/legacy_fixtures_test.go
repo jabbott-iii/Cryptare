@@ -18,6 +18,7 @@ package internal
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -64,7 +65,7 @@ func encryptBytesWithAAD(plaintext []byte, password string, aad []byte) ([]byte,
 func encryptLegacyDirectory(t *testing.T, src, dst, password string) {
 	t.Helper()
 	var archive bytes.Buffer
-	if err := writeDirectoryArchive(&archive, src); err != nil {
+	if err := writeDirectoryArchive(context.Background(), &archive, src); err != nil {
 		t.Fatalf("build legacy archive: %v", err)
 	}
 	sealed, err := encryptBytesWithAAD(archive.Bytes(), password, []byte(directoryArtifactMagicV1))

@@ -35,11 +35,16 @@ var ErrKeyNotFound = errors.New("key not found")
 // file next to it, may have been planted or changed by another user (SEC-016).
 var ErrUntrustedDatabase = errors.New("key database is not safe to use")
 
+// ErrOutputIsKeyDatabase is returned when a key export would be written over the key
+// database or one of its SQLite files (BUG-017).
+var ErrOutputIsKeyDatabase = errors.New("output is the key database")
+
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
 // Database owns the gorm connection for internal data access.
 type Database struct {
 	conn *gorm.DB
+	path string // as given to NewDatabase
 }
 
 // NewDatabase opens (or creates) the sqlite file and runs schema migrations.
@@ -64,7 +69,7 @@ func NewDatabase(path string) (*Database, error) {
 		return nil, fmt.Errorf("auto-migrate schema: %w", err)
 	}
 
-	return &Database{conn: conn}, nil
+	return &Database{conn: conn, path: path}, nil
 }
 
 // prepareDatabaseFile makes the key database private to its owner (SEC-010) and
@@ -93,7 +98,7 @@ func prepareDatabaseFile(path string) error {
 	}
 
 	uid := os.Geteuid()
-	for _, p := range []string{path, path + "-journal", path + "-wal", path + "-shm"} {
+	for _, p := range databaseFiles(path) {
 		info, err := os.Stat(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -112,6 +117,21 @@ func prepareDatabaseFile(path string) error {
 		}
 	}
 	return nil
+}
+
+// databaseFiles returns the database file at path and the SQLite files that can sit
+// next to it.
+func databaseFiles(path string) []string {
+	return []string{path, path + "-journal", path + "-wal", path + "-shm"}
+}
+
+// files returns the database's file and SQLite side files; an in-memory database or a
+// SQLite URI has none that Cryptare tracks.
+func (d *Database) files() []string {
+	if d.path == "" || d.path == ":memory:" || strings.HasPrefix(d.path, "file:") {
+		return nil
+	}
+	return databaseFiles(d.path)
 }
 
 // checkDatabaseFileTrust refuses a key database file, or one of its SQLite side files,

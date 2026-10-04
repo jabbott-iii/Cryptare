@@ -17,10 +17,12 @@ limitations under the License.
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -191,7 +193,8 @@ func (m DashboardModel) handleVimFormKey(msg tea.KeyMsg) (DashboardModel, tea.Cm
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		return m, tea.Quit, true
+		next, cmd := m.quit()
+		return next, cmd, true
 	case tea.KeyEsc:
 		m.screen = m.formOrigin
 		m.status = ""
@@ -267,6 +270,9 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionResultMsg:
 		m.busy = false
+		if m.quitting {
+			return m, tea.Quit
+		}
 		if msg.err != nil {
 			m.status = msg.err.Error()
 			m.isError = true
@@ -286,7 +292,8 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.menuKey(msg) {
 		case "q", "ctrl+c":
-			return m, tea.Quit
+			next, cmd := m.quit()
+			return next, cmd
 
 		case "up", "shift+tab":
 			if m.cursor > 0 {
@@ -340,6 +347,19 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// quit ends the program, or, while an action runs, cancels the action and ends the
+// program once it has reported back, so its clean-up isn't cut short (SEC-015).
+func (m DashboardModel) quit() (DashboardModel, tea.Cmd) {
+	if !m.busy {
+		return m, tea.Quit
+	}
+	m.runner.cancelRunning()
+	m.quitting = true
+	m.status = "Cancelling…"
+	m.isError = false
+	return m, nil
+}
+
 // startForm switches the model into the form screen for the given action.
 func (m *DashboardModel) startForm(action actionKind, origin dashboardScreen) {
 	m.action = action
@@ -383,7 +403,8 @@ func (m DashboardModel) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		return m, tea.Quit
+		next, cmd := m.quit()
+		return next, cmd
 
 	case tea.KeyEsc:
 		m.screen = m.formOrigin
@@ -541,8 +562,15 @@ func (m DashboardModel) View() string {
 
 // buildActionCmd returns a tea.Cmd that performs the currently selected
 // action using the values entered into the form fields, mirroring the
-// behavior of the equivalent commands in logic-cli.go.
+// behavior of the equivalent commands in logic-cli.go. It runs through the model's
+// actionRunner, so quitting can cancel it (SEC-015).
 func (m DashboardModel) buildActionCmd() tea.Cmd {
+	return m.runner.cmd(m.actionFunc())
+}
+
+// actionFunc returns the selected action as a function of a context that is
+// cancelled when the user quits while it runs.
+func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 	db := m.db
 	action := m.action
 
@@ -557,25 +585,28 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 
 	switch action {
 	case actionEncrypt:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			dst := output
 			if dst == "" {
-				dst = file + encExt
+				dst = defaultEncryptOutput(file)
 			}
 			if err := checkTUIOutput(file, dst); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := checkOutputOutsideFolder(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
 			if err := checkTUINewPassword(password, passwordAgain); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := EncryptFile(file, dst, password); err != nil {
+			if err := EncryptFileContext(ctx, file, dst, password); err != nil {
 				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Encrypted: %s → %s", file, dst)}
 		}
 
 	case actionDecrypt:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			dst := output
 			if dst == "" {
 				dst = deriveDecryptOutput(file)
@@ -583,14 +614,14 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			if err := checkTUIOutput(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := DecryptFile(file, dst, password); err != nil {
+			if err := DecryptFileWithLimitsContext(ctx, file, dst, password, DefaultExtractLimits()); err != nil {
 				return actionResultMsg{err: withTUILimitHint(err)}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decrypted: %s → %s", file, dst)}
 		}
 
 	case actionCompress:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			level := -1
 			if levelStr != "" {
 				lv, err := strconv.Atoi(levelStr)
@@ -609,14 +640,14 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			if err := checkTUIOutput(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := CompressFileWithFormat(file, dst, format, level); err != nil {
+			if err := CompressFileWithFormatContext(ctx, file, dst, format, level); err != nil {
 				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Compressed: %s → %s", file, dst)}
 		}
 
 	case actionDecompress:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			dst := output
 			if dst == "" {
 				dst = deriveDecompressOutput(file)
@@ -624,14 +655,14 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			if err := checkTUIOutput(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := DecompressFile(file, dst); err != nil {
+			if err := DecompressFileWithLimitsContext(ctx, file, dst, DefaultExtractLimits()); err != nil {
 				return actionResultMsg{err: withTUILimitHint(err)}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decompressed: %s → %s", file, dst)}
 		}
 
 	case actionKeysGenerate:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			if err := checkTUINewPassword(password, passwordAgain); err != nil {
 				return actionResultMsg{err: err}
 			}
@@ -666,18 +697,21 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 		}
 
 	case actionKeysExport:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			km, err := db.GetKey(keyID)
 			if err != nil {
 				return actionResultMsg{err: fmt.Errorf("key not found: %w", err)}
 			}
 
-			if err := checkTUINewPassword(password, passwordAgain); err != nil {
-				return actionResultMsg{err: err}
-			}
 			dst := output
 			if dst == "" {
 				dst = defaultExportPath(keyID)
+			}
+			if err := withTUIOutputHint(checkExportOutput(db, dst, false)); err != nil {
+				return actionResultMsg{err: err}
+			}
+			if err := checkTUINewPassword(password, passwordAgain); err != nil {
+				return actionResultMsg{err: err}
 			}
 			if err := ExportKeyToFile(km, password, dst); err != nil {
 				return actionResultMsg{err: err}
@@ -686,7 +720,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 		}
 
 	case actionKeysImport:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			km, err := ImportKeyFromFile(file, password)
 			if err != nil {
 				return actionResultMsg{err: err}
@@ -700,7 +734,7 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 		}
 
 	case actionKeysDelete:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			if strings.TrimSpace(confirm) != "DELETE" {
 				return actionResultMsg{err: errors.New(`confirmation required: type "DELETE" to delete the key`)}
 			}
@@ -715,9 +749,69 @@ func (m DashboardModel) buildActionCmd() tea.Cmd {
 			return actionResultMsg{message: fmt.Sprintf("Deleted key: %s", keyID), reload: true}
 		}
 	default:
-		return func() tea.Msg {
+		return func(ctx context.Context) tea.Msg {
 			return actionResultMsg{err: fmt.Errorf("unsupported action %d", action)}
 		}
+	}
+}
+
+// actionRunner runs the TUI's form actions so that a running one can be cancelled, and
+// waited for before the program exits (SEC-015). Every copy of a DashboardModel shares
+// one. Actions run one at a time (BUG-008).
+type actionRunner struct {
+	mu       sync.Mutex
+	cancel   context.CancelFunc // cancels the running action; nil when none runs
+	finished chan struct{}      // closed when the running action has returned
+	closed   bool               // set by shutdown: actions that start later don't run
+}
+
+// cmd returns a tea.Cmd that runs action with a context the runner can cancel.
+func (r *actionRunner) cmd(action func(ctx context.Context) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		finished := make(chan struct{})
+		defer close(finished)
+
+		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			return actionResultMsg{err: context.Canceled}
+		}
+		r.cancel, r.finished = cancel, finished
+		r.mu.Unlock()
+		defer func() {
+			r.mu.Lock()
+			r.cancel, r.finished = nil, nil
+			r.mu.Unlock()
+		}()
+
+		return action(ctx)
+	}
+}
+
+// cancelRunning cancels the running action, if there is one. It reports back as usual.
+func (r *actionRunner) cancelRunning() {
+	r.mu.Lock()
+	cancel := r.cancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// shutdown stops actions that haven't started from running, and cancels a running one
+// and waits until it has returned, so its clean-up has run.
+func (r *actionRunner) shutdown() {
+	r.mu.Lock()
+	r.closed = true
+	cancel, finished := r.cancel, r.finished
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if finished != nil {
+		<-finished
 	}
 }
 
@@ -745,11 +839,13 @@ func withTUILimitHint(err error) error {
 // checkTUIOutput applies CheckOutputPath for form actions. The TUI has no overwrite
 // option, so an existing output is refused with a hint to choose another path.
 func checkTUIOutput(src, dst string) error {
-	if err := CheckOutputPath(src, dst, false); err != nil {
-		if errors.Is(err, ErrOutputExists) {
-			return fmt.Errorf("%w; choose a different output path", err)
-		}
-		return err
+	return withTUIOutputHint(CheckOutputPath(src, dst, false))
+}
+
+// withTUIOutputHint adds the TUI's hint to an existing-output error.
+func withTUIOutputHint(err error) error {
+	if errors.Is(err, ErrOutputExists) {
+		return fmt.Errorf("%w; choose a different output path", err)
 	}
-	return nil
+	return err
 }

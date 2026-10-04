@@ -1395,3 +1395,93 @@ func TestExtensionsIgnoreCase(t *testing.T) {
 		t.Fatalf("decrypted file = %q (err %v), want NOTE", got, err)
 	}
 }
+
+// TestNonLatin1NamesRoundTrip is the regression test for BUG-015: a file or folder
+// whose name Latin-1 can't hold is gzip-compressed, archived as tar.gz and encrypted,
+// and each comes back intact.
+func TestNonLatin1NamesRoundTrip(t *testing.T) {
+	const password = "correct horse battery staple"
+	for _, name := range []string{"日本語", "данные", "lock-🔒"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			mustWrite := func(path, content string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+					t.Fatalf("write %s: %v", path, err)
+				}
+			}
+			mustRead := func(path, want string) {
+				t.Helper()
+				got, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read %s: %v", path, err)
+				}
+				if string(got) != want {
+					t.Fatalf("%s = %q, want %q", path, got, want)
+				}
+			}
+
+			file := filepath.Join(dir, name+".txt")
+			mustWrite(file, "file "+name)
+			if err := CompressFile(file, "", gzip.DefaultCompression); err != nil {
+				t.Fatalf("gzip a file: %v", err)
+			}
+			unzipped := filepath.Join(dir, "unzipped-"+name+".txt")
+			if err := DecompressFile(file+gzExt, unzipped); err != nil {
+				t.Fatalf("gunzip a file: %v", err)
+			}
+			mustRead(unzipped, "file "+name)
+
+			folder := filepath.Join(dir, name)
+			if err := os.Mkdir(folder, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			mustWrite(filepath.Join(folder, name+"-inner.txt"), "inner "+name)
+			inner := name + "-inner.txt"
+
+			// A plain ".gz" name relies on the gzip header to mark the tarball.
+			for i, archive := range []string{folder + tarGzExt, filepath.Join(dir, "plain"+gzExt)} {
+				if err := CompressFile(folder, archive, gzip.DefaultCompression); err != nil {
+					t.Fatalf("tar.gz a folder as %s: %v", filepath.Base(archive), err)
+				}
+				out := filepath.Join(dir, fmt.Sprintf("extracted-%d", i))
+				if err := DecompressFile(archive, out); err != nil {
+					t.Fatalf("extract %s: %v", filepath.Base(archive), err)
+				}
+				mustRead(filepath.Join(out, inner), "inner "+name)
+			}
+
+			encrypted := filepath.Join(dir, "folder.enc")
+			if err := EncryptFile(folder, encrypted, password); err != nil {
+				t.Fatalf("encrypt a folder: %v", err)
+			}
+			restored := filepath.Join(dir, "restored")
+			if err := DecryptFile(encrypted, restored, password); err != nil {
+				t.Fatalf("decrypt a folder: %v", err)
+			}
+			mustRead(filepath.Join(restored, inner), "inner "+name)
+		})
+	}
+}
+
+// TestGzipHeaderName checks which names a gzip header keeps (BUG-015).
+func TestGzipHeaderName(t *testing.T) {
+	tests := []struct{ name, want string }{
+		{"notes.txt", "notes.txt"},
+		{"résumé.txt", "résumé.txt"}, // Latin-1
+		{"日本語.txt", "fallback"},
+		{"lock-🔒.txt", "fallback"},
+		{"bad\xff.txt", "fallback"}, // invalid UTF-8
+	}
+	for _, tc := range tests {
+		if got := gzipHeaderName(tc.name, "fallback"); got != tc.want {
+			t.Errorf("gzipHeaderName(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := gzipFolderName("/tmp/данные/"); got != fallbackTarName {
+		t.Errorf("gzipFolderName = %q, want %q", got, fallbackTarName)
+	}
+	if got := gzipFolderName("/tmp/photos/"); got != "photos.tar" {
+		t.Errorf("gzipFolderName = %q, want photos.tar", got)
+	}
+}

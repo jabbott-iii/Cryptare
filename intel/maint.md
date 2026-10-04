@@ -15,7 +15,8 @@ Cryptare is a single-binary Go CLI/TUI for local file protection:
 
 It has no network surface: there is no HTTP server and nothing calls a remote service.
 
-- Module: `github.com/jabbott-iii/Cryptare`; `go.mod` declares `go 1.26.0`.
+- Module: `github.com/jabbott-iii/Cryptare`; `go.mod` declares `go 1.26.0` and
+  `toolchain go1.26.8` (SEC-018).
 - Entry point: `main.go` opens the database, builds the Cobra root command and runs it.
 - All application logic lives in one flat Go package, `internal/`.
 
@@ -140,24 +141,45 @@ These are observed in the codebase and required for new code:
   `// #nosec <rule> -- <reason>`, naming only that rule, and recorded in
   `cybersec.md` (SEC-012). Fix a finding rather than suppress it when a fix exists.
 - **Output safety.** Core operations refuse an output that is their own input
-  (`ErrSameInputOutput`), and compression refuses an archive inside the folder being
-  archived (`ErrOutputInsideInput`). Interfaces call `CheckOutputPath` before writing:
-  the CLI overwrites an existing output only with `--force`, and the TUI never does.
-  New commands that write files must follow the same rules.
+  (`ErrSameInputOutput`), and compressing or encrypting a folder refuses an output
+  inside that folder (`ErrOutputInsideInput`; `checkOutputOutsideFolder`, BUG-016).
+  A folder's default encrypted output sits next to it (`defaultEncryptOutput`).
+  Interfaces call `CheckOutputPath` before writing: the CLI overwrites an existing
+  output only with `--force`, and the TUI never does. `keys export` uses
+  `checkExportOutput`, which also never writes over the key database
+  (`ErrOutputIsKeyDatabase`, BUG-017). New commands that write files must follow the
+  same rules.
 - **Atomic single-file writes.** Write single-file outputs with `writeFileAtomic` or
   `createAtomicFile` + `Commit` (in `compress.go`). They write a hidden temporary file
   next to the destination and then rename it, so a failed run leaves the destination
   untouched. Consequences:
   - a replaced output becomes a new 0600 file;
   - a symlink at the output path is replaced, not written through;
-  - a killed process (power loss, `kill -9`) can leave a hidden `.<name>.*.tmp` file
-    (mode 0600) behind.
+  - only a process that can't run its clean-up (power loss, `kill -9`) can leave a
+    hidden `.<name>.*.tmp` file (mode 0600) behind; see Cancellation below.
 
   Archive extraction is atomic too: `extractToDir` extracts into a new hidden
   `.<name>.*.tmp` folder (mode 0700) and renames it into place only on success. An
   existing output (allowed with `--force`) is moved aside, replaced, then removed,
   so it is replaced as a whole rather than merged into. Replacing a folder that holds
   the archive being extracted is refused (`ErrInputInsideOutput`).
+- **Cancellation (SEC-015).** The long-running file operations have `…Context`
+  variants (`EncryptFileContext`, `DecryptFileWithLimitsContext`,
+  `CompressFileWithFormatContext`, `DecompressFileWithLimitsContext`); the plain
+  functions wrap them with `context.Background()`. They check the context before each
+  read (`copyContext`), at each archive entry (`extractBudget.addEntry`, the source
+  walk) and before the final rename, so cancelling ends them through the usual
+  `Abort`/`RemoveAll` clean-up. The CLI runs them under `runCancellable`: SIGINT,
+  SIGTERM and SIGHUP cancel the context, and the command exits with 128 plus the
+  signal's number (`InterruptedError`); a second signal ends the process at once. The
+  TUI runs actions through `actionRunner`: quitting while one runs cancels it and quits
+  when it reports back, and the launcher waits for it however the program ends. New
+  operations that read or write data in a loop must take a context the same way. The
+  hidden password prompt restores the terminal on SIGINT, SIGTERM, SIGQUIT and SIGHUP
+  (BUG-018).
+- **Gzip header names.** A gzip header holds Latin-1 only, so names go through
+  `gzipHeaderName` (a folder's falls back to `archive.tar`, a file's to none;
+  BUG-015). Readers must not depend on the stored name.
 - **Extraction permissions and confinement.** Entries are written through an
   `os.Root` opened on the new extraction folder, so nothing can be created outside
   it. Permissions stored in an archive are ignored: folders get `extractDirMode`
@@ -205,6 +227,11 @@ These are observed in the codebase and required for new code:
   `t.TempDir()` and must not write anywhere else.
 - Database tests use `newTestDatabase(t, useFile)`. Close the SQL handles so Windows
   CI can delete the temporary files.
+- Cancellation tests stop operations partway through with a context that reports
+  itself cancelled after a set number of checks (`cancelAfter` in
+  `internal/cancel_test.go`), not with timing. `interrupt_unix_test.go` runs cryptare
+  as a subprocess (through the `TestRunMain` helper) and signals it mid-decrypt, with
+  the input fed through a named pipe.
 - TUI tests drive `DashboardModel.Update` and `updateForm` with synthetic
   `tea.KeyMsg` values; follow `internal/logic_tui_test.go`.
 - CLI tests run `NewRootCmd(db)` with `SetArgs`, `SetIn` and `SetOut`; follow
@@ -242,6 +269,11 @@ These are observed in the codebase and required for new code:
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
   because the release workflow depends on it.
 - **Docker:** the `Dockerfile` builds with CGO for `linux/amd64` only (`GOARCH=amd64`).
+- **Go toolchain (SEC-018):** CI and CD install the `toolchain` version from `go.mod`
+  (`setup-go` with `go-version-file`), and the `Dockerfile` builder image names the
+  same release (`golang:1.26.8-alpine`). Change both together. Dependabot proposes
+  module and action updates weekly, and the Security workflow's govulncheck job fails
+  when Cryptare's code reaches a known vulnerability.
 
 ## 7. Change checklist
 

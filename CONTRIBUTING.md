@@ -23,7 +23,8 @@ which is authoritative; this guide must stay consistent with it. Also read
 
 ### Prerequisites
 
-- **Go 1.26 or newer** (`go.mod` declares `go 1.26.0`).
+- **Go 1.26 or newer** (`go.mod` declares `go 1.26.0` and selects `toolchain go1.26.8`,
+  which an older `go` command downloads automatically unless `GOTOOLCHAIN=local`).
 - **A C compiler (gcc or clang) with CGO enabled.** The SQLite driver
   (`github.com/mattn/go-sqlite3`, pulled in by `gorm.io/driver/sqlite`) requires CGO.
   Builds with `CGO_ENABLED=0` compile but fail on every command at runtime.
@@ -75,8 +76,8 @@ go test ./...                                        # add -race when a C toolch
 
 CI runs on Ubuntu, Windows and macOS. After the checks above, it builds the binary with
 CGO and smoke-tests it: `--version`, `keys generate`/`keys list`, and an encrypt/decrypt
-round-trip. On every push and pull request, CodeQL and gosec also run
-(`security.yml`). Pull requests to `main` get a Docker build smoke test
+round-trip. On every push and pull request, CodeQL, gosec and govulncheck also run
+(`security.yml`), and Dependabot proposes Go module and action updates weekly. Pull requests to `main` get a Docker build smoke test
 (`docker.yml`).
 
 ## Coding expectations
