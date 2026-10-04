@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -547,4 +548,167 @@ func TestNewDatabaseRefusesFilesOthersCanWrite(t *testing.T) {
 			t.Fatalf("NewDatabase err = %v, want ErrUntrustedDatabase", err)
 		}
 	})
+}
+
+// TestDatabaseErrorsAreTyped checks the errors the CLI and TUI explain since GORM's log
+// is silenced (SEC-017): a missing key is ErrKeyNotFound, and a duplicate key ID is
+// ErrKeyExists.
+func TestDatabaseErrorsAreTyped(t *testing.T) {
+	db := newTestDatabase(t, false)
+	if _, err := db.GetKey("ffffffffffffffff"); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("GetKey(missing) err = %v, want ErrKeyNotFound", err)
+	}
+	key := func() *KeyModel {
+		return &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}
+	}
+	if err := db.SaveKey(key()); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+	if err := db.SaveKey(key()); !errors.Is(err, ErrKeyExists) {
+		t.Fatalf("SaveKey(duplicate) err = %v, want ErrKeyExists", err)
+	}
+}
+
+// TestDatabasePathsOpenThePreparedFile is the regression test for SEC-010's path gap
+// (plan 5.8): the file that holds the keys is the one Cryptare prepared (0600, trust
+// checked), for a file: URI as for a plain path, and a plain path that SQLite would
+// cut at "?" is refused without creating anything.
+func TestDatabasePathsOpenThePreparedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(`Unix permission bits don't apply, and "?" can't appear in Windows names`)
+	}
+	listing := func(dir string) []string {
+		t.Helper()
+		var names []string
+		err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if p != dir {
+				rel, _ := filepath.Rel(dir, p)
+				names = append(names, rel)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
+		}
+		return names
+	}
+	uri := func(path, query string) string {
+		return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: query}).String()
+	}
+
+	t.Run("plain path with ? is refused", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "a?b"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		for _, path := range []string{filepath.Join(dir, "a?b", "keys.db"), filepath.Join(dir, "keys.db?_journal_mode=WAL")} {
+			if _, err := NewDatabase(path); !errors.Is(err, ErrUnsupportedDatabasePath) {
+				t.Fatalf("NewDatabase(%s) err = %v, want ErrUnsupportedDatabasePath", path, err)
+			}
+		}
+		if got := listing(dir); len(got) != 1 || got[0] != "a?b" {
+			t.Fatalf("folder holds %v, want only the empty a?b", got)
+		}
+	})
+
+	t.Run("file: URI", func(t *testing.T) {
+		dir := t.TempDir()
+		folder := filepath.Join(dir, "a?b") // reachable through %3F
+		if err := os.Mkdir(folder, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		file := filepath.Join(folder, "keys.db")
+		dsn := uri(file, "")
+		if !strings.Contains(dsn, "%3F") {
+			t.Fatalf("URI %s doesn't escape the ?", dsn)
+		}
+		db, err := NewDatabase(dsn)
+		if err != nil {
+			t.Fatalf("NewDatabase(%s): %v", dsn, err)
+		}
+		if err := db.SaveKey(&KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}); err != nil {
+			t.Fatalf("SaveKey: %v", err)
+		}
+		closeTestDatabase(t, db)
+
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatalf("the keys aren't in %s: %v", file, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("database behind the URI has mode %04o, want 0600", got)
+		}
+		if got := listing(dir); len(got) != 2 {
+			t.Fatalf("folder holds %v, want only a?b and a?b/keys.db", got)
+		}
+		db, err = NewDatabase(dsn)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		keys, err := db.ListKeys()
+		closeTestDatabase(t, db)
+		if err != nil || len(keys) != 1 {
+			t.Fatalf("keys after reopening = %d (err %v), want 1", len(keys), err)
+		}
+
+		// The trust check covers a file behind a URI too (SEC-016).
+		if err := os.Chmod(file, 0o666); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		if _, err := NewDatabase(dsn); !errors.Is(err, ErrUntrustedDatabase) {
+			t.Fatalf("NewDatabase(world-writable file behind a URI) err = %v, want ErrUntrustedDatabase", err)
+		}
+	})
+
+	t.Run("in-memory URI creates nothing", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		db, err := NewDatabase("file:scratch?mode=memory")
+		if err != nil {
+			t.Fatalf("NewDatabase: %v", err)
+		}
+		closeTestDatabase(t, db)
+		if got := listing(dir); len(got) != 0 {
+			t.Fatalf("folder holds %v, want nothing", got)
+		}
+	})
+}
+
+// TestDatabaseFilePath checks how key database paths map to files (plan 5.8).
+func TestDatabaseFilePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file: URIs are left to SQLite on Windows")
+	}
+	tests := []struct {
+		dsn      string
+		path     string
+		readOnly bool
+		ok       bool
+		err      error
+	}{
+		{":memory:", "", false, false, nil},
+		{"keys.db", "keys.db", false, true, nil},
+		{"dir/keys.db", "dir/keys.db", false, true, nil},
+		{"keys.db?_journal_mode=WAL", "", false, false, ErrUnsupportedDatabasePath},
+		{"file:keys.db", "keys.db", false, true, nil},
+		{"file:/tmp/a%3Fb/keys.db?_journal_mode=WAL", "/tmp/a?b/keys.db", false, true, nil},
+		{"file:///tmp/keys.db", "/tmp/keys.db", false, true, nil},
+		{"file://localhost/tmp/keys.db?mode=ro", "/tmp/keys.db", true, true, nil},
+		{"file://elsewhere/tmp/keys.db", "", false, false, ErrUnsupportedDatabasePath},
+		{"file::memory:", "", false, false, nil},
+		{"file:scratch?mode=memory&cache=shared", "", false, false, nil},
+	}
+	for _, tc := range tests {
+		path, readOnly, ok, err := databaseFilePath(tc.dsn)
+		if !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
+			t.Errorf("%s: err = %v, want %v", tc.dsn, err, tc.err)
+			continue
+		}
+		if path != filepath.FromSlash(tc.path) || readOnly != tc.readOnly || ok != tc.ok {
+			t.Errorf("%s = (%q, readOnly %v, ok %v), want (%q, %v, %v)", tc.dsn, path, readOnly, ok, tc.path, tc.readOnly, tc.ok)
+		}
+	}
 }

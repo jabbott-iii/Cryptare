@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -63,6 +64,17 @@ var (
 	// ErrExtractLimit is returned when decompression or extraction would exceed its
 	// ExtractLimits. The partial output is removed.
 	ErrExtractLimit = errors.New("extraction limit exceeded")
+	// ErrFormatMismatch is returned when an explicit compression format contradicts the
+	// output's extension, such as gzip into "x.zip" (BUG-020).
+	ErrFormatMismatch = errors.New("compression format doesn't match the output name")
+	// ErrInvalidLevel is returned for a compression level other than 1–9 or -1, the
+	// default (BUG-020).
+	ErrInvalidLevel = errors.New("invalid compression level")
+	// ErrNotGzip is returned when GunzipFileContext is given a zip archive.
+	ErrNotGzip = errors.New("not a gzip file")
+	// ErrInputTooLarge is returned when an input that is read whole is larger than the
+	// most Cryptare reads of that kind (BUG-024).
+	ErrInputTooLarge = errors.New("input is too large")
 )
 
 // Default extraction limits (SEC-007): the most one decompression or extraction may
@@ -259,7 +271,54 @@ func DecompressFileWithLimitsContext(ctx context.Context, src, dst string, limit
 			return extractTarGz(ctx, gz, dir, budget)
 		})
 	}
+	return gunzipToFile(ctx, gz, dst, budget)
+}
 
+// GunzipFileContext decompresses the gzip file src to the single file dst without
+// extracting a tar archive it holds (BUG-022, Q-011), so "decompress --raw" gives
+// x.tar back from x.tar.gz. If dst is empty, the output is defaultRawOutput(src). It
+// stops once ctx is done, limits.MaxBytes bounds the output, and a failure leaves no
+// partial output.
+func GunzipFileContext(ctx context.Context, src, dst string, limits ExtractLimits) (err error) {
+	if hasSuffixFold(src, zipExt) {
+		return fmt.Errorf("%w: %s is a zip archive", ErrNotGzip, src)
+	}
+	in, err := os.Open(src) // #nosec G304 -- src is the archive the user chose to decompress
+	if err != nil {
+		return fmt.Errorf("open source file: %w", err)
+	}
+	defer closeWithError(&err, in, "close source file")
+
+	gz, err := gzip.NewReader(in)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrNotGzip, err)
+	}
+	defer closeWithError(&err, gz, "close gzip reader")
+
+	if dst == "" {
+		dst = defaultRawOutput(src)
+	}
+	if err := checkNotSameFile(src, dst); err != nil {
+		return err
+	}
+	return gunzipToFile(ctx, gz, dst, &extractBudget{limits: limits})
+}
+
+// defaultRawOutput is GunzipFileContext's default output: src without ".gz", with
+// ".tgz" becoming ".tar", in any letter case, or src + ".dec".
+func defaultRawOutput(src string) string {
+	switch {
+	case hasSuffixFold(src, tgzExt):
+		return src[:len(src)-len(tgzExt)] + ".tar"
+	case hasSuffixFold(src, gzExt):
+		return src[:len(src)-len(gzExt)]
+	}
+	return src + ".dec"
+}
+
+// gunzipToFile writes the decompressed stream gz to the single file dst through a
+// temporary file, within budget.
+func gunzipToFile(ctx context.Context, gz io.Reader, dst string, budget *extractBudget) error {
 	out, err := createAtomicFile(dst)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
@@ -315,18 +374,42 @@ func hasSuffixFold(s, suffix string) bool {
 	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
 }
 
+// resolveCompressFormat picks the format for compressing to dst: format if given,
+// otherwise zip for a ".zip" name and gzip for anything else. An explicit format that
+// contradicts dst's extension, gzip into ".zip" or zip into ".gz", ".tgz" or
+// ".tar.gz", is refused instead of being silently overridden (BUG-020).
 func resolveCompressFormat(format, dst string) (compressFormat, error) {
+	zipName := hasSuffixFold(dst, zipExt)
+	gzipName := hasSuffixFold(dst, gzExt) || hasSuffixFold(dst, tgzExt)
 	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "", string(formatGzip):
-		if strings.HasSuffix(strings.ToLower(dst), zipExt) {
+	case "":
+		if zipName {
 			return formatZip, nil
 		}
 		return formatGzip, nil
+	case string(formatGzip):
+		if zipName {
+			return "", fmt.Errorf("%w: gzip into %q (use zip, or a .gz name)", ErrFormatMismatch, dst)
+		}
+		return formatGzip, nil
 	case string(formatZip):
+		if gzipName {
+			return "", fmt.Errorf("%w: zip into %q (use gzip, or a .zip name)", ErrFormatMismatch, dst)
+		}
 		return formatZip, nil
 	default:
 		return "", fmt.Errorf("unsupported compression format %q (supported: gzip, zip)", format)
 	}
+}
+
+// checkCompressLevel refuses a compression level the CLI or TUI was given other than
+// 1–9, or -1 for the default (BUG-020). CompressFileWithFormat itself still treats an
+// out-of-range level as the default.
+func checkCompressLevel(level int) error {
+	if level == gzip.DefaultCompression || (level >= gzip.BestSpeed && level <= gzip.BestCompression) {
+		return nil
+	}
+	return fmt.Errorf("%w: %d (use 1–9, or -1 for the default)", ErrInvalidLevel, level)
 }
 
 // writeTarGz writes the directory tree at root to w as a tar stream, reading it through
@@ -781,7 +864,7 @@ func extractToDir(ctx context.Context, src, dst string, extract func(dir string)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
-	tmp, err := os.MkdirTemp(parent, "."+filepath.Base(dst)+".*.tmp")
+	tmp, err := os.MkdirTemp(parent, "."+tempNamePart(filepath.Base(dst))+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
@@ -843,15 +926,7 @@ func checkInputOutsideOutput(src, dst string) error {
 	if !info.IsDir() {
 		return nil
 	}
-	realDst, err := filepath.EvalSymlinks(dst)
-	if err != nil {
-		return fmt.Errorf("resolve output path: %w", err)
-	}
-	realSrc, err := filepath.EvalSymlinks(src)
-	if err != nil {
-		return fmt.Errorf("resolve input path: %w", err)
-	}
-	inside, err := pathWithin(realDst, realSrc)
+	inside, err := pathWithin(dst, src)
 	if err != nil {
 		return err
 	}
@@ -990,9 +1065,42 @@ func checkOutputOutsideDir(srcDir, dst string) error {
 	return nil
 }
 
-// pathWithin reports whether path is dir itself or lies inside it, comparing
-// absolute paths lexically.
+// pathWithin reports whether path is dir itself or lies inside it. It compares the
+// absolute paths as text and, failing that, walks up from path comparing each existing
+// folder with dir by identity (os.SameFile), so a path reached through a symlink, or
+// spelled in another letter case on a case-insensitive file system, is recognised too
+// (BUG-019). Parts of path that don't exist yet are skipped.
 func pathWithin(dir, path string) (bool, error) {
+	inside, err := pathWithinLexically(dir, path)
+	if err != nil || inside {
+		return inside, err
+	}
+	dirInfo, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("resolve path %s: %w", dir, err)
+	}
+	p, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve path %s: %w", path, err)
+	}
+	for {
+		if info, err := os.Stat(p); err == nil && os.SameFile(info, dirInfo) {
+			return true, nil
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return false, nil
+		}
+		p = parent
+	}
+}
+
+// pathWithinLexically reports whether path is dir itself or lies inside it, comparing
+// absolute paths as text.
+func pathWithinLexically(dir, path string) (bool, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return false, fmt.Errorf("resolve path %s: %w", dir, err)
@@ -1008,6 +1116,37 @@ func pathWithin(dir, path string) (bool, error) {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
+// maxTempNamePart is the most of an output's name copied into the name of its
+// temporary file or folder (BUG-021).
+const maxTempNamePart = 64
+
+// tempNamePart returns name cut to maxTempNamePart bytes at a UTF-8 boundary. The
+// temporary name ".<name>.<random>.tmp" adds about 15 bytes, which would otherwise
+// push an output name near the 255-byte limit over it.
+func tempNamePart(name string) string {
+	if len(name) <= maxTempNamePart {
+		return name
+	}
+	cut := maxTempNamePart
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut]
+}
+
+// readAllLimit reads r to the end, refusing input longer than limit bytes with
+// ErrInputTooLarge (BUG-024).
+func readAllLimit(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%w: over %s", ErrInputTooLarge, formatSize(limit))
+	}
+	return data, nil
+}
+
 // atomicFile is an output written to a hidden temporary file next to its destination
 // and renamed into place by Commit, so the destination is either left as it was or
 // fully written, never partially.
@@ -1020,7 +1159,7 @@ type atomicFile struct {
 // createAtomicFile starts an atomic write of dst. The temporary file has mode 0600,
 // the mode the tool uses for all single-file outputs.
 func createAtomicFile(dst string) (*atomicFile, error) {
-	f, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(dst), "."+tempNamePart(filepath.Base(dst))+".*.tmp")
 	if err != nil {
 		return nil, err
 	}

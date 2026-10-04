@@ -51,7 +51,9 @@ Rules:
    it, at most once per run (SEC-010). Don't add new dependencies on the DB from
    file-only commands. `NewDatabase` creates the file with mode 0600 and tightens an
    existing one. On Unix it refuses a database or SQLite side file that another user
-   owns or that group or others can write (`ErrUntrustedDatabase`, SEC-016).
+   owns or that group or others can write (`ErrUntrustedDatabase`, SEC-016). A plain
+   path containing `?` is refused (`ErrUnsupportedDatabasePath`); a `file:` URI is
+   prepared like a path (SEC-010).
 
 ## 3. On-disk formats (compatibility contract)
 
@@ -134,7 +136,10 @@ These are observed in the codebase and required for new code:
 - Use `closeWithError` (in `compress.go`) for deferred `Close` on writers so close
   failures aren't lost.
 - Files the tool writes use mode `0o600`; directories it creates, including missing
-  parent folders of an output, use `0o700`.
+  parent folders of an output, use `0o700`. On Windows these bits only set or clear the
+  read-only attribute, so outputs and the key database inherit the folder's access
+  control list; the README says so, and owner-only ACLs are not set (Q-012, owner
+  decision 2026-10-04: document only; SEC-019).
 - Values read from the key database are shown through `displayText`, so stored control
   characters print escaped instead of reaching the terminal (SEC-016).
 - A gosec finding accepted by design is annotated on its line as
@@ -188,7 +193,19 @@ These are observed in the codebase and required for new code:
   `ExtractLimits` (default 10 GiB of output and 100,000 entries, SEC-007) and copies
   through `extractBudget`, never a bare `io.Copy` from a decompressor. New code that
   extracts or decompresses must do the same. The CLI exposes the limits as
-  `--max-size` and `--max-entries`; the TUI uses the defaults.
+  `--max-size` and `--max-entries`; the TUI uses the defaults. Input that is read whole
+  is bounded too (BUG-024): a legacy-format file by `MaxBytes`, checked before reading,
+  and a key export by `maxKeyExportSize` (1 MiB), through `readAllLimit`.
+- **Compression options.** `resolveCompressFormat` refuses an explicit format that
+  contradicts the output's extension (`ErrFormatMismatch`), and the CLI and TUI refuse a
+  level other than 1–9 or -1 with `checkCompressLevel` (BUG-020). `decompress --raw`
+  (`GunzipFileContext`) gunzips without extracting a tarball (BUG-022); it is a CLI
+  option only, like the extraction-limit flags.
+- **Temporary names.** Temporary files and folders next to an output use
+  `tempNamePart`, at most 64 bytes of the output's name (BUG-021).
+- **Containment checks** (`pathWithin`) compare paths as text and then folders by
+  identity (`os.SameFile`), so symlinked or differently cased spellings are caught
+  (BUG-019).
 - **Password policy.** Any operation that protects new data with a password
   (`EncryptFile`, `EncryptKeyBlob`, and so `ExportKeyToFile`) calls
   `CheckPasswordPolicy`: at least `MinPasswordLength` (15) Unicode code points, not
@@ -227,6 +244,14 @@ These are observed in the codebase and required for new code:
   `t.TempDir()` and must not write anywhere else.
 - Database tests use `newTestDatabase(t, useFile)`. Close the SQL handles so Windows
   CI can delete the temporary files.
+- Fuzz tests (`internal/fuzz_test.go`) cover the code that reads untrusted input:
+  the version 2 header and decrypting reader, key exports, `parseSize`, and tar and zip
+  extraction (plan 5.21). `go test` runs their seed corpora; fuzz one with
+  `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./internal`. The decryption
+  fuzzers skip headers that ask for an expensive Argon2id setting.
+- Subprocess tests run cryptare through the `TestRunMain` helper (`interrupt_test.go`),
+  for behaviour an in-process test can't see: exit statuses after a signal, and
+  stdout written by GORM's logger (`keys_output_test.go`, SEC-017).
 - Cancellation tests stop operations partway through with a context that reports
   itself cancelled after a set number of checks (`cancelAfter` in
   `internal/cancel_test.go`), not with timing. `interrupt_unix_test.go` runs cryptare
@@ -268,7 +293,11 @@ These are observed in the codebase and required for new code:
   `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
   because the release workflow depends on it.
-- **Docker:** the `Dockerfile` builds with CGO for `linux/amd64` only (`GOARCH=amd64`).
+- **Docker:** the `Dockerfile` builds with CGO for `linux/amd64` only (`GOARCH=amd64`),
+  from images pinned by digest, and the runtime runs as user 10001, which owns
+  `/app/data` (SEC-013). It adds no runtime packages. `.dockerignore` keeps the build
+  context to the sources. When the toolchain line in `go.mod` changes, update the
+  builder's tag and digest with it.
 - **Go toolchain (SEC-018):** CI and CD install the `toolchain` version from `go.mod`
   (`setup-go` with `go-version-file`), and the `Dockerfile` builder image names the
   same release (`golang:1.26.8-alpine`). Change both together. Dependabot proposes

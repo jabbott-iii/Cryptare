@@ -43,9 +43,10 @@ jobs:
         with:
           version: v2.13.2
 
+      # The race detector needs CGO, which the Linux and macOS runners have (5.19).
       - name: Run tests with coverage
         shell: bash
-        run: go test -v -coverprofile=coverage.out './...'
+        run: go test -v ${{ runner.os != 'Windows' && '-race' || '' }} -coverprofile=coverage.out './...'
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

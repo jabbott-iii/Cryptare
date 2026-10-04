@@ -21,6 +21,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestCompressFile tests the CompressFile function by compressing a file with various compression levels and output paths.
@@ -1483,5 +1485,256 @@ func TestGzipHeaderName(t *testing.T) {
 	}
 	if got := gzipFolderName("/tmp/photos/"); got != "photos.tar" {
 		t.Errorf("gzipFolderName = %q, want photos.tar", got)
+	}
+}
+
+// caseInsensitiveFS reports whether dir is on a file system that ignores letter case,
+// as macOS and Windows file systems do by default.
+func caseInsensitiveFS(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "CaseProbe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+	defer func() { _ = os.Remove(probe) }()
+	_, err := os.Stat(filepath.Join(dir, "caseprobe"))
+	return err == nil
+}
+
+// TestContainmentChecksUseFileIdentity is the regression test for BUG-019: an output
+// inside the folder being compressed or encrypted is refused when it is spelled
+// through a symlink, or in another letter case on a case-insensitive file system, and
+// so is replacing a folder that holds the archive under another spelling.
+func TestContainmentChecksUseFileIdentity(t *testing.T) {
+	dir := t.TempDir()
+	tree := filepath.Join(dir, "tree")
+	if err := os.Mkdir(tree, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "a.txt"), []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	onlyOriginal := func() {
+		t.Helper()
+		entries, err := os.ReadDir(tree)
+		if err != nil {
+			t.Fatalf("read tree: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("tree holds %d entries, want only a.txt", len(entries))
+		}
+	}
+	refusesOutputsUnder := func(t *testing.T, spelling string) {
+		t.Helper()
+		if err := CompressFile(tree, filepath.Join(spelling, "self.tar.gz"), -1); !errors.Is(err, ErrOutputInsideInput) {
+			t.Fatalf("compress into %s: err = %v, want ErrOutputInsideInput", spelling, err)
+		}
+		if err := EncryptFile(tree, filepath.Join(spelling, "self.enc"), testPassword); !errors.Is(err, ErrOutputInsideInput) {
+			t.Fatalf("encrypt into %s: err = %v, want ErrOutputInsideInput", spelling, err)
+		}
+		onlyOriginal()
+	}
+
+	t.Run("symlinked spelling", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("creating symlinks needs extra privileges on Windows")
+		}
+		link := filepath.Join(dir, "link")
+		if err := os.Symlink(tree, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		refusesOutputsUnder(t, link)
+	})
+
+	t.Run("letter case", func(t *testing.T) {
+		if !caseInsensitiveFS(t, dir) {
+			t.Skip("the file system is case-sensitive")
+		}
+		refusesOutputsUnder(t, filepath.Join(dir, "TREE"))
+
+		// Replacing a folder that holds the archive being extracted.
+		out := filepath.Join(dir, "out")
+		if err := os.Mkdir(out, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		archive := filepath.Join(out, "tree.tar.gz")
+		if err := CompressFile(tree, archive, -1); err != nil {
+			t.Fatalf("compress: %v", err)
+		}
+		if err := DecompressFile(archive, filepath.Join(dir, "OUT")); !errors.Is(err, ErrInputInsideOutput) {
+			t.Fatalf("extract over the folder holding the archive: err = %v, want ErrInputInsideOutput", err)
+		}
+		if _, err := os.Stat(archive); err != nil {
+			t.Fatalf("the archive is gone: %v", err)
+		}
+	})
+}
+
+// TestLongNamesFitTemporaryFiles is the regression test for BUG-021: outputs whose
+// names are close to the 255-byte limit are written, because their temporary files and
+// folders use a shortened name.
+func TestLongNamesFitTemporaryFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows counts name length in UTF-16 units and limits paths differently")
+	}
+	name := strings.Repeat("n", 247) // outputs reach 250–254 bytes
+	newDir := func() string { return t.TempDir() }
+
+	src := newDir()
+	file := filepath.Join(src, name)
+	if err := os.WriteFile(file, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := EncryptFile(file, "", testPassword); err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := DecryptFile(file+encExt, filepath.Join(newDir(), name), testPassword); err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if err := CompressFile(file, "", -1); err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	if err := DecompressFile(file+gzExt, filepath.Join(newDir(), name)); err != nil {
+		t.Fatalf("gunzip: %v", err)
+	}
+
+	folder := filepath.Join(newDir(), name)
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "inner.txt"), []byte("inner"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := CompressFile(folder, "", -1); err != nil {
+		t.Fatalf("tar.gz: %v", err)
+	}
+	out := filepath.Join(newDir(), name)
+	if err := DecompressFile(folder+tarGzExt, out); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(out, "inner.txt")); err != nil || string(got) != "inner" {
+		t.Fatalf("extracted inner.txt = %q (err %v)", got, err)
+	}
+}
+
+// TestTempNamePart checks that a long name is cut at a UTF-8 boundary (BUG-021).
+func TestTempNamePart(t *testing.T) {
+	if got := tempNamePart("short.txt"); got != "short.txt" {
+		t.Fatalf("short name changed to %q", got)
+	}
+	long := strings.Repeat("é", 40) // 80 bytes
+	got := tempNamePart(long)
+	if len(got) > maxTempNamePart || !utf8.ValidString(got) || !strings.HasPrefix(long, got) {
+		t.Fatalf("tempNamePart = %q (%d bytes), want a valid prefix of at most %d bytes", got, len(got), maxTempNamePart)
+	}
+}
+
+// TestLegacyReadsAreBounded is the regression test for BUG-024 (plan 5.15): an input
+// without Cryptare's format header, which is read whole, is refused before reading
+// when it is larger than the output limit, and a key export larger than 1 MiB is
+// refused, while a small legacy file still decrypts under the same limit.
+func TestLegacyReadsAreBounded(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "video.bin")
+	if err := os.WriteFile(big, bytes.Repeat([]byte{0xA5}, 2<<20), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	limits := ExtractLimits{MaxBytes: 1 << 20}
+	out := filepath.Join(dir, "out")
+	if err := DecryptFileWithLimits(big, out, testPassword, limits); !errors.Is(err, ErrExtractLimit) {
+		t.Fatalf("decrypt a 2 MiB non-Cryptare file under a 1 MiB limit: err = %v, want ErrExtractLimit", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("output exists (stat err %v)", err)
+	}
+
+	legacy, err := encryptBytes([]byte("legacy plaintext"), testPassword)
+	if err != nil {
+		t.Fatalf("legacy fixture: %v", err)
+	}
+	small := filepath.Join(dir, "small.enc")
+	if err := os.WriteFile(small, legacy, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := DecryptFileWithLimits(small, filepath.Join(dir, "small.txt"), testPassword, limits); err != nil {
+		t.Fatalf("decrypt a small legacy file: %v", err)
+	}
+
+	huge := filepath.Join(dir, "huge.ckey")
+	if err := os.WriteFile(huge, bytes.Repeat([]byte("A"), maxKeyExportSize+1), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := ImportKeyFromFile(huge, testPassword); !errors.Is(err, ErrInputTooLarge) {
+		t.Fatalf("import a %d-byte file: err = %v, want ErrInputTooLarge", maxKeyExportSize+1, err)
+	}
+}
+
+// TestGunzipRawRoundTrip is the regression test for BUG-022 (Q-011): a single .tar file
+// that was gzip-compressed comes back as the same .tar through GunzipFileContext
+// ("decompress --raw"), even when it holds a symlink, which ordinary extraction
+// refuses.
+func TestGunzipRawRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	var tarball bytes.Buffer
+	tw := tar.NewWriter(&tarball)
+	for _, h := range []*tar.Header{
+		{Name: "data.txt", Mode: 0o644, Size: 5, Typeflag: tar.TypeReg},
+		{Name: "latest", Linkname: "data.txt", Typeflag: tar.TypeSymlink},
+	} {
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatalf("tar header: %v", err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte("hello")); err != nil {
+				t.Fatalf("tar data: %v", err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	original := filepath.Join(dir, "backup.tar")
+	if err := os.WriteFile(original, tarball.Bytes(), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := CompressFile(original, "", -1); err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	gz := original + gzExt
+	if err := DecompressFile(gz, filepath.Join(dir, "extracted")); err == nil {
+		t.Fatal("extracting a tarball with a symlink succeeded; the test assumes it is refused")
+	}
+
+	if err := os.Remove(original); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := GunzipFileContext(context.Background(), gz, "", DefaultExtractLimits()); err != nil {
+		t.Fatalf("gunzip --raw: %v", err)
+	}
+	got, err := os.ReadFile(original)
+	if err != nil || !bytes.Equal(got, tarball.Bytes()) {
+		t.Fatalf("backup.tar after --raw: %d bytes (err %v), want the original %d bytes", len(got), err, tarball.Len())
+	}
+
+	zipFile := filepath.Join(dir, "a.zip")
+	if err := os.WriteFile(zipFile, []byte("PK"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := GunzipFileContext(context.Background(), zipFile, "", DefaultExtractLimits()); !errors.Is(err, ErrNotGzip) {
+		t.Fatalf("gunzip a zip: err = %v, want ErrNotGzip", err)
+	}
+}
+
+// TestDefaultRawOutput checks decompress --raw's default output names (BUG-022).
+func TestDefaultRawOutput(t *testing.T) {
+	for in, want := range map[string]string{
+		"backup.tar.gz": "backup.tar",
+		"backup.TGZ":    "backup.tar",
+		"notes.txt.gz":  "notes.txt",
+		"data":          "data.dec",
+	} {
+		if got := defaultRawOutput(in); got != want {
+			t.Errorf("defaultRawOutput(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -1321,3 +1321,33 @@ func TestActionRunnerShutdownWaitsForAction(t *testing.T) {
 		t.Fatalf("result after shutdown = %#v, want context.Canceled", msg)
 	}
 }
+
+// TestDashboardCompressRefusesContradictoryOptions mirrors the CLI check for BUG-020 in
+// the TUI's compress form.
+func TestDashboardCompressRefusesContradictoryOptions(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	db := newTestDatabase(t, false)
+	for _, tc := range []struct {
+		output, format, level string
+		want                  error
+	}{
+		{filepath.Join(dir, "x.zip"), "gzip", "", ErrFormatMismatch},
+		{"", "", "42", ErrInvalidLevel},
+		{"", "", "0", ErrInvalidLevel},
+	} {
+		m := NewDashboardModel(db)
+		m.startForm(actionCompress, screenMain)
+		result := submitForm(t, m, src, tc.output, tc.format, tc.level)
+		if !errors.Is(result.err, tc.want) {
+			t.Fatalf("compress (output %q, format %q, level %q): err = %v, want %v", tc.output, tc.format, tc.level, result.err, tc.want)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("folder holds %d entries (err %v), want only a.txt", len(entries), err)
+	}
+}

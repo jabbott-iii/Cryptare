@@ -630,6 +630,9 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 				}
 				level = lv
 			}
+			if err := checkCompressLevel(level); err != nil {
+				return actionResultMsg{err: err}
+			}
 			if _, err := resolveCompressFormat(format, output); err != nil {
 				return actionResultMsg{err: err}
 			}
@@ -700,7 +703,7 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 		return func(ctx context.Context) tea.Msg {
 			km, err := db.GetKey(keyID)
 			if err != nil {
-				return actionResultMsg{err: fmt.Errorf("key not found: %w", err)}
+				return actionResultMsg{err: keyLookupError(keyID, err)}
 			}
 
 			dst := output
@@ -727,7 +730,7 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 			}
 
 			if err := db.SaveKey(km); err != nil {
-				return actionResultMsg{err: fmt.Errorf("save imported key: %w", err)}
+				return actionResultMsg{err: keySaveError(km.KeyID, err)}
 			}
 
 			return actionResultMsg{message: fmt.Sprintf("Imported key: %s", km.KeyID), reload: true}

@@ -1719,3 +1719,117 @@ func TestEncryptCmdFolderOutputStaysOutside(t *testing.T) {
 		t.Fatalf("output inside the folder exists (stat err %v)", err)
 	}
 }
+
+// TestCompressCmdRefusesContradictoryOptions is the regression test for BUG-020: an
+// explicit --format that contradicts the output's extension, and a --level outside
+// 1–9 (other than -1), are refused before anything is written.
+func TestCompressCmdRefusesContradictoryOptions(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(src, []byte("payload"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	run := func(args ...string) error {
+		rootCmd := NewRootCmd(newTestDatabase(t, false))
+		rootCmd.SetArgs(append([]string{"compress", src}, args...))
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		return rootCmd.Execute()
+	}
+	for _, tc := range []struct {
+		args []string
+		want error
+	}{
+		{[]string{"--format", "gzip", "--output", filepath.Join(dir, "x.zip")}, ErrFormatMismatch},
+		{[]string{"--format", "zip", "--output", filepath.Join(dir, "x.tar.gz")}, ErrFormatMismatch},
+		{[]string{"--format", "zip", "--output", filepath.Join(dir, "x.gz")}, ErrFormatMismatch},
+		{[]string{"--level", "0"}, ErrInvalidLevel},
+		{[]string{"--level", "10"}, ErrInvalidLevel},
+		{[]string{"--level", "-7"}, ErrInvalidLevel},
+	} {
+		if err := run(tc.args...); !errors.Is(err, tc.want) {
+			t.Fatalf("compress %v: err = %v, want %v", tc.args, err, tc.want)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("folder holds %d entries (err %v), want only a.txt", len(entries), err)
+	}
+	for _, level := range []string{"-1", "1", "9"} {
+		out := filepath.Join(dir, "level"+level+".gz")
+		if err := run("--level", level, "--output", out); err != nil {
+			t.Fatalf("compress --level %s: %v", level, err)
+		}
+	}
+}
+
+// TestDecryptCmdExplicitEmptyPassword is the regression test for BUG-023: --password ""
+// counts as given, so a legacy file encrypted with an empty password decrypts in a
+// script without reading stdin.
+func TestDecryptCmdExplicitEmptyPassword(t *testing.T) {
+	dir := t.TempDir()
+	data, err := encryptBytes([]byte("legacy, no password"), "")
+	if err != nil {
+		t.Fatalf("legacy fixture: %v", err)
+	}
+	src := filepath.Join(dir, "old.enc")
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	dst := filepath.Join(dir, "old.txt")
+	rootCmd := NewRootCmd(newTestDatabase(t, false))
+	rootCmd.SetArgs([]string{"decrypt", src, "--output", dst, "--password", ""})
+	rootCmd.SetIn(bytes.NewReader(nil))
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("decrypt --password \"\": %v", err)
+	}
+	if got, err := os.ReadFile(dst); err != nil || string(got) != "legacy, no password" {
+		t.Fatalf("decrypted %q (err %v)", got, err)
+	}
+}
+
+// TestDecompressCmdRaw checks decompress --raw from the CLI (BUG-022): it writes and
+// reports backup.tar for backup.tar.gz, and refuses a zip archive.
+func TestDecompressCmdRaw(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "backup.tar")
+	if err := os.WriteFile(src, []byte("not really a tarball"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := CompressFile(src, "", -1); err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	run := func(args ...string) (string, error) {
+		rootCmd := NewRootCmd(newTestDatabase(t, false))
+		rootCmd.SetArgs(args)
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(&out)
+		err := rootCmd.Execute()
+		return out.String(), err
+	}
+	out, err := run("decompress", src+gzExt, "--raw")
+	if err != nil {
+		t.Fatalf("decompress --raw: %v", err)
+	}
+	if !strings.Contains(out, "→ "+src) {
+		t.Fatalf("output %q doesn't report %s", out, src)
+	}
+	if got, err := os.ReadFile(src); err != nil || string(got) != "not really a tarball" {
+		t.Fatalf("backup.tar = %q (err %v)", got, err)
+	}
+	zipFile := filepath.Join(dir, "a.zip")
+	if err := CompressFileWithFormat(src, zipFile, "zip", -1); err != nil {
+		t.Fatalf("zip: %v", err)
+	}
+	if _, err := run("decompress", zipFile, "--raw", "--output", filepath.Join(dir, "x")); !errors.Is(err, ErrNotGzip) {
+		t.Fatalf("decompress a zip with --raw: err = %v, want ErrNotGzip", err)
+	}
+}

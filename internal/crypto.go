@@ -267,7 +267,23 @@ func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string
 		return writeStreamAtomic(ctx, dst, plain)
 	}
 
-	data, err := io.ReadAll(r)
+	// The legacy formats are read whole, so their size is bounded by the output limit
+	// before reading (BUG-024): a large file that isn't Cryptare's fails fast instead of
+	// filling memory, and a raised --max-size still reads any legacy file.
+	if limits.MaxBytes > 0 {
+		if info, err := f.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > limits.MaxBytes {
+			return legacyTooLargeError(limits.MaxBytes)
+		}
+	}
+	var data []byte
+	if limits.MaxBytes > 0 {
+		data, err = readAllLimit(r, limits.MaxBytes)
+		if errors.Is(err, ErrInputTooLarge) {
+			return legacyTooLargeError(limits.MaxBytes)
+		}
+	} else {
+		data, err = io.ReadAll(r)
+	}
 	if err != nil {
 		return fmt.Errorf("read source file: %w", err)
 	}
@@ -293,6 +309,11 @@ func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
+}
+
+// legacyTooLargeError reports a legacy-format input larger than the output limit.
+func legacyTooLargeError(limit int64) error {
+	return fmt.Errorf("%w: a file without Cryptare's format header is read whole, and this one is larger than %s", ErrExtractLimit, formatSize(limit))
 }
 
 // writeStreamAtomic copies r to dst through a temporary file, so dst appears only if
@@ -536,7 +557,12 @@ func defaultDecryptOutput(src string) string {
 // ImportKeyFromFile reads an export file, in the version 2 or the legacy format, and
 // returns a KeyModel (not yet persisted).
 func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
-	raw, err := os.ReadFile(path) // #nosec G304 -- path is the key export the user chose to import
+	f, err := os.Open(path) // #nosec G304 -- path is the key export the user chose to import
+	if err != nil {
+		return nil, fmt.Errorf("read export file: %w", err)
+	}
+	defer func() { _ = f.Close() }() // read-only: a close error can't lose data
+	raw, err := readAllLimit(f, maxKeyExportSize)
 	if err != nil {
 		return nil, fmt.Errorf("read export file: %w", err)
 	}
@@ -568,6 +594,9 @@ func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
 }
 
 const (
+	// maxKeyExportSize is the most ImportKeyFromFile reads (BUG-024); a real export is
+	// under 1 KiB.
+	maxKeyExportSize = 1 << 20
 	keyExportVersion = 1
 	keyAlgorithm     = "AES-256-GCM"
 	keyIDLen         = 16 // hex characters, from newKeyID

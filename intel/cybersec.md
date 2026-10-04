@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04 (round 3)
 
 ## 1. Security requirements
 
@@ -117,22 +117,22 @@ These apply to all changes.
 | SEC-001 | Empty passwords accepted for encryption and key protection | High | Closed |
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
-| SEC-004 | Passwords accepted as command-line arguments | Medium | In Progress |
-| SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | In Progress |
+| SEC-004 | Passwords accepted as command-line arguments | Medium | Closed |
+| SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Closed |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Closed |
 | SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Closed |
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Closed |
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Closed |
 | SEC-010 | Database created world-readable in the current directory on every run | Low | In Progress |
-| SEC-011 | Imported key metadata not validated before storage and display | Low | In Progress |
-| SEC-012 | CI security-scan results discarded; actions not pinned | Low | In Progress |
-| SEC-013 | Container runs as root; base images not pinned | Low | Open |
-| SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | In Progress |
-| SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | In Progress |
+| SEC-011 | Imported key metadata not validated before storage and display | Low | Closed |
+| SEC-012 | CI security-scan results discarded; actions not pinned | Low | Closed |
+| SEC-013 | Container runs as root; base images not pinned | Low | In Progress |
+| SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | Closed |
+| SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Closed |
 | SEC-016 | Key database files from untrusted locations are trusted | Low | In Progress |
-| SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Open |
+| SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | In Progress |
 | SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | In Progress |
-| SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Open |
+| SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | In Progress |
 
 ## 5. Issue register
 
@@ -238,6 +238,8 @@ These apply to all changes.
     commit (`b4cd66f`) passed 1 of 7, the piped-input check.
   - Remaining: the migration notes in the next release's notes (the v1.0.1 prompt
     change, and the new 15-character minimum for scripts).
+  - 2026-10-04: the notes are drafted for the next release (see `history.md`); this
+    item closes when that release is published with them.
 - **Affected component:** `internal/logic-cli.go` `readPassword` (uses `fmt.Fscan`);
   used by `encrypt`, `decrypt` and the `keys` subcommands.
 - **Risk:**
@@ -269,6 +271,10 @@ These apply to all changes.
 ### SEC-003 — Encrypted key material committed to the public repository
 
 - **Status:** In Progress
+- **Progress (2026-10-04, plan 5.9; not yet committed):** the gap in step 3 is closed:
+  `.gitignore` adds `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm`, and `git
+  check-ignore` matches each; no tracked file matches them. Remaining: step 4 (Q-005)
+  and the optional CI check (step 5).
 - **Gap found (2026-10-03 analysis):** `.gitignore` covers `*.db` but not SQLite's
   side files (`*.db-journal`, `*.db-wal`, `*.db-shm`), which can hold copies of
   database pages, or key exports (`*.ckey`), which `keys export` writes to the current
@@ -309,7 +315,7 @@ These apply to all changes.
 
 ### SEC-004 — Passwords accepted as command-line arguments
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
 - **Progress (2026-09-27, `e512844`; plan 2.6):** all four remediation steps are
   implemented and validated. The owner chose `--password-file`, with piped input as
   the stdin route (it already worked), and a warning that can't be switched off.
@@ -345,11 +351,11 @@ These apply to all changes.
   3. Print a warning to stderr when `--password` is used.
   4. Change the README examples to prefer the prompt or stdin.
 - **Validation:** Tests for the new input path and for the warning; README review.
-- **Resolution:** —
+- **Resolution:** Fixed in `e512844` (plan 2.6). Validated by the tests and real-binary checks above, the W11 smoke tests that now pass the password with `--password-file`, and green CI on `e512844` (CI #132, Docker #14, Security #137), confirmed on 2026-10-04. Closed 2026-10-04.
 
 ### SEC-005 — KDF work factor below current guidance; formats unversioned
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
 - **Update (2026-10-03 analysis):** plans 3.1 and 3.2 were committed in `0c57aef`
   (2026-09-27, "fix: reformated outputs"); its CI results haven't been reported, so
   this stays open until they are green. The re-analysis found no flaw in the
@@ -424,7 +430,7 @@ These apply to all changes.
      `crypto/pbkdf2`. The output is identical.
 - **Validation:** Known-answer tests for the new format, the existing legacy tests
   passing, and a benchmark of the KDF cost on target hardware.
-- **Resolution:** —
+- **Resolution:** Fixed in `0c57aef` (plans 3.1 and 3.2). Validated by the known-answer tests, the legacy tests and the KDF cost measured above, and by green CI on `0c57aef` (CI #134, Docker #16, Security #139), confirmed on 2026-10-04. Q-008 (whether to lower the Argon2id settings accepted when reading) is an open owner question tracked in `notes.md`, not part of this remediation. Closed 2026-10-04.
 
 ### SEC-006 — Directory encryption stages plaintext in the system temp directory
 
@@ -638,6 +644,21 @@ These apply to all changes.
 ### SEC-010 — Database created world-readable in the current directory on every run
 
 - **Status:** In Progress
+- **Progress (2026-10-04, plan 5.8; not yet committed):** the path gap is fixed.
+  `databaseFilePath` works out the file SQLite will open: a plain path, or the
+  percent-decoded path of a `file:` URI (read-only `mode=ro` URIs aren't created;
+  in-memory ones have no file; Windows `file:` URIs are left to SQLite, as permissions
+  aren't checked there). `prepareDatabaseFile` and the export check use it, so a
+  database behind a `file:` URI is now created 0600 and trust-checked (SEC-016). A
+  plain path containing `?`, which go-sqlite3 cuts there, is refused with
+  `ErrUnsupportedDatabasePath` and a hint to use a `file:` URI with `%3F`.
+  - Validation: `TestDatabasePathsOpenThePreparedFile` (a `?` folder and a `?_journal_mode`
+    suffix refused with nothing created; a `file:` URI to a `?` folder holds the keys
+    in a 0600 file with no stray file, and a 0666 file behind a URI is refused; an
+    in-memory URI creates nothing) and `TestDatabaseFilePath` (11 cases). Against
+    `b3278ea`, the `?` path was accepted and the URI's database was 0644. Real binaries:
+    `CRYPTARE_DB_PATH=a?b/k.db` left a stray 0644 file `a` before and is refused after.
+  - Remaining: step 3, a per-user default path (Q-003).
 - **Gap found (2026-10-03 analysis):** step 2 is incomplete for two kinds of path.
   - A path containing `?`: `prepareDatabaseFile` creates and checks the literal path,
     but go-sqlite3 cuts a non-URI DSN at its first `?` and opens a different file,
@@ -695,7 +716,7 @@ These apply to all changes.
 
 ### SEC-011 — Imported key metadata not validated before storage and display
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
 - **Note (2026-10-03 analysis):** the "not covered" case below, rows that weren't
   checked on import being printed raw, is reachable without any import: the default
   database is whatever `cryptare.db` the current folder holds, so a planted database
@@ -744,11 +765,11 @@ These apply to all changes.
   3. Validate the blob's base64 structure and length.
   4. Reject anything else with a clear error.
 - **Validation:** Import tests with malicious fields.
-- **Resolution:** —
+- **Resolution:** Fixed in `3d9384e` (plan 2.7). Validated by the import tests and real-binary checks above and by green CI on `3d9384e` (CI #133, Docker #15, Security #138), confirmed on 2026-10-04. The display of rows stored before the fix is covered by SEC-016 step 2 (`4ba516a`). Closed 2026-10-04.
 
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
 - **Progress (2026-10-03, step 5; not yet committed):** the govulncheck job is in
   `security.yml` (SEC-018 step 3).
 - **Progress (2026-10-03, dispositions applied in code; not yet committed):** the 10
@@ -820,11 +841,28 @@ These apply to all changes.
   Changing CI requires explicit owner approval (`AGENTS.md`).
 - **Validation:** gosec alerts appear in Code Scanning, and workflow `uses:` lines
   reference SHAs.
-- **Resolution:** —
+- **Resolution:** Fixed in `5286920` (v1.0.1: steps 1, 2 and 4), `b520b97` (W10 action updates), `4ba516a` (step 3: the G304/G301 dispositions) and `6a5fcb1` (step 5: the govulncheck job). Validated on 2026-10-04: Code Scanning shows 0 open alerts (37 closed); every `uses:` line references a commit SHA; Security #144 on `b3278ea` ran CodeQL, gosec and govulncheck successfully (govulncheck: no vulnerabilities reached by Cryptare's code). The "Actions workflow file not found" warning comes from the CodeQL configurations of the deleted `codeql.yml` and needs deleting on the tool status page; it doesn't affect this item. Closed 2026-10-04.
 
 ### SEC-013 — Container runs as root; base images not pinned
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-10-04, plans 4.2 and 5.9; owner approved the `Dockerfile` changes;
+  not yet committed):**
+  - Step 1: the runtime image creates user and group `cryptare` (10001), gives it
+    `/app/data` (0700) and runs as `USER 10001:10001`. A new named volume takes that
+    ownership. The README's bind-mount examples add `--user "$(id -u):$(id -g)"`,
+    which also satisfies SEC-016's ownership check.
+  - Step 2: both images are pinned by the digests the Docker workflow resolved on
+    2026-10-04 (`golang:1.26.8-alpine@sha256:8ac98ca5…`,
+    `alpine:3.22@sha256:5291449c…`).
+  - The additional hardening: a `.dockerignore` (no `.git`, CI and editor folders,
+    `intel/`, databases, `.ckey`, encrypted or compressed files, password files); no
+    runtime packages (`sqlite-libs` and `ca-certificates` dropped); `ARG VERSION`
+    stamps `--version`; `-trimpath`.
+  - Not run here: Docker isn't available in the analysis environment. The Docker
+    workflow's smoke test (build, `--help`, `keys generate`/`keys list` on a named
+    volume) is the first build. Remaining validation: that run passing, and
+    `docker run --rm --entrypoint id <image> -u` printing 10001.
 - **Additional hardening found (2026-10-03 analysis), for the same approved change:**
   - there is no `.dockerignore`, so `COPY . .` sends the whole working tree into the
     builder stage, including `.git` and any local `*.db`, `*.ckey` or password files.
@@ -850,7 +888,7 @@ These apply to all changes.
 
 ### SEC-014 — Symlink race (TOCTOU) when archiving a directory tree
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
 - **Note (2026-10-03):** `walkSourceTree` reaches GO-2026-4970 (fixed in Go 1.26.5) and
   GO-2026-4602 (fixed in 1.26.1). Through `fs.FS` paths, which can't end in `/`, only
   GO-2026-4602's leak of file metadata applies. Building with a current Go (SEC-018)
@@ -891,12 +929,11 @@ These apply to all changes.
   entry's metadata.
 - **Validation:** A regression test using a swap hook, or a code review demonstrating
   root-scoped opens; G122 resolved.
-- **Resolution:** —
+- **Resolution:** Fixed in `3d9384e` (plan 2.8). Validated by `TestArchivingIgnoresFileSwappedForSymlink`, the byte-identical archive check and gosec no longer reporting G122, and by green CI on `3d9384e` (CI #133, Docker #15, Security #138), confirmed on 2026-10-04. The two Go vulnerabilities noted above are fixed by the go1.26.8 toolchain CI uses since `6a5fcb1` (SEC-018). Closed 2026-10-04.
 
 ### SEC-015 — Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files
 
-- **Status:** In Progress (all four steps implemented and validated locally; not yet
-  committed, so CI hasn't run them)
+- **Status:** Closed (2026-10-04)
 - **Progress (2026-10-03, plan 5.5; uncommitted):**
   - Step 1: `EncryptFileContext`, `DecryptFileWithLimitsContext`,
     `CompressFileWithFormatContext` and `DecompressFileWithLimitsContext`, with the
@@ -991,11 +1028,15 @@ These apply to all changes.
   - A TUI test quits while busy and checks that the action was cancelled and cleaned
     up.
   - The real-binary checks above leave nothing behind.
-- **Resolution:** —
+- **Resolution:** Fixed in `6a5fcb1`, with its tests in `b3278ea` (plan 5.5). Validated by the tests and real-binary checks above and by green CI on `b3278ea` (CI #138, Docker #20, Security #144), confirmed on 2026-10-04; `TestDecryptInterruptedBySignal` ran on the Linux and macOS jobs. Closed 2026-10-04.
 
 ### SEC-016 — Key database files from untrusted locations are trusted
 
 - **Status:** In Progress
+- **Progress (2026-10-04, plan 5.8):** the ownership and permission check now also
+  covers a database given as a `file:` URI (it used to be skipped).
+- **Progress (2026-10-04):** steps 1 and 2 are committed in `4ba516a`, and CI #136,
+  Docker #18 and Security #142 passed on it. Remaining: step 3 (Q-003, plan 3.5).
 - **Progress (2026-10-03, steps 1 and 2; not yet committed):** the owner chose to
   refuse rather than warn (Q-010), and to leave step 3, the per-user default path, to
   plan 3.5 (Q-003 stays open).
@@ -1071,7 +1112,23 @@ These apply to all changes.
 
 ### SEC-017 — GORM's default logger prints SQL with bound values to stdout
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-10-04, plan 5.7; not yet committed):** both remediation steps are
+  implemented.
+  - `NewDatabase` opens GORM with `logger.Discard.LogMode(logger.Silent)`, so nothing
+    is logged anywhere, and with `TranslateError`, so a duplicate key ID arrives as
+    `gorm.ErrDuplicatedKey`.
+  - `GetKey` returns `ErrKeyNotFound` and `SaveKey` returns the new `ErrKeyExists`;
+    the CLI and TUI (`keyLookupError`, `keySaveError`) report `key not found:
+    "<id>"` and `a key with this ID is already stored: "<id>"`, the ID quoted.
+  - Validation: `TestKeysCommandsKeepStdoutClean` runs cryptare as a subprocess (GORM's
+    logger holds the process's real stdout, which an in-process test can't swap) and
+    checks that `keys export <unknown id>` and a duplicate `keys import` write nothing
+    to stdout, name the key and never print the blob; `TestDatabaseErrorsAreTyped`.
+    Against `b3278ea`, the first wrote GORM's coloured SQL log (302 bytes) to stdout
+    and the second failed with "record not found". Real binaries: the same 302 bytes
+    before, 0 after.
+  - Close after the change is committed and CI passes.
 - **Affected component:** `internal/database.go` `NewDatabase`: `gorm.Open(…,
   &gorm.Config{})` uses GORM's `logger.Default`.
 - **Risk:** GORM's default logger writes to **stdout**: failed statements, "record not
@@ -1105,9 +1162,18 @@ These apply to all changes.
 
 ### SEC-018 — Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities
 
-- **Status:** In Progress. Steps 1–3 are done in the working tree (not yet committed);
-  the digest pin in step 4 waits for SEC-013, and step 5 is optional. Still blocks
-  the next release until the new toolchain is in a pushed build.
+- **Status:** In Progress. Steps 1–3 are committed (`6a5fcb1`, `b3278ea`) and running
+  in CI; the digest pin in step 4 comes with SEC-013, and step 5 is optional. Closes
+  once a release built by CD reports go1.26.8.
+- **Progress (2026-10-04, verified on GitHub):** on `b3278ea`, `setup-go` installed
+  `go version go1.26.8 linux/amd64` (Security #144), the Docker build resolved
+  `golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c`
+  (Docker #20), and the govulncheck job reported no vulnerabilities reached by
+  Cryptare's code, none in imported packages, and one in a required module that the
+  code doesn't call. CI #138, Docker #20 and Security #144 passed. Dependabot ran and
+  opened PR #26 (`golang.org/x/crypto` 0.56.0 → 0.57.0), a dependency change for the
+  owner to review. Remaining: the validation on release binaries (`go version -m`
+  from a CD build), which needs the next release.
 - **Progress (2026-10-03, plan 5.1; owner approved the `go.mod`, CI and `Dockerfile`
   changes; uncommitted):**
   - Step 1: `go version -m` on the published v1.1.0 `cryptare_linux_amd64` (archive
@@ -1208,7 +1274,13 @@ These apply to all changes.
 
 ### SEC-019 — Owner-only permission guarantees don't hold on Windows
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-10-04, plan 5.10):** the owner chose to document the limitation
+  rather than set ACLs (Q-012). The README (the output-safety list and the
+  `CRYPTARE_DB_PATH` row) and `maint.md` §4 now say that on Windows outputs and the
+  key store get the permissions of the folder they are written to, and to keep them
+  in a folder only the user can read. Not yet committed; closes once the owner has
+  reviewed the wording (the documented validation).
 - **Affected component:** every output path (`createAtomicFile`, `extractToDir`,
   `extractDirMode`, `extractFileMode`); `prepareDatabaseFile`, which skips Windows; the
   README ("everything the tool writes is private to you"; the key store is "readable

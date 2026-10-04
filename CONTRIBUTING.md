@@ -27,7 +27,8 @@ which is authoritative; this guide must stay consistent with it. Also read
   which an older `go` command downloads automatically unless `GOTOOLCHAIN=local`).
 - **A C compiler (gcc or clang) with CGO enabled.** The SQLite driver
   (`github.com/mattn/go-sqlite3`, pulled in by `gorm.io/driver/sqlite`) requires CGO.
-  Builds with `CGO_ENABLED=0` compile but fail on every command at runtime.
+  Builds with `CGO_ENABLED=0` compile, but the `keys` commands and the TUI fail at
+  runtime; the file commands still work (`intel/maint.md` §6).
 - **Git.**
 - Optional:
   - [golangci-lint](https://golangci-lint.run/) v2.13.2 (the version CI uses);
@@ -71,7 +72,7 @@ gofmt -s -l .                                        # must print nothing
 go mod tidy && git diff --exit-code go.mod go.sum    # no diff unless you changed dependencies
 go vet ./...
 golangci-lint run                                    # v2.13.2
-go test ./...                                        # add -race when a C toolchain is available
+go test ./...                                        # add -race when a C toolchain is available (CI does on Linux and macOS)
 ```
 
 CI runs on Ubuntu, Windows and macOS. After the checks above, it builds the binary with

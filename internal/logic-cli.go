@@ -205,6 +205,9 @@ func newCompressCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
+			if err := checkCompressLevel(level); err != nil {
+				return err
+			}
 			if _, err := resolveCompressFormat(format, output); err != nil {
 				return err
 			}
@@ -239,6 +242,7 @@ func newCompressCmd() *cobra.Command {
 func newDecompressCmd() *cobra.Command {
 	var output string
 	var force bool
+	var raw bool
 	var limitFlags extractLimitFlags
 
 	cmd := &cobra.Command{
@@ -253,12 +257,19 @@ func newDecompressCmd() *cobra.Command {
 			src := args[0]
 			dst := output
 			if dst == "" {
-				dst = deriveDecompressOutput(src)
+				if raw {
+					dst = defaultRawOutput(src)
+				} else {
+					dst = deriveDecompressOutput(src)
+				}
 			}
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
 			if err := runCancellable(cmd, func(ctx context.Context) error {
+				if raw {
+					return GunzipFileContext(ctx, src, dst, limits)
+				}
 				return DecompressFileWithLimitsContext(ctx, src, dst, limits)
 			}); err != nil {
 				return withLimitHint(err)
@@ -272,6 +283,7 @@ func newDecompressCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output path")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
+	cmd.Flags().BoolVar(&raw, "raw", false, "gunzip only: write the decompressed data as one file, without extracting a tar archive (x.tar.gz gives x.tar)")
 	limitFlags.register(cmd)
 	return cmd
 }
@@ -406,7 +418,7 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 
 			km, err := db.GetKey(keyID)
 			if err != nil {
-				return fmt.Errorf("key not found: %w", err)
+				return keyLookupError(keyID, err)
 			}
 
 			if output == "" {
@@ -492,7 +504,7 @@ func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 			}
 
 			if err := db.SaveKey(km); err != nil {
-				return fmt.Errorf("save imported key: %w", err)
+				return keySaveError(km.KeyID, err)
 			}
 
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Imported key: %s\n", km.KeyID); err != nil {
@@ -636,8 +648,10 @@ func (p *passwordFlags) register(cmd *cobra.Command, usage string) {
 }
 
 // get returns the password given by --password-file or --password. given is false when
-// neither flag was set, and the caller then prompts. --password prints a warning to
-// stderr, because command-line arguments are visible to other users.
+// neither flag was set, and the caller then prompts. An explicitly empty --password ""
+// counts as given (BUG-023), so a script can decrypt a legacy file that has an empty
+// password without a terminal. --password prints a warning to stderr, because
+// command-line arguments are visible to other users.
 func (p *passwordFlags) get(cmd *cobra.Command) (password string, given bool, err error) {
 	if p.file != "" {
 		password, err := readPasswordFile(p.file)
@@ -646,7 +660,7 @@ func (p *passwordFlags) get(cmd *cobra.Command) (password string, given bool, er
 		}
 		return password, true, nil
 	}
-	if p.value == "" {
+	if !cmd.Flags().Changed("password") {
 		return "", false, nil
 	}
 	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), passwordFlagWarning); err != nil {
@@ -678,6 +692,23 @@ func readPasswordFile(path string) (string, error) {
 		return "", fmt.Errorf("password file %s: first line is too long (over %s)", path, formatSize(maxPasswordFileSize))
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// keyLookupError explains a failed key lookup, naming the key (SEC-017). The ID is
+// quoted, so control characters in it are escaped.
+func keyLookupError(keyID string, err error) error {
+	if errors.Is(err, ErrKeyNotFound) {
+		return fmt.Errorf("%w: %q", ErrKeyNotFound, keyID)
+	}
+	return fmt.Errorf("look up key %q: %w", keyID, err)
+}
+
+// keySaveError explains a failed save of an imported key, naming the key (SEC-017).
+func keySaveError(keyID string, err error) error {
+	if errors.Is(err, ErrKeyExists) {
+		return fmt.Errorf("%w: %q", ErrKeyExists, keyID)
+	}
+	return fmt.Errorf("save imported key %q: %w", keyID, err)
 }
 
 // displayText returns a stored value ready to print to a terminal (SEC-016). A value

@@ -25,6 +25,12 @@ go.work
 go.work.sum
 *.db
 
+# Key material and SQLite side files that hold database pages (SEC-003)
+*.ckey
+*.db-journal
+*.db-wal
+*.db-shm
+
 # env file
 .env
 

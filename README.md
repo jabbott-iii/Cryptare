@@ -65,13 +65,17 @@ Tagged releases publish these assets, built by `.github/workflows/cd.yml`, toget
 | macOS Intel | `cryptare_darwin_amd64.tar.gz` |
 | macOS Apple silicon | `cryptare_darwin_arm64.tar.gz` |
 | Windows x86-64 | `cryptare_windows_amd64.zip` |
-| Windows ARM64 | `cryptare_windows_arm64.zip` |
 
-> ⚠️ **Known issue:** every release published so far (up to and including v1.0.0) was built with CGO disabled. Those binaries exit on every command with `go-sqlite3 requires cgo to work`. Build from source until a fixed release is available. See BUG-001 in [intel/notes.md](intel/notes.md).
+Each archive holds one binary named after it (`cryptare_linux_amd64`, `cryptare_windows_amd64.exe`, …). There is no Windows ARM64 build.
 
-Once a working release is available, install it on Linux like this:
+> ⚠️ The v1.0.0 binaries were built with CGO disabled and exit on every command with `go-sqlite3 requires cgo to work`. Use v1.0.1 or later (BUG-001 in [intel/notes.md](intel/notes.md)).
+
+To install a release on Linux, download its archive and `checksums.txt` from the [Releases page](https://github.com/jabbott-iii/Cryptare/releases) (replace `v1.1.0` with the release you want), check the hash, and put the binary on your PATH:
 
 ```bash
+VERSION=v1.1.0
+curl -LO "https://github.com/jabbott-iii/Cryptare/releases/download/${VERSION}/cryptare_linux_amd64.tar.gz"
+curl -LO "https://github.com/jabbott-iii/Cryptare/releases/download/${VERSION}/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
 tar -xzf cryptare_linux_amd64.tar.gz
 chmod +x cryptare_linux_amd64
@@ -96,7 +100,7 @@ cryptare                             # opens the interactive TUI
   - the TUI never overwrites, so choose a different output path there;
   - a command that fails part-way, or that you stop, leaves no partial output, and a file or folder it was replacing with `--force` is kept;
   - with `--force`, an existing output folder is replaced as a whole, not merged into: files in it that aren't in the archive are removed. Extracting into the folder that holds the archive itself is refused;
-  - everything the tool writes is private to you: output files are mode 0600, and extracted or decrypted folders are 0700 with files inside at 0600 (0700 for files the archive marks executable). Permissions stored in an archive are otherwise ignored.
+  - on Linux and macOS, everything the tool writes is private to you: output files are mode 0600, and extracted or decrypted folders are 0700 with files inside at 0600 (0700 for files the archive marks executable). Permissions stored in an archive are otherwise ignored. **On Windows** these modes don't apply: what Cryptare writes, the key store included, gets the permissions of the folder it is written to. Your own profile folders are normally private, but a shared location such as `C:\Users\Public` or a shared drive is readable by everyone who can read that folder, so write decrypted output and the key store to a folder only you can read.
 - Stopping a command: Ctrl+C (or `kill`, or closing the terminal) during `encrypt`, `decrypt`, `compress` or `decompress` stops it and removes its unfinished output. It exits with status 128 plus the signal number (130 for Ctrl+C), and a second Ctrl+C ends it at once. At the hidden password prompt, any of these signals ends the command with your terminal's echo restored. Quitting the TUI while an action runs cancels the action first ("Cancelling…"). Only a forced kill (`kill -9`) or a power loss can still leave a hidden `.<name>.*.tmp` file or folder behind.
 - Extraction is limited to protect against decompression bombs: `decompress`, and `decrypt` for an encrypted folder, stop after 10 GiB of output or 100,000 archive entries, and remove what they wrote. Change the limits with `--max-size` and `--max-entries` (`0` means no limit). The TUI always uses the defaults.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
@@ -106,6 +110,7 @@ cryptare                             # opens the interactive TUI
 - In scripts, keep passwords off the command line: use `--password-file` (the first line of a file, ideally one only you can read) or pipe the password in (`cryptare encrypt ./secret.txt < pw.txt`). `--password` still works but prints a warning, because other users can see command-line arguments and your shell saves them in its history.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 - ⚠️ **Upgrading from v1.1.0 or earlier:**
+  - new encrypted files, folders, stored keys and key exports use the versioned format (see "File format" below), which v1.1.0 and earlier can't read. Upgrade every machine that needs to decrypt them; this version still reads everything older versions wrote;
   - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. To export a key whose master password is shorter, choose an export password of 15 or more characters;
   - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
   - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
@@ -113,7 +118,12 @@ cryptare                             # opens the interactive TUI
   - on Linux and macOS, the `keys` commands and the TUI refuse a key store that another user owns or that others can write to (see `CRYPTARE_DB_PATH` under [Configuration](#configuration));
   - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above);
   - `keys export` refuses an existing output file unless you add `--force`, and always refuses the key store;
-  - `encrypt dir/` and `encrypt .` now write the encrypted file next to the folder (`dir.enc`, `<parent>/<name>.enc`) instead of inside it, and an `--output` inside the folder being encrypted is refused.
+  - `encrypt dir/` and `encrypt .` now write the encrypted file next to the folder (`dir.enc`, `<parent>/<name>.enc`) instead of inside it, and an `--output` inside the folder being encrypted is refused;
+  - `compress --format` that contradicts the `--output` extension, and `--level` values other than 1–9 or -1, are refused instead of being silently replaced (the TUI checks the same);
+  - `--password ""` now means an empty password instead of prompting;
+  - files without Cryptare's format header (from v1.1.0 and earlier) are read whole, so `decrypt` refuses one larger than `--max-size` (default 10 GiB) before reading it; raise `--max-size` for a bigger one. `keys import` refuses files over 1 MiB;
+  - a `CRYPTARE_DB_PATH` containing `?` is refused (SQLite opened a different file); use a `file:` URI with `%3F`;
+  - the Docker image runs as an unprivileged user (UID 10001); for a bind-mounted data folder, add `--user "$(id -u):$(id -g)"` (see [Docker](#docker)).
 
 ## Core CLI capabilities
 
@@ -149,7 +159,7 @@ File format: encrypted files and folders, stored keys and key exports are writte
 - cryptare decrypt [path] --force — overwrite the output if it already exists
 - cryptare decrypt [path] --password-file [file] — read the decryption password from the first line of a file
 - cryptare decrypt [path] --password [value] — provide the password on the command line (prints a warning; prefer --password-file)
-- cryptare decrypt [path] --max-size [size] --max-entries [n] — change the extraction limits for an encrypted folder (defaults 10 GiB and 100,000; 0 means no limit)
+- cryptare decrypt [path] --max-size [size] --max-entries [n] — change the extraction limits for an encrypted folder (defaults 10 GiB and 100,000; 0 means no limit). `--max-size` also caps a file without Cryptare's format header (from v1.1.0 or earlier), which is read whole
 
 Examples:
 - cryptare decrypt ./secret.txt.enc
@@ -163,8 +173,9 @@ Examples:
 - cryptare compress [path] --output [path] — write to a custom output file or archive
 - cryptare compress [path] --force — overwrite the output if it already exists
 - cryptare compress [path] --format [gzip|zip] — select compression format
-- cryptare compress [path] --level [1-9] — set the compression level (applies to gzip and zip)
-- zip is also selected automatically when --output ends in .zip
+- cryptare compress [path] --level [1-9] — set the compression level (applies to gzip and zip; -1, the default, picks the standard level, and other values are refused)
+- zip is also selected automatically when --output ends in .zip; a --format that contradicts the --output extension (gzip into `.zip`, zip into `.gz`, `.tgz` or `.tar.gz`) is refused
+- compressing a single `.tar` file gives `x.tar.gz`, which `decompress` extracts as a tarball; use `decompress --raw` to get `x.tar` back
 
 Examples:
 - cryptare compress ./artifact.bin
@@ -180,6 +191,7 @@ Examples:
 - cryptare decompress [archive] --force — overwrite the output if it already exists (an existing folder is replaced, not merged into)
 - cryptare decompress [archive] --max-size [size] — stop once the output passes this size (default 10 GiB; units B, KB, MB, GB, TB, KiB, MiB, GiB, TiB; 0 means no limit)
 - cryptare decompress [archive] --max-entries [n] — stop if the archive has more entries than this (default 100,000; 0 means no limit)
+- cryptare decompress [archive] --raw — gunzip only: write the decompressed data as one file without extracting a tar archive (`x.tar.gz` gives `x.tar`, `x.tgz` gives `x.tar`); not for zip archives. The TUI always extracts.
 
 Examples:
 - cryptare decompress ./artifact.bin.gz
@@ -187,6 +199,7 @@ Examples:
 - cryptare decompress ./build-backup.tar.gz --output ./restored-build
 - cryptare decompress ./build-backup.zip --output ./restored-build
 - cryptare decompress ./huge-dataset.tar.gz --max-size 50GiB
+- cryptare decompress ./backup.tar.gz --raw
 
 ### keys
 
@@ -223,14 +236,14 @@ Examples:
 
 | Setting | Default | Description |
 |---|---|---|
-| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store, as a path or a SQLite `file:` URI. A plain path can't contain `?` (SQLite would cut it there); use a `file:` URI with `%3F` instead. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you on Linux and macOS; on Windows it gets the folder's permissions). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
 Command flags (`--output`, `--password-file`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
 
 ## Docker
 
-The image builds Cryptare with CGO enabled for `linux/amd64`. It sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume.
+The image builds Cryptare with CGO enabled for `linux/amd64`, from base images pinned by digest. It runs as an unprivileged user (UID and GID 10001), sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume owned by that user, so a named volume works as is. A bind-mounted host folder is owned by your host user instead, so run the container as that user with `--user "$(id -u):$(id -g)"`; the key store's ownership check (SEC-016) then passes too. Build with `--build-arg VERSION=<tag>` to set what `--version` reports (default `dev`).
 
 ### Build
 ```bash
@@ -244,8 +257,8 @@ docker run --rm -it cryptare:latest
 
 ### Persist data
 ```bash
-mkdir -p ~/.cryptare
-docker run --rm -it \
+mkdir -p ~/.cryptare && chmod 700 ~/.cryptare
+docker run --rm -it --user "$(id -u):$(id -g)" \
   -v ~/.cryptare:/app/data \
   -e CRYPTARE_DB_PATH=/app/data/cryptare.db \
   cryptare:latest
@@ -254,7 +267,7 @@ docker run --rm -it \
 ### CLI usage
 ```bash
 docker run --rm -it cryptare:latest --help
-docker run --rm -it -v ~/.cryptare:/app/data cryptare:latest keys list
+docker run --rm -it --user "$(id -u):$(id -g)" -v ~/.cryptare:/app/data cryptare:latest keys list
 ```
 
 ## Testing and quality checks

@@ -955,3 +955,77 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `internal/logic_cli_unix_test.go`, `interrupt_test.go` and `interrupt_unix_test.go`;
   `README.md`, `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`,
   `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-04 — CI verified; SEC-004/005/011/012/014/015 closed; Tier B, Tier C, 4.2/4.7/4.9, 5.19–5.21
+
+- **Pushed and verified on GitHub:** the owner committed the 2026-10-03 work as
+  `4ba516a`, `6a5fcb1` and `b3278ea`. CI #136–#138, Docker #18–#20 and Security
+  #142–#144 passed; on `b3278ea`, `setup-go` installed go1.26.8, the Docker builder
+  resolved `golang:1.26.8-alpine@sha256:8ac98ca5…`, and the new govulncheck job found
+  nothing reachable. Code Scanning shows 0 open alerts. Runs on `e512844`, `3d9384e`
+  and `0c57aef` had also passed. Dependabot ran and opened PR #26 (`golang.org/x/crypto`
+  0.56.0 → 0.57.0) for the owner.
+- **Closed** after checking each item's validation: SEC-004 (`e512844`), SEC-005
+  (`0c57aef`), SEC-011 and SEC-014 (`3d9384e`), SEC-012 (all steps; 0 open alerts),
+  SEC-015 (`6a5fcb1`/`b3278ea`). BUG-015 to BUG-018 moved to the resolved index.
+- **Line endings:** the 2026-10-03 edit of `.github/workflows/security.yml` turned its
+  CRLF line endings into LF, so `6a5fcb1` shows the whole file as changed (content
+  unchanged apart from the govulncheck job; no other file was affected). Left as it
+  is to avoid another whitespace-only change; edits since preserve each file's line
+  endings (`ci.yml`, CRLF, changed by 2 lines below).
+- **Owner decisions:** approved 4.2/5.9 (Dockerfile) and 5.19 (CI `-race`); confirmed
+  5.12's behaviour change; Q-011 = `decompress --raw`; Q-012 = document only; the
+  legacy-input cap for 5.15 = `--max-size`.
+- **Changes (not yet committed):**
+  - 5.7 / SEC-017: GORM's logger silenced, errors translated; `ErrKeyExists`; the CLI
+    and TUI name the key in "not found" and "already stored" errors.
+  - 5.8 / SEC-010: `databaseFilePath`; a plain path with `?` refused; `file:` URIs
+    created 0600 and trust-checked.
+  - 4.2, 5.9 / SEC-013, SEC-003: non-root image user 10001 owning `/app/data`, images
+    pinned by digest, no runtime packages, `ARG VERSION`, `-trimpath`, `.dockerignore`;
+    `.gitignore` gains `*.ckey` and SQLite side files.
+  - 5.10 / SEC-019: Windows permissions documented.
+  - 5.11 / BUG-019: containment by file identity. 5.12 / BUG-020: contradictory
+    `--format` and out-of-range `--level` refused. 5.13 / BUG-021: shortened temporary
+    names. 5.14 / BUG-023: `--password ""` counts as given. 5.15 / BUG-024: key exports
+    capped at 1 MiB, legacy inputs at `--max-size`. 5.16 / BUG-022: `decompress --raw`.
+  - 5.19: `-race` in CI on Linux and macOS. 5.20: README and `CONTRIBUTING.md`.
+    5.21: six fuzz targets. 4.7 and 4.9: README release section and install steps.
+- **Tests:** `TestDatabaseErrorsAreTyped`, `TestKeysCommandsKeepStdoutClean`
+  (subprocess), `TestDatabasePathsOpenThePreparedFile`, `TestDatabaseFilePath`,
+  `TestContainmentChecksUseFileIdentity` (its letter-case part runs on the macOS and
+  Windows CI jobs), `TestLongNamesFitTemporaryFiles`, `TestTempNamePart`,
+  `TestLegacyReadsAreBounded`, `TestGunzipRawRoundTrip`, `TestDefaultRawOutput`,
+  `TestCompressCmdRefusesContradictoryOptions`, `TestDecryptCmdExplicitEmptyPassword`,
+  `TestDecompressCmdRaw`, `TestDashboardCompressRefusesContradictoryOptions`, and the
+  fuzz targets. The nine behavioural ones fail against `b3278ea`.
+- **Validation** (scratch copies, Go 1.26.8, linux/amd64, non-root):
+  - `gofmt -s -l .` and `go vet ./...` clean; `go vet` and test builds pass for
+    windows, darwin and freebsd; `go test -race -count=1 ./...` passes (100% `main`,
+    79.4% `internal`); gosec v2.29.0: 0 issues (9 `#nosec`); actionlint: no findings.
+  - Fuzzing: 25–35 s coverage-guided runs of five targets without a failure.
+    `FuzzExtractTar`'s coverage-guided worker stalls in this environment, spinning in
+    Go runtime code (sampled with ptrace), not in Cryptare's; 80,000 uninstrumented
+    inputs and a 200,000-input mutation stress of tar extraction (slowest 0.6 ms, no
+    write outside the output folder) and 116,512 parseable mutated zips (slowest
+    56 ms) found nothing.
+  - Real binaries, `b3278ea` against this round: `keys export <unknown>` wrote 302
+    bytes of SQL log to stdout, now 0; `CRYPTARE_DB_PATH=a?b/k.db` left a stray 0644
+    file, now refused; `--format gzip --output x.zip` wrote a zip and `--level 42` was
+    accepted, now both refused; a 3 MB non-Cryptare file under `--max-size 1MiB` was
+    read whole (72 ms, "wrong password"), now refused before reading (13 ms) with the
+    limit hint; a 247-byte name failed to encrypt, now works; `decompress --raw` gives
+    back a tarball holding a symlink byte for byte.
+  - The README's Linux install steps, run as written against v1.1.0, verify the
+    checksum and print `cryptare version v1.1.0`.
+- **Not run:** the Docker build (Docker isn't available here; the Docker workflow is
+  its first build), golangci-lint, govulncheck locally, Windows and macOS at runtime,
+  coverage-guided `FuzzExtractTar` on a normal machine.
+- **Changed:** `.dockerignore` (new), `.gitignore`, `Dockerfile`,
+  `.github/workflows/ci.yml`, `internal/compress.go`, `internal/crypto.go`,
+  `internal/database.go`, `internal/logic-cli.go`, `internal/logic-tui.go`; tests in
+  `internal/compress_test.go`, `internal/database_test.go`,
+  `internal/logic_cli_test.go`, `internal/logic_tui_test.go`, new
+  `internal/fuzz_test.go` and `keys_output_test.go`; `README.md`, `CONTRIBUTING.md`,
+  `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`, `intel/notes.md`,
+  `intel/plan.md` and this file. Not committed.
