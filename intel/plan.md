@@ -13,6 +13,8 @@ Status: **In progress.**
     complete.
   - v1.2.0 (`89a64e8`, released by CD #4 on 2026-10-04, with the drafted notes): Phases
     2 and 3.1/3.2, and Phase 5 except 5.17, with 4.2, 4.7 and 4.9.
+  - v1.3.0 (`a088f7f`, released by CD #5 on 2026-10-04): 3.5, 4.5, 4.6, the SEC-003 CI
+    guard and Q-009's password normalisation. SEC-003, SEC-010 and SEC-016 are closed.
 - **Owner decisions (2026-09-26):**
   - 0.2 and 0.3 are done.
   - Stored keys should be usable (Q-002 = yes), so 3.4 is approved.
@@ -56,26 +58,30 @@ Status: **In progress.**
   generated licence file in the release archives (4.5); Q-008 = keep the read limits;
   Q-009 = NFKC normalisation, byte order mark handling and `golang.org/x/text` as a
   direct dependency.
-- **Done 2026-10-04, not yet committed (round 4):** 3.5, 4.5, 4.6, the Q-005 CI guard
-  (SEC-003 step 5) and Q-009's password normalisation.
+- **Owner decisions (2026-10-04, round 5):** Q-013 = build the Linux releases against
+  musl and ship the C library notices; leave the published releases as they are. PR
+  #26 = take the `golang.org/x/crypto` 0.57.0 update (with `x/text` 0.42.0), add a
+  normalisation known-answer test and note the change in v1.3.1's release notes.
+- **Done 2026-10-04, not yet committed (round 5):** 4.10 (musl Linux builds, the
+  Windows DLL check, C library notices) and PR #26's update with
+  `TestNormalizePasswordKnownAnswers`.
 - **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
   (BUG-015–BUG-024), gaps in five existing items and five owner questions
   (Q-008–Q-012). They are planned in
   [Phase 5](#phase-5--remediation-from-the-2026-10-03-analysis).
 - **Next up:**
-  1. Review and commit round 4 (3.5, 4.5, 4.6, the CI guard, Q-009), then check CI on
-     all three systems (the default-path tests run on Windows and macOS there for the
-     first time), Docker and Security. That closes SEC-003, SEC-010 and SEC-016.
-  2. Finish two validations: `go version -m` on a v1.2.0 binary (SEC-018) and
+  1. Review and commit round 5. Committing `go.mod` and `go.sum` as they are makes
+     Dependabot close PR #26 as no longer needed; to merge #26 on GitHub instead,
+     merge it first and discard the local `go.mod`/`go.sum` changes before pulling
+     (they're identical).
+  2. Before tagging, run CD by hand (Actions → CD → Run workflow on `main`): it builds,
+     smoke-tests and packages every target without publishing, so the musl Linux
+     builds (both architectures) and the Windows DLL check are proven before a release.
+  3. Release v1.3.1 with the drafted notes (they cover the `x/text` normalisation fix).
+  4. Finish two validations: `go version -m` on a release binary (SEC-018) and
      `docker run --rm --entrypoint id <image> -u` (SEC-013).
-  3. Decide Q-013 (C libraries in the release binaries; 4.10).
-  4. The next release (v1.3.0 suggested: a new command, a moved key store and a new
-     KDF identifier), with the drafted notes. Its CD run is the first with the new
-     packaging step; check that each archive holds `LICENSE`, `NOTICE` and
-     `THIRD_PARTY_LICENSES.txt`.
   5. The rest of Phase 3: 3.3 (shared key flows, with 5.17) and 3.4 (usable stored keys,
      using the header's reserved key source 2; needs the owner's choices first).
-  6. Dependabot PR #26 (`golang.org/x/crypto` 0.57.0), the owner's review.
 
 ## Principles
 
@@ -171,7 +177,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27, with 3.1; committed in `0c57aef`:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
 | 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
 | 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
-| 3.5 | Per-user default DB path plus migration, if Q-003 = yes. **Done 2026-10-04, not yet committed (Q-003 = yes, notice-only migration):** `cryptare/cryptare.db` in the user data folder (`databasePath`, `userDataDir`), its folder created 0700 by the opener; a `cryptare.db` in the current folder gets a notice and is never opened; new `keys path` (SEC-010, SEC-016). | Q-003 |
+| 3.5 | Per-user default DB path plus migration, if Q-003 = yes. **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0 (Q-003 = yes, notice-only migration):** `cryptare/cryptare.db` in the user data folder (`databasePath`, `userDataDir`), its folder created 0700 by the opener; a `cryptare.db` in the current folder gets a notice and is never opened; new `keys path` (SEC-010, SEC-016). | Q-003 |
 | 3.6 | `main.version` variable and a `--version` flag. **Done** (2026-09-24, shipped in v1.0.1). It was moved ahead of 1.4 for W4. | BUG-009, W4 |
 
 ## Phase 4 — Tooling, tests, docs
@@ -182,9 +188,9 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 4.2 | Non-root container user; pin images by digest **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (owner approved):** non-root user 10001 owning `/app/data`, both images pinned by digest; validated by the Docker workflow on the next push (Docker isn't available in the analysis environment). | SEC-013 (needs approval) |
 | 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View`. **Partly done:** `readPassword` (1.1), `ImportKeyFromFile` and a CLI import/export of a legacy key (0.5, `TestLegacyShortPasswordCmds`), and traversal rejection (2.2, `TestExtractRejectsPathTraversal`). **Remaining:** a full CLI export/import round trip and the TUI `View`. | `maint.md` §5 |
 | 4.4 | Add `SECURITY.md` with a private reporting channel | `CONTRIBUTING.md` |
-| 4.5 | Settle the contents of `NOTICE`. **Done 2026-10-04, not yet committed (Q-006):** `NOTICE` holds the project's attribution and points to `THIRD_PARTY_LICENSES.txt`, which `scripts/third-party-licenses.sh` writes in the release job; every archive holds it with `LICENSE` and `NOTICE`. | Q-006 |
-| 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3). **Done 2026-10-04, not yet committed:** `keys.db`, with the Q-003 tests. | `notes.md` §3 |
-| 4.10 | Settle the licensing of the C libraries in the release binaries: static glibc on Linux, MinGW-w64 runtime and libgcc on Windows (owner decision Q-013). | Q-013 |
+| 4.5 | Settle the contents of `NOTICE`. **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0 (Q-006):** `NOTICE` holds the project's attribution and points to `THIRD_PARTY_LICENSES.txt`, which `scripts/third-party-licenses.sh` writes in the release job; every archive holds it with `LICENSE` and `NOTICE`. | Q-006 |
+| 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3). **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0:** `keys.db`, with the Q-003 tests. | `notes.md` §3 |
+| 4.10 | Settle the licensing of the C libraries in the release binaries: static glibc on Linux, MinGW-w64 runtime and libgcc on Windows (owner decision Q-013). **Done 2026-10-04, not yet committed (Q-013: musl; past releases left as they are):** `cd.yml` builds Linux in the `Dockerfile`'s pinned `golang:1.26.8-alpine` image, statically against musl; the Windows smoke test fails if the binary imports a MinGW-w64 toolchain DLL; `scripts/third-party-licenses.sh` adds the musl and MinGW-w64 runtime notices from `scripts/licenses/`. | Q-013 |
 | 4.7 | Replace the README's release "known issue" callout with a note that v1.0.0 is broken and v1.0.1+ works, and re-verify the install steps. **Unblocked:** v1.0.1 works. Waiting for the owner to pull `3c80050` so the README edit doesn't conflict. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** the callout now says only v1.0.0 is broken; the install steps add the download commands and were run against v1.1.0. | BUG-001 |
 | 4.8 | Doc follow-ups from the 2026-09-24 review. The owner has fixed the `AGENTS.md` typo and `golang.md`'s `gofmt -s`, and `map.md` already covers `intel/` as a directory. **Remaining (owner):** add `intel/golang.md` to the "Repository Intelligence Documents" list in `AGENTS.md`. | `AGENTS.md`, `intel/` |
 | 4.9 | Post-merge doc updates. **Done 2026-09-24:** the CI/CD table in `map.md`, `maint.md` §6, and the CI description in `CONTRIBUTING.md`. **Remaining:** the README release table (W6), after the owner pulls `3c80050`. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** the Windows ARM64 row is gone (W6). | W3, W6 |

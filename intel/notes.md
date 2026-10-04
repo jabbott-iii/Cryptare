@@ -5,38 +5,39 @@ tracked in [`cybersec.md`](cybersec.md), work sequencing in [`plan.md`](plan.md)
 the record of past work, including resolved defects and answered questions, in
 [`history.md`](history.md).
 
-Last updated: 2026-10-04 (round 4)
+Last updated: 2026-10-04 (round 5)
 
-## 1. Current snapshot (2026-10-04)
+## 1. Current snapshot (2026-10-04, round 5)
 
-- **Branch state.** `main` is at `89a64e8`, level with `origin/main`, and tagged
-  v1.2.0, which CD #4 released on 2026-10-04 with the drafted notes; CI #142, Docker #23
-  and Security #148 passed on it. The working tree holds this round's uncommitted
-  changes (Q-003, Q-005's CI guard, Q-006 and Q-009). Dependabot's PR #26
-  (`golang.org/x/crypto` 0.56.0 → 0.57.0, CI green) is open; it edits the same `go.mod`
-  require block as Q-009's `golang.org/x/text` line, so whichever lands second may need
-  a trivial rebase.
+- **Branch state.** `main` is at `a088f7f`, level with `origin/main`, and tagged
+  v1.3.0, which CD #5 released on 2026-10-04, the first release whose archives carry
+  `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`. CI #143, Docker #24 and Security
+  #149 passed on it. Dependabot rebased PR #26 onto it (`golang.org/x/crypto` 0.57.0,
+  which brings `golang.org/x/text` 0.42.0 and `golang.org/x/sys` 0.48.0; CI #144/#145
+  green). The working tree holds this round's uncommitted changes: Q-013 (musl Linux
+  builds, C library notices) and PR #26's dependency update, applied with identical
+  `go.mod` and `go.sum`, plus a normalisation known-answer test.
 - **Toolchain.** `go.mod` declares `go 1.26.0` and `toolchain go1.26.8` (`6a5fcb1`), so
   CI, CD and the Docker builder use Go 1.26.8, and an older local `go` downloads it
   (SEC-018). Releases up to v1.1.0 were built with Go 1.26.0; v1.2.0 is the first built
   with 1.26.8.
-- **Validation** of the 2026-10-04 round on the owner's machine (linux/amd64, non-root,
-  Go 1.26.8):
+- **Validation** of round 5 on the owner's machine (linux/amd64, non-root, Go 1.26.8,
+  `golang.org/x/crypto` 0.57.0, `x/text` 0.42.0, `x/sys` 0.48.0):
 
   | Check | Result |
   |---|---|
   | `gofmt -s -l .` | no files listed |
   | `go vet ./...` | clean, also for windows, darwin and freebsd (CGO off), with test builds |
   | `go test -race -count=1 ./...` | pass |
-  | `go mod tidy` | can't run here (some module hosts are unreachable); `go mod tidy -e` leaves `go.mod` as edited. CI checks it |
+  | `go.mod`, `go.sum` | byte-identical to PR #26's, whose `go mod tidy` check passed in CI |
   | gosec v2.29.0 | 0 issues, 9 `#nosec` |
   | actionlint 1.7.12 | nothing reported for the four workflows |
   | golangci-lint, govulncheck | not run here; CI and Security run them on every push |
-  | Real-binary checks | the v1.2.0 source against this round: Q-003 (SEC-010) and Q-009 compatibility, recorded in `history.md` |
+  | Real-binary checks | the v1.3.0 source against this round, recorded in `history.md` |
 
-- **Not verified:** Windows and macOS behaviour beyond CI, the Docker image's UID
-  (SEC-013), the Go version inside the v1.2.0 binaries (SEC-018), and the release job's
-  new packaging steps, which first run on the next tag.
+- **Not verified:** the musl Linux build itself (it runs in CD only; Docker isn't
+  available here), the Windows DLL check, the Docker image's UID (SEC-013), and the Go
+  version inside the release binaries (SEC-018).
 - **Lowest coverage (2026-10-03):** `View` and `actionTitle` (0%), `readTerminalPassword` (20%),
   `readPassword` (46%), `Update` (54%), `replacePath` (56%), `writeZipFile` (59%).
 
@@ -99,11 +100,24 @@ validation for each fix are in `history.md`.
   Since Q-006 (2026-10-04, not yet committed) it holds the project's attribution and
   points to `THIRD_PARTY_LICENSES.txt`, which the release job generates with
   `scripts/third-party-licenses.sh` and puts in every archive.
-- **C libraries in the release binaries (Q-013).** The Linux binaries are linked
-  statically (`-linkmode external -extldflags -static` on an Ubuntu runner), so they
-  contain parts of the runner's GNU C Library (glibc, LGPL-2.1-or-later), and the
-  Windows build may include parts of the MinGW-w64 runtime and libgcc.
-  `THIRD_PARTY_LICENSES.txt` covers the Go code and SQLite only.
+- **C libraries in the release binaries (Q-013).** Up to v1.3.0 the Linux binaries were
+  linked statically against the Ubuntu runner's GNU C Library (glibc,
+  LGPL-2.1-or-later). Since round 5 (not yet committed) they are linked statically
+  against musl (MIT) in the `Dockerfile`'s pinned Alpine builder, and
+  `THIRD_PARTY_LICENSES.txt` adds musl's notice for Linux and the MinGW-w64 runtime's
+  for Windows (whose runtime code Go's linker always pulls in with `-lmingwex
+  -lmingw32`). libgcc's licence exception needs no notice. The owner left the
+  published v1.0.1–v1.3.0 releases as they are.
+- **Password normalisation depends on `golang.org/x/text`.** v0.42.0 fixed NFC/NFKC
+  composition bugs in v0.41.0: an accent could compose with a letter across an Indic
+  vowel sign or length mark that should block it (Tamil, Malayalam, Bengali, Oriya,
+  Kannada, Sinhala, Myanmar, Balinese, Grantha and similar). In 300,000 random
+  mixed-script strings, 104 normalised differently, and v0.42.0 matched Python's
+  `unicodedata` in every case. A v1.3.0 file protected with such a password (KDF 2)
+  doesn't open in builds with v0.42.0; it opens with v1.3.0, which can re-encrypt it.
+  `TestNormalizePasswordKnownAnswers` now pins the normalised forms, so any later
+  change, including the Unicode 17 tables that `x/text` selects from Go 1.27 on, fails
+  CI before a release.
 - **TUI password field.** It masks input with one `*` per character, which reveals the
   password's length.
 - **Documentation drift** (all fixed in `eb330a3`, released in v1.2.0).
@@ -129,9 +143,7 @@ validation for each fix are in `history.md`.
 
 ## 4. Open questions (owner decisions)
 
-| ID | Question | Why it matters |
-|---|---|---|
-| Q-013 | How should the C libraries linked into the release binaries be licensed? The Linux binaries statically include glibc (LGPL-2.1-or-later). Options: build them against musl instead (for example in an Alpine container, as the `Dockerfile` does; MIT, which only needs its notice added), link glibc dynamically (giving up the portable static binary), or keep the static glibc build and meet the LGPL's conditions for it (offering glibc's source and a way to relink). The Windows build's MinGW-w64 runtime and libgcc parts need checking too. | Licensing of published binaries (found while doing Q-006). A licensing decision for the owner; this note isn't legal advice. |
+None open.
 
 Answered or closed: Q-001 (release builds use native CGO per OS), Q-002 (stored keys
 should be usable; plan 3.4), Q-004 (the default password policy, `maint.md` §4) and
@@ -145,7 +157,9 @@ attribution, and release archives carry a generated `THIRD_PARTY_LICENSES.txt`),
 (the Argon2id read limits stay at 1 GiB, 10 passes and 16 lanes) and Q-009 (passwords
 are NFKC-normalised with a leading byte order mark dropped, `golang.org/x/text` is a
 direct dependency, and a new KDF identifier marks data whose password normalisation
-changed). Their discussion is in `history.md`.
+changed), and Q-013 (Linux release binaries are built against musl; C library notices
+ship in `THIRD_PARTY_LICENSES.txt`; past releases are left as they are). Their
+discussion is in `history.md`.
 
 ## 5. Reproducing the validation locally
 

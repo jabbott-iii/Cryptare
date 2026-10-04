@@ -60,6 +60,45 @@ func TestNormalizePassword(t *testing.T) {
 	}
 }
 
+// TestNormalizePasswordKnownAnswers pins the normalised form of passwords (Q-009).
+// Data protected with a password that normalisation changes records kdfArgon2idNFKC
+// and is read through this form only, so a golang.org/x/text update (or the Unicode
+// tables that a newer Go toolchain selects) that changes it would make that data
+// unreadable. If this test fails after such an update, don't just change the expected
+// values: see maint.md §3 first. The expected values agree with Python's
+// unicodedata.normalize("NFKC"), an independent implementation.
+func TestNormalizePasswordKnownAnswers(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"precomposed letter", "caf\u00e9", "caf\u00e9"},
+		{"combining accent", "cafe\u0301", "caf\u00e9"},
+		{"ligature", "\ufb01", "fi"},
+		{"full-width letters", "\uff21\uff22\uff23", "ABC"},
+		{"Roman numeral", "\u2163", "IV"},
+		{"superscript", "\u00b2", "2"},
+		{"angstrom sign", "\u212b", "\u00c5"},
+		{"no-break space", "\u00a0", " "},
+		{"Hangul jamo", "\u1100\u1161\u11a8", "\uac01"},
+		{"Hangul syllable and an accent", "\uac00\u0301", "\uac00\u0301"},
+		{"half-width katakana with a voiced mark", "\uff76\uff9e", "\u30ac"},
+		{"Greek with two accents", "\u03c9\u0313\u0342", "\u1f66"},
+		{"long s with dot above and dot below", "\u1e9b\u0323", "\u1e69"},
+		{"Tamil two-part vowel sign", "\u0b95\u0bc6\u0bbe", "\u0b95\u0bca"},
+		{"Devanagari composition exclusion", "\u0958", "\u0915\u093c"},
+		// golang.org/x/text before v0.42.0 composed the accent with the "o" across
+		// the Tamil vowel sign, which blocks it.
+		{"accent after a vowel sign", "o\u0bbe\u0317\u0301", "o\u0bbe\u0317\u0301"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizePassword(tt.in); got != tt.want {
+				t.Fatalf("normalizePassword(%+q) = %+q, want %+q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPasswordCandidates(t *testing.T) {
 	tests := []struct {
 		name       string

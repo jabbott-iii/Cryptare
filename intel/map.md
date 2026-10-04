@@ -1,6 +1,6 @@
 # Repository Map
 
-Last updated: 2026-10-04 (Q-003, Q-005, Q-006, Q-009). Architecture rules live in [`maint.md`](maint.md).
+Last updated: 2026-10-04 (Q-003, Q-005, Q-006, Q-009; round 5: Q-013, `x/crypto` 0.57.0). Architecture rules live in [`maint.md`](maint.md).
 
 ## Structure
 
@@ -28,6 +28,7 @@ Cryptare/
 ├── .github/workflows/       # ci.yml, cd.yml, docker.yml, security.yml
 ├── .github/dependabot.yml   # weekly gomod and github-actions update PRs
 ├── scripts/third-party-licenses.sh  # writes THIRD_PARTY_LICENSES.txt for release archives (cd.yml)
+├── scripts/licenses/        # notices of the C libraries in the release binaries: musl (Linux), MinGW-w64 runtime (Windows)
 ├── .devcontainer/           # Ubuntu + Go + Neovim dev container
 ├── Dockerfile               # CGO build (golang:1.26.8-alpine) → alpine:3.22 runtime, both pinned by digest; runs as UID 10001
 ├── .dockerignore            # keeps the build context to the sources
@@ -58,8 +59,8 @@ Cryptare/
 | `github.com/charmbracelet/bubbletea` / `lipgloss` | v1.3.10 / v1.1.0 | TUI |
 | `github.com/charmbracelet/x/term` | v0.2.2 | Hidden password input at the CLI prompt |
 | `gorm.io/gorm` + `gorm.io/driver/sqlite` | v1.31.2 / v1.6.0 | Storage, via `github.com/mattn/go-sqlite3` v1.14.52 (**CGO**) |
-| `golang.org/x/crypto` | v0.56.0 | `argon2` only (the legacy PBKDF2 key uses the standard library's `crypto/pbkdf2`) |
-| `golang.org/x/text` | v0.41.0 | `unicode/norm`: NFKC normalisation of passwords (Q-009); also used by GORM |
+| `golang.org/x/crypto` | v0.57.0 | `argon2` only (the legacy PBKDF2 key uses the standard library's `crypto/pbkdf2`) |
+| `golang.org/x/text` | v0.42.0 | `unicode/norm`: NFKC normalisation of passwords (Q-009); also used by GORM |
 
 ## Component dependencies
 
@@ -126,4 +127,4 @@ All third-party actions are pinned to full commit SHAs.
 | `ci.yml` | push/PR (all branches) | Ubuntu, Windows and macOS matrix: fails if a key database or `.ckey` is tracked (SEC-003), `go mod tidy` diff, `go vet`, golangci-lint v2.13.2, `go test` with coverage (with `-race` on Ubuntu and macOS) (Codecov). Then a native CGO build, smoke-tested with `--version`, `keys generate`/`keys list` and an encrypt/decrypt round-trip. |
 | `security.yml` | push/PR, weekly | CodeQL (Go, security-extended). gosec v2.29.0, with SARIF uploaded to Code Scanning (category `gosec`). govulncheck v1.8.0 on the `go.mod` toolchain, failing on reachable vulnerabilities (SEC-018). |
 | `docker.yml` | push/PR to `main` | `docker build`, `--help`, then `keys generate`/`keys list` on a named volume (the image runs as UID 10001) |
-| `cd.yml` | `v*` tags, manual | Native CGO build per target on a matching runner: linux amd64/arm64 (static), darwin arm64, darwin amd64 (cross-compiled), windows amd64. Stamps `-X main.version=<tag>`, smoke-tests every target except darwin/amd64, packages `cryptare_<os>_<arch>` archives (binary, `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt` from `scripts/third-party-licenses.sh`) plus `checksums.txt`, and creates a GitHub Release on tags. |
+| `cd.yml` | `v*` tags, manual | Native CGO build per target on a matching runner: linux amd64/arm64 (static against musl, inside the pinned `golang:1.26.8-alpine` image), darwin arm64, darwin amd64 (cross-compiled), windows amd64. Stamps `-X main.version=<tag>`, smoke-tests every target except darwin/amd64 (and checks the Windows binary imports no toolchain DLL), packages `cryptare_<os>_<arch>` archives (binary, `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt` from `scripts/third-party-licenses.sh`) plus `checksums.txt`, and creates a GitHub Release on tags. |

@@ -100,6 +100,16 @@ already written, and tests covering both.
   as unknown ("unsupported encrypted data: key derivation 2"). The first chunk is
   authenticated when the reader is created (`newDecryptingReader`), so a wrong password
   is reported before any output exists.
+- **Normalisation is part of the format.** KDF `2` data opens only through the NFKC
+  form, so the normalised form of a password must never change between versions.
+  `TestNormalizePasswordKnownAnswers` pins it (checked against Python's
+  `unicodedata`). If an update of `golang.org/x/text`, or a Go toolchain that selects
+  newer Unicode tables (`x/text` switches to Unicode 17 from Go 1.27), makes it fail,
+  treat it as a format change: work out which passwords change, then either keep the
+  old form readable (another candidate or KDF identifier) or document the break in the
+  release notes. Don't just update the expected values. `x/text` v0.42.0 was such a
+  change: it fixed composition bugs in v0.41.0, the version v1.3.0 was built with
+  (`notes.md` §3).
 - **Body:** the plaintext in chunks of the chunk size, each sealed with its own 16-byte
   tag. The last chunk may be shorter or empty; data that ends on a chunk boundary ends
   with a full last chunk. A chunk's nonce is the prefix, a 4-byte big-endian chunk
@@ -305,8 +315,14 @@ These are observed in the codebase and required for new code:
   `keys` commands and the TUI, so the smoke tests' `keys generate`/`keys list` steps
   are what catch it. Releases therefore build each target natively with
   CGO (Q-001):
-  - Linux binaries are statically linked (tags
-    `sqlite_omit_load_extension,osusergo,netgo`; `-linkmode external -extldflags -static`).
+  - Linux binaries are statically linked against musl (tags
+    `sqlite_omit_load_extension,osusergo,netgo`; `-linkmode external -extldflags -static`),
+    built inside the `Dockerfile`'s pinned `golang:1.26.8-alpine` image
+    (`LINUX_BUILDER` in `cd.yml`) on a runner of the target's architecture. Up to v1.3.0
+    they were linked against the Ubuntu runner's glibc (Q-013).
+  - The Windows smoke test fails if the binary imports a DLL from the MinGW-w64
+    toolchain (`libwinpthread`, `libgcc_s`, …): such a DLL would be missing on users'
+    machines, and the runtime's notices assume it is linked in.
   - darwin/amd64 is cross-compiled on an Apple silicon runner.
   - CI and CD smoke-run each built binary against a real database, so a CGO-less build
     fails the pipeline instead of shipping. Keep those smoke steps.
@@ -321,9 +337,12 @@ These are observed in the codebase and required for new code:
   with the `cd.yml` matrix) and copies each module's licence files and the Go standard
   library's `LICENSE`. A module with no licence file stops the release until it is
   added to the script's `stated_licence` list, so every new dependency gets its
-  licence checked. C code is not covered: SQLite (public domain) is noted with
-  go-sqlite3, but the C libraries the platform toolchains link in, such as glibc in the
-  static Linux binaries, are not listed (Q-013).
+  licence checked. C code: SQLite (public domain) is noted with go-sqlite3, and the C
+  libraries the release toolchains link in are listed per OS in the script's
+  `c_libraries`, with their notices under `scripts/licenses/` (Q-013): musl for Linux,
+  the MinGW-w64 runtime for Windows. libgcc's licence exception needs no notice, and
+  macOS binaries only link Apple's system libraries. Update the list and the files when
+  a toolchain changes.
 - **Version stamping:** `main.version` defaults to `dev`. Release builds set it with
   `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
@@ -335,7 +354,9 @@ These are observed in the codebase and required for new code:
   builder's tag and digest with it.
 - **Go toolchain (SEC-018):** CI and CD install the `toolchain` version from `go.mod`
   (`setup-go` with `go-version-file`), and the `Dockerfile` builder image names the
-  same release (`golang:1.26.8-alpine`). Change both together. Dependabot proposes
+  same release (`golang:1.26.8-alpine`), as does `cd.yml`'s `LINUX_BUILDER`, which
+  pins the same image by digest. Change all three together; the Linux release build
+  runs with `GOTOOLCHAIN=local`, so a mismatch fails it. Dependabot proposes
   module and action updates weekly, and the Security workflow's govulncheck job fails
   when Cryptare's code reaches a known vulnerability.
 

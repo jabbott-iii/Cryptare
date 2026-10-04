@@ -55,21 +55,36 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
           VERSION: ${{ steps.meta.outputs.tag }}
+          # The Dockerfile's builder image, pinned by digest. Linux binaries are linked
+          # statically against its musl C library (MIT) instead of the runner's glibc
+          # (LGPL) (Q-013). Update it with the Dockerfile when go.mod's toolchain changes.
+          LINUX_BUILDER: golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           out="dist/cryptare_${GOOS}_${GOARCH}${ext}"
           tags=""
           ldflags="-s -w -X main.version=${VERSION}"
+          mkdir -p dist
           if [ "$GOOS" = "linux" ]; then
-            # Link statically so the binary does not depend on the runner's glibc
-            # version; netgo/osusergo avoid glibc NSS, and extension loading
-            # (dlopen) is not used by Cryptare.
+            # Static, so the binary runs on any Linux; netgo/osusergo keep the C
+            # library out of name and user lookups, and extension loading (dlopen)
+            # is not used by Cryptare. The container runs on the runner's own
+            # architecture, which the matrix pairs with GOARCH. GIT_OPTIONAL_LOCKS=0
+            # stops VCS stamping from rewriting .git/index as root.
             tags="sqlite_omit_load_extension,osusergo,netgo"
             ldflags="$ldflags -linkmode external -extldflags -static"
+            docker run --rm -v "$PWD:/src" -w /src \
+              -e CGO_ENABLED -e GOOS -e GOARCH -e GIT_OPTIONAL_LOCKS=0 \
+              -e TAGS="$tags" -e LDFLAGS="$ldflags" -e OUT="$out" \
+              "$LINUX_BUILDER" sh -euc '
+                apk add --no-cache build-base git >/dev/null
+                git config --global --add safe.directory /src
+                go build -tags "$TAGS" -ldflags="$LDFLAGS" -o "$OUT" .
+                chown "$(stat -c %u:%g /src)" "$OUT"'
+          else
+            go build -tags "$tags" -ldflags="$ldflags" -o "$out" .
           fi
-          mkdir -p dist
-          go build -tags "$tags" -ldflags="$ldflags" -o "$out" .
           echo "binary=$out" >> "$GITHUB_OUTPUT"
 
       - name: Smoke test binary
@@ -84,6 +99,20 @@ jobs:
           "$bin" --version | grep -qF -- "$VERSION"
           if [ "${{ matrix.goos }}" = "linux" ]; then
             file "$bin" | grep -q "statically linked"
+          fi
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Only Windows system DLLs may be imported: the MinGW-w64 runtime and
+            # libgcc are linked in, and their notices ship in THIRD_PARTY_LICENSES.txt
+            # (Q-013). A DLL from the toolchain would also be missing on users' machines.
+            if command -v objdump >/dev/null; then
+              objdump -p "$bin" | grep -i "DLL Name" | tee dlls.txt
+              if grep -iE 'lib(winpthread|gcc|stdc|ssp)' dlls.txt; then
+                echo "::error::The binary imports a MinGW-w64 toolchain DLL."
+                exit 1
+              fi
+            else
+              echo "::warning::objdump not found; the binary's DLL imports were not checked."
+            fi
           fi
           # Throwaway test passphrase, passed by file so it stays out of the arguments.
           printf 'release-smoke-passphrase\n' > smoke-pw.txt

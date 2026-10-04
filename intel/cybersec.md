@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-10-04 (round 4: v1.2.0 released; Q-003, Q-005, Q-006, Q-008, Q-009 answered)
+Last updated: 2026-10-04 (round 5: v1.3.0 released; SEC-003, SEC-010 and SEC-016 closed)
 
 ## 1. Security requirements
 
@@ -116,20 +116,20 @@ These apply to all changes.
 |---|---|---|---|
 | SEC-001 | Empty passwords accepted for encryption and key protection | High | Closed |
 | SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | Closed |
-| SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
+| SEC-003 | Encrypted key material committed to the public repository | Medium | Closed |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Closed |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Closed |
 | SEC-006 | Directory encryption stages plaintext in the system temp directory | Medium | Closed |
 | SEC-007 | Unbounded decompression and extraction (decompression bomb) | Medium | Closed |
 | SEC-008 | Extraction follows existing symlinks in the destination and overwrites files | Low | Closed |
 | SEC-009 | Deleted keys remain recoverable from the database file | Low | Closed |
-| SEC-010 | Database created world-readable in the current directory on every run | Low | In Progress |
+| SEC-010 | Database created world-readable in the current directory on every run | Low | Closed |
 | SEC-011 | Imported key metadata not validated before storage and display | Low | Closed |
 | SEC-012 | CI security-scan results discarded; actions not pinned | Low | Closed |
 | SEC-013 | Container runs as root; base images not pinned | Low | In Progress |
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | Closed |
 | SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Closed |
-| SEC-016 | Key database files from untrusted locations are trusted | Low | In Progress |
+| SEC-016 | Key database files from untrusted locations are trusted | Low | Closed |
 | SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Closed |
 | SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | In Progress |
 | SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Closed |
@@ -275,7 +275,11 @@ These apply to all changes.
 
 ### SEC-003 — Encrypted key material committed to the public repository
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, verified on GitHub):** the CI guard is committed in `a088f7f`
+  and passed on Ubuntu, Windows and macOS in CI #143; it also ran on Dependabot's
+  rebased PR #26 (CI #144, #145). `git ls-tree -r a088f7f` lists no key database or key
+  export. v1.3.0 was released from `a088f7f`.
 - **Progress (2026-10-04, Q-005 answered; not yet committed):**
   - Step 4: the owner decided not to purge history (Q-005 = no). `cryptare.db` stays in
     the history from `d185a94` to its removal in `aa27461` and in tag `v1.0.0`
@@ -331,7 +335,12 @@ These apply to all changes.
 - **Validation:** `git ls-tree -r origin/main --name-only` does not list
   `cryptare.db`. If history is purged, `git log --all -- cryptare.db` on a fresh clone
   is empty.
-- **Resolution:** —
+- **Resolution:** The file was removed from `main` (`aa27461`, pushed 2026-09-23) and
+  the key discarded (step 2). `.gitignore` covers databases, their SQLite side files
+  and key exports (steps 3 and 5.9), and CI refuses any that are tracked (step 5,
+  `a088f7f`). The owner chose not to purge history (Q-005), so the file stays in old
+  commits and tag `v1.0.0`; the key it held is no longer used. Validated as above, with
+  CI green. Closed 2026-10-04.
 
 ### SEC-004 — Passwords accepted as command-line arguments
 
@@ -663,7 +672,12 @@ These apply to all changes.
 
 ### SEC-010 — Database created world-readable in the current directory on every run
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, verified on GitHub):** step 3 is committed in `a088f7f`. CI
+  #143 passed on Ubuntu, Windows and macOS, so the default-path tests
+  (`TestUserDataDir`, `TestDatabaseOpenerUsesPrivateDataFolder`,
+  `TestLegacyDatabaseNotice`) ran on all three; Docker #24, Security #149 and CD #5
+  passed, and v1.3.0 shipped the change.
 - **Progress (2026-10-04, step 3, plan 3.5; Q-003 answered; not yet committed):** the
   default key store is per user. Without `CRYPTARE_DB_PATH`, `databasePath` uses
   `cryptare/cryptare.db` in the user data folder (`%LocalAppData%` on Windows,
@@ -754,7 +768,10 @@ These apply to all changes.
      keeping `CRYPTARE_DB_PATH` as an override (Q-003).
 - **Validation:** Tests asserting that `encrypt`, `compress` and `--help` create no
   database, and that a newly created database has mode 0600.
-- **Resolution:** —
+- **Resolution:** Fixed in `d683739` (steps 1 and 2), `eb330a3` (the `?` and `file:`
+  path gap, plan 5.8) and `a088f7f` (step 3, the per-user default path, plan 3.5).
+  Validated by the tests and real-binary checks above and by green CI on all three
+  systems. Closed 2026-10-04.
 
 ### SEC-011 — Imported key metadata not validated before storage and display
 
@@ -1081,7 +1098,9 @@ These apply to all changes.
 
 ### SEC-016 — Key database files from untrusted locations are trusted
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, verified on GitHub):** step 3 is committed in `a088f7f`, with
+  CI green on all three systems (see SEC-010) and released in v1.3.0.
 - **Progress (2026-10-04, step 3; Q-003 answered; not yet committed):** the key store
   no longer depends on the current folder: without `CRYPTARE_DB_PATH` it is in the
   user's own data folder, created 0700, and a `cryptare.db` in the current folder is
@@ -1162,7 +1181,10 @@ These apply to all changes.
     information: another owner's file and a 0666 file are refused, and a private file
     owned by the user is accepted.
   - The existing database tests still pass.
-- **Resolution:** —
+- **Resolution:** Steps 1 and 2 fixed in `4ba516a` (ownership and permission check,
+  escaped listings), extended to `file:` URIs in `eb330a3`; step 3 in `a088f7f` (the key
+  store no longer depends on the current folder). Validated by the tests listed above
+  and green CI. Closed 2026-10-04.
 
 ### SEC-017 — GORM's default logger prints SQL with bound values to stdout
 

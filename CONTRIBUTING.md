@@ -105,7 +105,9 @@ The full rules are in [`intel/maint.md`](intel/maint.md). In short:
   already does the job. Release archives carry the licence of every module linked into
   the binaries: run `scripts/third-party-licenses.sh` after a dependency change, and
   add a module that ships no licence file to its `stated_licence` list once you have
-  checked its licence (the release fails until then).
+  checked its licence (the release fails until then). An update of `golang.org/x/text`
+  that makes `TestNormalizePasswordKnownAnswers` fail changes how passwords are read;
+  treat it as a format change (`intel/maint.md` §3), not as a test to update.
 - **Tests.** Use `t.TempDir()`; close database handles (Windows CI depends on it);
   follow the existing CLI (`SetArgs`/`SetIn`/`SetOut`) and TUI (`tea.KeyMsg`) test
   patterns.

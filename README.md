@@ -66,7 +66,7 @@ Tagged releases publish these assets, built by `.github/workflows/cd.yml`, toget
 | macOS Apple silicon | `cryptare_darwin_arm64.tar.gz` |
 | Windows x86-64 | `cryptare_windows_amd64.zip` |
 
-Each archive holds the binary named after it (`cryptare_linux_amd64`, `cryptare_windows_amd64.exe`, …). Archives of releases after v1.2.0 also hold `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`, which has the licences of the Go standard library and of the Go modules built into the binary. There is no Windows ARM64 build.
+Each archive holds the binary named after it (`cryptare_linux_amd64`, `cryptare_windows_amd64.exe`, …). Archives of releases after v1.2.0 also hold `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`, which has the licences of the Go standard library, the Go modules and the C libraries built into the binary. The Linux binaries are statically linked, so they run on any distribution; releases after v1.3.0 link them against musl instead of glibc. There is no Windows ARM64 build.
 
 > ⚠️ The v1.0.0 binaries were built with CGO disabled and exit on every command with `go-sqlite3 requires cgo to work`. Use v1.0.1 or later (BUG-001 in [intel/notes.md](intel/notes.md)).
 
@@ -129,6 +129,7 @@ cryptare                             # opens the interactive TUI
   - the key store is no longer `cryptare.db` in the current folder but `cryptare/cryptare.db` in your user data folder (see `CRYPTARE_DB_PATH` under [Configuration](#configuration)); `cryptare keys path` prints where it is. When a `keys` command or the TUI finds a `cryptare.db` in the current folder, it says so on stderr and shows how to move it there, or to keep using it with `CRYPTARE_DB_PATH`. It never opens or moves that file itself;
   - new data protected with a password that normalisation changes (accents typed as combining characters, full-width letters, a `--password-file` starting with a byte order mark, …) records this in its header, and v1.2.0 and earlier refuse it with "unsupported encrypted data: key derivation 2". Data protected with any other password is written as before, and v1.2.0 reads it;
   - data that v1.2.0 or earlier protected with a password typed with combining accents still needs the password typed that way.
+- ⚠️ **Upgrading from v1.3.0** (changes on `main` since v1.3.0): v1.3.0 normalised a rare kind of password incorrectly: one with a vowel sign or length mark from scripts such as Tamil, Malayalam, Bengali, Oriya, Kannada, Sinhala or Myanmar, followed later by a combining accent such as an acute. A file that v1.3.0 protected with such a password doesn't open in later versions. Decrypt it with v1.3.0 and encrypt it again. Every other password works as before.
 
 ## Core CLI capabilities
 

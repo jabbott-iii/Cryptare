@@ -1132,3 +1132,64 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `internal/fuzz_test.go` and new `internal/password_norm_test.go`; `README.md`,
   `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`,
   `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-04 — v1.3.0 released; Q-013 (musl Linux builds, C library notices); `golang.org/x/crypto` 0.57.0
+
+- **Verified on GitHub:** the owner committed round 4 as `a088f7f` and released it as
+  v1.3.0 (CD #5) with the drafted notes; CI #143, Docker #24 and Security #149 passed.
+  The release archives grew by about 30–40 KB each, in line with the new licence files,
+  and the packaging step ran without error. Closed: SEC-003 (the CI guard ran on all
+  three systems), SEC-010 and SEC-016 (the per-user key store, with its tests run on
+  Ubuntu, Windows and macOS).
+- **PR #26:** Dependabot rebased it onto `a088f7f` by itself, so the expected `go.mod`
+  conflict never needed resolving. `golang.org/x/crypto` 0.57.0 requires
+  `golang.org/x/text` 0.42.0 (and `x/sys` 0.48.0), and `x/text` 0.42.0 changes NFC/NFKC
+  composition: v0.41.0 composed an accent with a letter across a blocking character,
+  and truncated recomposition keys to 16 bits. Comparing the two on 300,000 random
+  mixed-script strings, 104 normalised differently; every one involved an Indic vowel
+  sign or length mark (Tamil, Malayalam, Bengali, Oriya, Kannada, Sinhala, Myanmar,
+  Balinese, Grantha, …) before a combining accent, and v0.42.0 matched Python's
+  `unicodedata` (Unicode 13.0) in all 300,000. Both versions select the Unicode 15.0
+  tables under Go 1.26; v0.42.0's Unicode 17 tables are built only from Go 1.27.
+- **Owner decisions:** Q-013: build the Linux releases against musl and add the C
+  library notices; leave the published releases (v1.0.1–v1.3.0, statically linked with
+  glibc) as they are. PR #26: take the update, with a known-answer test and a release
+  note.
+- **Q-013 / plan 4.10:** `cd.yml` builds Linux targets inside the `Dockerfile`'s pinned
+  `golang:1.26.8-alpine` image (`LINUX_BUILDER`, `apk add build-base git`), statically
+  against musl, with the same tags and flags as before; the output is handed back to
+  the runner's user and `GIT_OPTIONAL_LOCKS=0` keeps VCS stamping from rewriting
+  `.git/index` as root. The Windows smoke test lists the binary's DLL imports
+  (`objdump -p`) and fails on a MinGW-w64 toolchain DLL (warning only if `objdump` is
+  missing). Go's linker always adds `-lmingwex -lmingw32` on Windows (`cmd/link`
+  `lib.go`), so the MinGW-w64 runtime is in the binary. `scripts/third-party-licenses.sh`
+  gains `c_libraries`: musl's `COPYRIGHT` (release 1.2.5, from the `kraj/musl` mirror of
+  git.musl-libc.org, which the analysis machine couldn't reach) for Linux, and
+  `COPYING.MinGW-w64-runtime.txt` (mingw-w64 v12.0.0) for Windows, both vendored under
+  `scripts/licenses/`; libgcc (GCC Runtime Library Exception) needs no notice.
+- **PR #26 / Q-009:** `go.mod` and `go.sum` carry PR #26's update, byte-identical to its
+  files (blobs `2a8dcd7` and `30a1907`). New `TestNormalizePasswordKnownAnswers` pins 16
+  normalised forms, all checked against Python; with `x/text` 0.41.0 its "accent after a
+  vowel sign" case fails (`"o\u0bbe\u0317\u0301"` became `"\u00f3\u0bbe\u0317"`).
+- **Validation** (scratch copy, Go 1.26.8, `x/crypto` 0.57.0, `x/text` 0.42.0, `x/sys`
+  0.48.0): `gofmt -s -l .` and `go vet ./...` clean, plus `go vet` and test builds for
+  windows, darwin and freebsd; `go test -race -count=1 ./...` passes; gosec v2.29.0:
+  0 issues (9 `#nosec`); actionlint 1.7.12: nothing. The licence script lists 30
+  modules and 2 C libraries for the release targets (musl for both Linux targets, the
+  MinGW-w64 runtime for Windows, none for darwin) and fails, writing nothing, when a
+  listed notice file is missing. The new Linux build step passes `bash -n`, its
+  container script `sh -n`, and a dry run with a stand-in `docker` passes the expected
+  arguments.
+- **Real binaries,** the v1.3.0 source against this round, through password files: an
+  ASCII password and one with combining accents work in both directions; the affected
+  kind of password (`o` + U+0BBE + U+0317 + U+0301 inside a passphrase) written by
+  v1.3.0 (KDF 2) doesn't open in the new build, as expected, while the new build writes
+  KDF 1 for it, which v1.3.0 reads.
+- **Not run:** the musl build and the Windows DLL check themselves (CD only; Docker
+  isn't available here, so run CD by hand before tagging), golangci-lint and govulncheck
+  locally.
+- **Changed:** `.github/workflows/cd.yml`, `go.mod`, `go.sum`,
+  `scripts/third-party-licenses.sh`, new `scripts/licenses/musl-COPYRIGHT.txt` and
+  `scripts/licenses/mingw-w64-runtime.txt`, `internal/password_norm_test.go`;
+  `README.md`, `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.
