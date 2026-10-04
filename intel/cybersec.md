@@ -35,6 +35,10 @@ These apply to all changes.
 5. **Key storage.**
    - Key material is stored only in encrypted form.
    - The database is not world-readable.
+   - On Unix, a key database or SQLite side file that another user owns or that
+     group or others can write is refused (SEC-016).
+   - Values read from the database are escaped before they are shown in a terminal
+     (SEC-016).
    - Deleted keys are not recoverable from the database file.
 6. **Supply chain and CI.** Security scanning results are visible and actionable.
    Third-party actions and base images are pinned.
@@ -122,7 +126,7 @@ These apply to all changes.
 | SEC-013 | Container runs as root; base images not pinned | Low | Open |
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | In Progress |
 | SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Open |
-| SEC-016 | Key database files from untrusted locations are trusted | Low | Open |
+| SEC-016 | Key database files from untrusted locations are trusted | Low | In Progress |
 | SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Open |
 | SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | Open |
 | SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Open |
@@ -695,6 +699,8 @@ These apply to all changes.
   can inject terminal sequences through `keys list` and the TUI (verified). Escaping
   stored fields on display is tracked as SEC-016 step 2. This item's own remediation
   is unchanged.
+- **Note (2026-10-03):** SEC-016 step 2 now escapes stored key IDs and algorithms in
+  `keys list` and the TUI, so the "not covered" case below no longer prints raw.
 - **Progress (2026-09-27, `3d9384e`; plan 2.7):** all four remediation steps are
   implemented and validated.
   - `ImportKeyFromFile` calls the new `validateKeyExport` before returning a key, so
@@ -740,6 +746,24 @@ These apply to all changes.
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
 - **Status:** In Progress
+- **Progress (2026-10-03, dispositions applied in code; not yet committed):** the 10
+  open gosec alerts in Code Scanning (#14, #17, #18, #25, #31–#33, #35–#37) are the 10
+  findings triaged below.
+  - G304 ×8: each call is annotated `// #nosec G304 -- <the user-chosen path>`, as
+    step 3 asks. The annotation names only G304, so other rules still apply there.
+  - G301 ×2: owner's choice, missing parent folders of an output are now created 0700
+    (`extractZipSingleFile`, `extractToDir`), so the README's "everything the tool
+    writes is private to you" holds for them too (on Unix; SEC-019 covers Windows).
+    New test `TestExtractCreatesPrivateParentFolders` fails before the change and
+    passes after it.
+  - Validated on a scratch copy (Go 1.26.0, linux/amd64): gosec v2.29.0 with CI's
+    arguments reports 0 issues (8 `#nosec`) and writes a SARIF with no results;
+    `gofmt -s -l .` and `go vet ./...` are clean; `go test -race -count=1 ./...`
+    passes.
+  - Remaining: push, and confirm the Security workflow closes the 10 alerts. Code
+    Scanning's CodeQL status also warns "Actions workflow file not found" for the
+    configurations left by `codeql.yml` (added `58d80ae`, deleted `2691714`); deleting
+    them on the tool status page clears the warning. Step 5 (govulncheck) is open.
 - **Progress (2026-10-03):** step 3's triage was done locally, and step 5's govulncheck
   was run (results under SEC-018). gosec v2.29.0 reports the same 10 findings as on
   2026-09-27; golangci-lint v2.13.2 reports 0 issues.
@@ -922,7 +946,40 @@ These apply to all changes.
 
 ### SEC-016 — Key database files from untrusted locations are trusted
 
-- **Status:** Open
+- **Status:** In Progress
+- **Progress (2026-10-03, steps 1 and 2; not yet committed):** the owner chose to
+  refuse rather than warn (Q-010), and to leave step 3, the per-user default path, to
+  plan 3.5 (Q-003 stays open).
+  - Step 1: `prepareDatabaseFile` calls the new `checkDatabaseFileTrust` for the
+    database and any `-journal`, `-wal` or `-shm` file next to it, also when the
+    database itself was just created, since SQLite would replay a planted journal into
+    it. A file owned by another user (from `fileOwner`, which reads the owner on Unix
+    and reports none elsewhere) or with any group or other write bit is refused with
+    `ErrUntrustedDatabase` and left unchanged; a private file the user owns that others
+    can read is still set to 0600 (SEC-010). `main.go` adds a hint to set
+    `CRYPTARE_DB_PATH`. Windows is skipped, as before (SEC-019).
+  - Step 2: `displayText` shows a key ID or algorithm that holds a control or other
+    non-printable character, or invalid UTF-8, Go-quoted (for example
+    `"\x1b[2J"`); other values print unchanged. `keys list` and the TUI key table use
+    it.
+  - Validation, on a scratch copy (Go 1.26.0, linux/amd64, non-root):
+    - new tests `TestCheckDatabaseFileTrust` (synthetic owners and modes: another
+      user's file and 0666 and 0620 files refused, the user's private file accepted),
+      `TestNewDatabaseRefusesFilesOthersCanWrite` (a 0666 database, and a 0666
+      journal next to a new database), `TestDatabaseOpenerRefusesUntrustedDatabase`,
+      `TestDisplayText`, `TestKeysListEscapesControlCharacters` and
+      `TestKeyScreenEscapesControlCharacters`. With stubs that keep the old
+      behaviour, every behavioural one of these fails;
+    - real binaries: with the probe row from the evidence below, the old build prints
+      3 raw ESC bytes from `keys list` and the new one prints none, showing the values
+      quoted. A 0666 database and a 0666 planted journal are refused with exit
+      status 1, and the database stays 0666;
+    - `gofmt -s -l .` and `go vet ./...` clean; `go vet` and test builds also pass
+      for windows, darwin and freebsd (CGO off); `go test -race -count=1 ./...`
+      passes, existing database tests included; gosec v2.29.0 reports 0 issues.
+  - Not run: the refusal of a file another user owns on a real system (needs a second
+    account; covered by the synthetic test), macOS, golangci-lint.
+  - Remaining: step 3 (Q-003, plan 3.5).
 - **Affected component:** `internal/database.go` `prepareDatabaseFile` and
   `NewDatabase`; `database_path.go` (default `./cryptare.db`); `internal/logic-cli.go`
   `newKeysListCmd`; `internal/logic-tui.go` `View` (key table).

@@ -472,7 +472,7 @@ func (m DashboardModel) View() string {
 			sb.WriteString("\n")
 			for _, k := range m.keys {
 				created := time.Unix(k.CreatedAt_, 0).Format("2006-01-02 15:04")
-				line := fmt.Sprintf("%-20s  %-12s  %s", k.KeyID, k.Algorithm, created)
+				line := fmt.Sprintf("%-20s  %-12s  %s", displayText(k.KeyID), displayText(k.Algorithm), created)
 				sb.WriteString(itemStyle.Render("  " + line))
 				sb.WriteString("\n")
 			}

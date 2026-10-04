@@ -41,7 +41,8 @@ Status: **In progress.**
 - **Committed 2026-09-27 (`0c57aef`):** 3.1 and 3.2, the version 2 format
   (`format_v2.go`). Its CI results haven't been reported yet.
 - **In progress:**
-  - 4.1: gosec alerts still need to be confirmed in Code Scanning and triaged.
+  - 4.1: the 10 open gosec alerts in Code Scanning are resolved in code (2026-10-03,
+    not yet committed) and close once pushed; govulncheck is still to decide.
   - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
 - **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
   (BUG-015–BUG-024), gaps in five existing items and five owner questions
@@ -158,7 +159,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 
 | # | Change | Refs |
 |---|---|---|
-| 4.1 | Pin actions to SHAs; pin gosec and upload its SARIF; triage the findings. **In progress:** pins and SARIF upload shipped in v1.0.1, and the Security workflow succeeded. Remaining: confirm gosec alerts appear in Code Scanning, triage them, and decide on govulncheck. | SEC-012 |
+| 4.1 | Pin actions to SHAs; pin gosec and upload its SARIF; triage the findings. **In progress:** pins and SARIF upload shipped in v1.0.1, and the Security workflow succeeded. Remaining: confirm gosec alerts appear in Code Scanning, triage them, and decide on govulncheck. **2026-10-03:** the alerts appear in Code Scanning (10 open), and their dispositions are applied in code: G304 annotated `#nosec`, G301 parent folders now 0700. Remaining: push and confirm the alerts close, delete the stale CodeQL configurations left by the removed `codeql.yml`, and decide on govulncheck. | SEC-012 |
 | 4.2 | Non-root container user; pin images by digest | SEC-013 (needs approval) |
 | 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View`. **Partly done:** `readPassword` (1.1), `ImportKeyFromFile` and a CLI import/export of a legacy key (0.5, `TestLegacyShortPasswordCmds`), and traversal rejection (2.2, `TestExtractRejectsPathTraversal`). **Remaining:** a full CLI export/import round trip and the TUI `View`. | `maint.md` §5 |
 | 4.4 | Add `SECURITY.md` with a private reporting channel | `CONTRIBUTING.md` |
@@ -195,7 +196,7 @@ docs) can run alongside.
 
 | # | Change | Refs | Acceptance | Approval |
 |---|---|---|---|---|
-| 5.6 | **Database trust.** On Unix, refuse (or warn about, per Q-010) a database or side file that the user doesn't own or that group or others can write. Escape control characters in every stored field that `keys list` and the TUI show. Bring 3.5 (Q-003) forward. | SEC-016, SEC-011 | The tests listed under SEC-016's validation | Q-010 |
+| 5.6 | **Database trust.** On Unix, refuse (or warn about, per Q-010) a database or side file that the user doesn't own or that group or others can write. Escape control characters in every stored field that `keys list` and the TUI show. Bring 3.5 (Q-003) forward. **2026-10-03, not yet committed:** the refusal (Q-010: refuse) and the escaping are done and validated (SEC-016); 3.5 stays separate, as the owner chose not to move the default path in this change. | SEC-016, SEC-011 | The tests listed under SEC-016's validation | Q-010 (answered: refuse) |
 | 5.7 | **Quiet database layer.** Silence GORM's logger (`logger.Silent`, or parameterised and on stderr only when enabled). Turn "record not found" and UNIQUE-constraint errors into clear messages. | SEC-017 | Failed key commands print nothing on stdout; errors name the key ID | No |
 | 5.8 | **Database path handling.** Build the DSN so the driver opens exactly the file `prepareDatabaseFile` prepared (for example a `file:` URI with the path escaped, plus `_secure_delete=on`), or refuse paths containing `?`. Prepare the file behind a `file:` URI as well. | SEC-010 gap | Tests with `?` in a folder name and with a `file:` URI: the database holding the keys is 0600 and no stray file is left | No |
 | 5.9 | **Repository and container hygiene.** Add `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm` to `.gitignore`. Add a `.dockerignore`. Drop `sqlite-libs` and `ca-certificates` from the runtime image, and stamp its version. Do it together with 4.2 (SEC-013: non-root user, digest pins). | SEC-003, SEC-013 | `git check-ignore` matches the new patterns; the Docker smoke test passes; `docker run --entrypoint id <image> -u` isn't 0 | Yes: Dockerfile |
@@ -230,7 +231,7 @@ docs) can run alongside.
   output for `dir/` and `.` moves next to the folder) and 5.12 (invalid options
   refused).
 - **Questions:** Q-003 (now more urgent because of SEC-016), Q-008 (Argon2id read limit),
-  Q-009 (Unicode normalisation), Q-010 (database trust policy), Q-011 (single `.tar`
+  Q-009 (Unicode normalisation), Q-010 (answered 2026-10-03: refuse), Q-011 (single `.tar`
   files), Q-012 (Windows ACLs).
 - **Release:** a patch release once Tier A is merged. Its notes should also carry
   SEC-002's outstanding migration notes.

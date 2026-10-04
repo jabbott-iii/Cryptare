@@ -31,6 +31,10 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
+// ErrUntrustedDatabase is returned by NewDatabase when the key database, or a SQLite
+// file next to it, may have been planted or changed by another user (SEC-016).
+var ErrUntrustedDatabase = errors.New("key database is not safe to use")
+
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
 // Database owns the gorm connection for internal data access.
@@ -63,30 +67,32 @@ func NewDatabase(path string) (*Database, error) {
 	return &Database{conn: conn}, nil
 }
 
-// prepareDatabaseFile makes the key database private to its owner (SEC-010). A new
-// file is created with mode 0600 before SQLite opens it; SQLite gives its journal
-// files the same mode. An existing database, or a journal left next to it, that others
-// can read is set to 0600. Files owned by someone else are left as they are.
-// In-memory databases and SQLite URI paths are left to SQLite.
+// prepareDatabaseFile makes the key database private to its owner (SEC-010) and
+// refuses one that someone else may have planted or changed (SEC-016). A new file is
+// created with mode 0600 before SQLite opens it; SQLite gives its journal files the
+// same mode. On Unix, the database and any -journal, -wal or -shm file next to it must
+// pass checkDatabaseFileTrust, including when the database itself is new, since SQLite
+// would replay a planted journal into it. A file that passes but others can read is
+// set to 0600. In-memory databases and SQLite URI paths are left to SQLite.
 func prepareDatabaseFile(path string) error {
 	if path == ":memory:" || strings.HasPrefix(path, "file:") {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err == nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- path is the user's key database (CRYPTARE_DB_PATH or the default)
+	switch {
+	case err == nil:
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("create database file: %w", err)
 		}
-		return nil
-	}
-	if !errors.Is(err, fs.ErrExist) {
+	case !errors.Is(err, fs.ErrExist):
 		return fmt.Errorf("create database file: %w", err)
 	}
 	if runtime.GOOS == "windows" {
-		return nil // Unix permission bits don't apply
+		return nil // Unix owners and permission bits don't apply (SEC-019)
 	}
 
+	uid := os.Geteuid()
 	for _, p := range []string{path, path + "-journal", path + "-wal", path + "-shm"} {
 		info, err := os.Stat(p)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -95,12 +101,30 @@ func prepareDatabaseFile(path string) error {
 		if err != nil {
 			return fmt.Errorf("check database file: %w", err)
 		}
+		if err := checkDatabaseFileTrust(p, fileOwner(info), info.Mode().Perm(), uid); err != nil {
+			return err
+		}
 		if info.Mode().Perm()&0o077 == 0 {
 			continue
 		}
 		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, fs.ErrPermission) {
 			return fmt.Errorf("restrict database file permissions: %w", err)
 		}
+	}
+	return nil
+}
+
+// checkDatabaseFileTrust refuses a key database file, or one of its SQLite side files,
+// that the user uid doesn't own or that group or others can write (SEC-016, refused
+// rather than warned about per Q-010, like OpenSSH's StrictModes). Either way another
+// user could have planted or changed its rows, and keys stored in a file someone else
+// owns can be read by them. owner is -1 when the platform doesn't report it.
+func checkDatabaseFileTrust(path string, owner int, perm fs.FileMode, uid int) error {
+	if owner >= 0 && owner != uid {
+		return fmt.Errorf("%w: %s is owned by another user (uid %d)", ErrUntrustedDatabase, path, owner)
+	}
+	if perm&0o022 != 0 {
+		return fmt.Errorf("%w: other users can change %s (mode %04o); if it is yours, run chmod 600 on it", ErrUntrustedDatabase, path, perm)
 	}
 	return nil
 }

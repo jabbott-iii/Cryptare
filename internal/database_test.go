@@ -19,6 +19,7 @@ package internal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -472,4 +473,78 @@ func closeTestDatabase(t *testing.T, db *Database) {
 	if err := sqlDB.Close(); err != nil {
 		t.Fatalf("close database: %v", err)
 	}
+}
+
+// TestCheckDatabaseFileTrust checks SEC-016's ownership and permission rule with
+// synthetic owners and modes, so no second user account is needed.
+func TestCheckDatabaseFileTrust(t *testing.T) {
+	const me, other = 1000, 1001
+	tests := []struct {
+		name    string
+		owner   int
+		perm    os.FileMode
+		refused bool
+	}{
+		{"own private file", me, 0o600, false},
+		{"own file others can read", me, 0o644, false}, // then set to 0600 (SEC-010)
+		{"own group-writable file", me, 0o620, true},
+		{"own world-writable file", me, 0o666, true},
+		{"another user's private file", other, 0o600, true},
+		{"another user's world-writable file", other, 0o666, true},
+		{"root's file opened by another user", 0, 0o600, true},
+		{"owner not reported, private", -1, 0o600, false},
+		{"owner not reported, world-writable", -1, 0o602, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDatabaseFileTrust("keys.db", tc.owner, tc.perm, me)
+			if got := errors.Is(err, ErrUntrustedDatabase); got != tc.refused {
+				t.Fatalf("refused = %v (err %v), want %v", got, err, tc.refused)
+			}
+		})
+	}
+}
+
+// TestNewDatabaseRefusesFilesOthersCanWrite checks SEC-016 end to end: an existing
+// database that others can write, and a planted journal next to a new database, are
+// refused, and the refused database is left as it was.
+func TestNewDatabaseRefusesFilesOthersCanWrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	t.Run("world-writable database", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "shared.db")
+		db, err := NewDatabase(path)
+		if err != nil {
+			t.Fatalf("NewDatabase: %v", err)
+		}
+		closeTestDatabase(t, db)
+		if err := os.Chmod(path, 0o666); err != nil {
+			t.Fatalf("chmod database: %v", err)
+		}
+
+		if _, err := NewDatabase(path); !errors.Is(err, ErrUntrustedDatabase) {
+			t.Fatalf("NewDatabase err = %v, want ErrUntrustedDatabase", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat database: %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o666 {
+			t.Fatalf("refused database mode = %04o, want it left at 0666", got)
+		}
+	})
+	t.Run("planted journal next to a new database", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "new.db")
+		journal := path + "-journal"
+		if err := os.WriteFile(journal, []byte("planted"), 0o600); err != nil {
+			t.Fatalf("write journal: %v", err)
+		}
+		if err := os.Chmod(journal, 0o666); err != nil {
+			t.Fatalf("chmod journal: %v", err)
+		}
+		if _, err := NewDatabase(path); !errors.Is(err, ErrUntrustedDatabase) {
+			t.Fatalf("NewDatabase err = %v, want ErrUntrustedDatabase", err)
+		}
+	})
 }

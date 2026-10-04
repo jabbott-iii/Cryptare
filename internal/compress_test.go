@@ -1175,6 +1175,53 @@ func TestExtractMasksArchivePermissions(t *testing.T) {
 	}
 }
 
+// TestExtractCreatesPrivateParentFolders checks that missing parent folders of the
+// output are created owner-only (0700), for folder archives (extractToDir) and for a
+// single-file zip (extractZipSingleFile).
+func TestExtractCreatesPrivateParentFolders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	folder := []archiveEntry{
+		{name: "docs/", mode: 0o755, dir: true},
+		{name: "docs/a.txt", mode: 0o644, body: "a"},
+	}
+	cases := []struct {
+		name    string
+		archive string
+		entries []archiveEntry
+		output  string
+	}{
+		{"tar.gz folder", "docs" + tarGzExt, folder, "docs"},
+		{"zip folder", "docs" + zipExt, folder, "docs"},
+		{"zip single file", "note.txt" + zipExt, []archiveEntry{{name: "note.txt", mode: 0o644, body: "note"}}, "note.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			archive := filepath.Join(dir, tc.archive)
+			if strings.HasSuffix(tc.archive, zipExt) {
+				writeTestZip(t, archive, tc.entries)
+			} else {
+				writeTestTarGz(t, archive, tc.entries)
+			}
+			out := filepath.Join(dir, "new", "nested", tc.output)
+			if err := DecompressFile(archive, out); err != nil {
+				t.Fatalf("DecompressFile: %v", err)
+			}
+			for _, parent := range []string{filepath.Join(dir, "new"), filepath.Join(dir, "new", "nested")} {
+				info, err := os.Stat(parent)
+				if err != nil {
+					t.Fatalf("stat %s: %v", parent, err)
+				}
+				if got := info.Mode().Perm(); got != 0o700 {
+					t.Errorf("%s mode = %04o, want 0700", parent, got)
+				}
+			}
+		})
+	}
+}
+
 // TestExtractRejectsPathTraversal checks that an archive entry naming a path outside
 // the output folder is refused, nothing is written outside it, and no partial
 // output is left behind.

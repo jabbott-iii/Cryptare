@@ -18,9 +18,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jabbott-iii/Cryptare/internal"
@@ -92,5 +94,34 @@ func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("new key database mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+// TestDatabaseOpenerRefusesUntrustedDatabase checks SEC-016 from the entry point: a key
+// database that others can write is refused, and the error points to CRYPTARE_DB_PATH.
+func TestDatabaseOpenerRefusesUntrustedDatabase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits don't apply on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "cryptare.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write database: %v", err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatalf("chmod database: %v", err)
+	}
+	t.Setenv(databasePathEnv, path)
+
+	db, err := databaseOpener()()
+	if db != nil {
+		if sqlDB, err := db.Conn().DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+	if !errors.Is(err, internal.ErrUntrustedDatabase) {
+		t.Fatalf("open err = %v, want ErrUntrustedDatabase", err)
+	}
+	if !strings.Contains(err.Error(), databasePathEnv) {
+		t.Fatalf("error %q doesn't mention %s", err, databasePathEnv)
 	}
 }

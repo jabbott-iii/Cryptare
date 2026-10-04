@@ -154,7 +154,7 @@ func writeGzip(w io.Writer, src string, info fs.FileInfo, level int) (err error)
 			return err
 		}
 	} else {
-		in, err := os.Open(src)
+		in, err := os.Open(src) // #nosec G304 -- src is the file the user chose to compress
 		if err != nil {
 			return fmt.Errorf("open source file: %w", err)
 		}
@@ -191,7 +191,7 @@ func DecompressFileWithLimits(src, dst string, limits ExtractLimits) (err error)
 		return extractZip(src, dst, budget)
 	}
 
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- src is the archive the user chose to decompress
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
@@ -380,7 +380,7 @@ func writeZipFile(zw *zip.Writer, srcPath, zipName string) error {
 		return fmt.Errorf("write zip header: %w", err)
 	}
 
-	file, err := os.Open(srcPath)
+	file, err := os.Open(srcPath) // #nosec G304 -- srcPath is the file the user chose to compress
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
@@ -596,7 +596,8 @@ func extractZipSingleFile(file *zip.File, dst string, budget *extractBudget) (er
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	// Missing parent folders are owner-only, like everything else the tool writes.
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
 
@@ -714,7 +715,8 @@ func extractToDir(src, dst string, extract func(dir string) error) (err error) {
 		return err
 	}
 	parent := filepath.Dir(dst)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	// Missing parent folders are owner-only, like everything else the tool writes.
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
 	tmp, err := os.MkdirTemp(parent, "."+filepath.Base(dst)+".*.tmp")

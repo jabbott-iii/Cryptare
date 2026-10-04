@@ -49,7 +49,8 @@ Rules:
    `DatabaseOpener` to `NewRootCmdLazy`, and only the `keys` commands and the TUI call
    it, at most once per run (SEC-010). Don't add new dependencies on the DB from
    file-only commands. `NewDatabase` creates the file with mode 0600 and tightens an
-   existing one.
+   existing one. On Unix it refuses a database or SQLite side file that another user
+   owns or that group or others can write (`ErrUntrustedDatabase`, SEC-016).
 
 ## 3. On-disk formats (compatibility contract)
 
@@ -131,7 +132,13 @@ These are observed in the codebase and required for new code:
   existing commands.
 - Use `closeWithError` (in `compress.go`) for deferred `Close` on writers so close
   failures aren't lost.
-- Files the tool writes use mode `0o600`; directories it creates currently use `0o755`.
+- Files the tool writes use mode `0o600`; directories it creates, including missing
+  parent folders of an output, use `0o700`.
+- Values read from the key database are shown through `displayText`, so stored control
+  characters print escaped instead of reaching the terminal (SEC-016).
+- A gosec finding accepted by design is annotated on its line as
+  `// #nosec <rule> -- <reason>`, naming only that rule, and recorded in
+  `cybersec.md` (SEC-012). Fix a finding rather than suppress it when a fix exists.
 - **Output safety.** Core operations refuse an output that is their own input
   (`ErrSameInputOutput`), and compression refuses an archive inside the folder being
   archived (`ErrOutputInsideInput`). Interfaces call `CheckOutputPath` before writing:

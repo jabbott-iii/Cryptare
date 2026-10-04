@@ -811,3 +811,78 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   No code, tests, configuration, CI, dependencies or git history were changed.
   `map.md` and `maint.md` are unchanged: nothing structural changed, and their rule
   updates belong with the fixes.
+
+## 2026-10-03 — gosec Code Scanning alerts resolved (SEC-012, plan 4.1)
+
+- The 10 open gosec alerts in Code Scanning (#14, #17, #18, #25, #31–#33, #35–#37)
+  were the 10 findings triaged under SEC-012. Their dispositions are now in the code:
+  - G304 ×8 (file path from a variable): accepted by design. Each call opens a path
+    the user chose and is annotated `// #nosec G304 -- <reason>`: `compress.go`
+    `writeGzip`, `DecompressFileWithLimits` and `writeZipFile`; `crypto.go`
+    `encryptSingleFile`, `DecryptFileWithLimits` and `ImportKeyFromFile`;
+    `database.go` `prepareDatabaseFile`; `logic-cli.go` `readPasswordFile`.
+  - G301 ×2 (`MkdirAll` with 0755): owner decision, missing parent folders of an
+    output are created 0700 (`extractZipSingleFile`, `extractToDir`), like everything
+    else the tool writes.
+- New test: `TestExtractCreatesPrivateParentFolders` (tar.gz folder, zip folder and
+  single-file zip outputs under missing parents).
+- `maint.md` §4 now gives the 0700 directory mode and the `#nosec` convention.
+- **Validation** on a scratch copy outside the repository (Go 1.26.0, linux/amd64,
+  non-root). The module proxy was unreachable, so gorm, gorm's SQLite driver,
+  x/crypto, x/sys and x/text were replaced with clones of the release tags `go.sum`
+  pins; the repository's `go.mod` is unchanged.
+  - gosec v2.29.0 (release checksum verified) with CI's arguments: 10 findings before
+    the change, 0 after (8 `#nosec`), and the SARIF output has no results;
+  - the new test fails on the unchanged code (parents 0755) and passes after;
+  - `gofmt -s -l .` and `go vet ./...` are clean; `go test -race -count=1 ./...`
+    passes, with 75.0% (`main`) and 75.4% (`internal`) coverage.
+- **Not run:** golangci-lint, govulncheck, Windows and macOS. The alerts close only
+  after the change is pushed and the Security workflow runs.
+- **Found:** Code Scanning's CodeQL status warns "Actions workflow file not found" for
+  configurations left by `codeql.yml` (added `58d80ae`, deleted `2691714`).
+- **Changed:** `internal/compress.go`, `internal/crypto.go`, `internal/database.go`,
+  `internal/logic-cli.go`, `internal/compress_test.go`, `intel/cybersec.md`,
+  `intel/maint.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-03 — Key database trust and escaped key listings (SEC-016 steps 1–2, plan 5.6)
+
+- **Owner decisions:** Q-010 is answered: an untrusted key database is refused, not
+  warned about. Moving the default path (Q-003, plan 3.5, SEC-016 step 3) is left for
+  a separate change, so SEC-016 stays In Progress.
+- **Step 1, refusal:** `prepareDatabaseFile` runs the new `checkDatabaseFileTrust` on
+  the database and any `-journal`, `-wal` or `-shm` file next to it, including when
+  the database was just created (a planted journal would otherwise be replayed into
+  it). A file another user owns, or with a group or other write bit, is refused with
+  the new `ErrUntrustedDatabase` and left unchanged. A private file the user owns that
+  others can read is still set to 0600 (SEC-010). The owner comes from `fileOwner`,
+  in the new build-tagged `internal/fileowner_unix.go` and
+  `internal/fileowner_other.go`; Windows is skipped as before (SEC-019).
+  `databaseOpener` in `main.go` adds a hint to set `CRYPTARE_DB_PATH`.
+- **Step 2, escaping:** the new `displayText` shows a stored key ID or algorithm that
+  holds a control or other non-printable character, or invalid UTF-8, Go-quoted;
+  `keys list` and the TUI key table use it. Ordinary values print unchanged.
+- **Behaviour change:** on Linux and macOS, the `keys` commands and the TUI now stop on
+  such a database instead of using it (README upgrade note and `CRYPTARE_DB_PATH`
+  row).
+- **Tests:** `TestCheckDatabaseFileTrust`, `TestNewDatabaseRefusesFilesOthersCanWrite`,
+  `TestDatabaseOpenerRefusesUntrustedDatabase`, `TestDisplayText`,
+  `TestKeysListEscapesControlCharacters` and `TestKeyScreenEscapesControlCharacters`.
+  With stubs that keep the old behaviour, the four behavioural tests fail.
+- **Validation** on a scratch copy outside the repository (Go 1.26.0, linux/amd64,
+  non-root; the same module setup as the gosec entry above):
+  - `gofmt -s -l .` and `go vet ./...` clean; `go vet` and test builds pass for
+    windows, darwin and freebsd (CGO off);
+  - `go test -race -count=1 ./...` passes, with 80.0% (`main`) and 77.3%
+    (`internal`) coverage;
+  - gosec v2.29.0: 0 issues (8 `#nosec`);
+  - real binaries: the probe row from SEC-016's evidence gave 3 raw ESC bytes from
+    `keys list` before and none after; a 0666 database and a 0666 journal planted next
+    to a new database were refused with exit status 1, and the database stayed 0666.
+- **Not run:** golangci-lint, macOS, Windows, and a database owned by another real
+  account (the synthetic test covers the rule).
+- **Changed:** `main.go`, `internal/database.go`, `internal/logic-cli.go`,
+  `internal/logic-tui.go`, new `internal/fileowner_unix.go` and
+  `internal/fileowner_other.go`; tests in `internal/database_test.go`,
+  `internal/logic_cli_test.go`, `internal/logic_tui_test.go` and
+  `lazy_database_test.go`; `README.md`, `intel/cybersec.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.

@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 
 	"github.com/jabbott-iii/Cryptare/internal"
@@ -36,11 +38,16 @@ func main() {
 
 // databaseOpener opens the key database at CRYPTARE_DB_PATH (default ./cryptare.db).
 // The CLI calls it only for the keys commands and the TUI, so other commands never
-// create the database file.
+// create the database file. A database refused as untrusted (SEC-016) gets a hint
+// about CRYPTARE_DB_PATH.
 func databaseOpener() internal.DatabaseOpener {
 	path := databasePathFromEnv()
 	return func() (*internal.Database, error) {
-		return internal.NewDatabase(path)
+		db, err := internal.NewDatabase(path)
+		if errors.Is(err, internal.ErrUntrustedDatabase) {
+			return nil, fmt.Errorf("%w; set %s to use a key database of your own", err, databasePathEnv)
+		}
+		return db, err
 	}
 }
 

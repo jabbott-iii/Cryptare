@@ -1118,3 +1118,29 @@ func TestDashboardRefusesSecondActionWhileBusy(t *testing.T) {
 	}
 	_ = next
 }
+
+// TestKeyScreenEscapesControlCharacters is SEC-016's display check for the TUI: the key
+// table shows a stored key ID and algorithm holding escape sequences quoted, not raw.
+func TestKeyScreenEscapesControlCharacters(t *testing.T) {
+	db := newTestDatabase(t, false)
+	m := NewDashboardModel(db)
+	next, _ := m.Update(keysLoadedMsg{keys: []KeyModel{{
+		KeyID:      "\x1b]0;PWNED\a",
+		Algorithm:  "\x1b[2J",
+		CreatedAt_: 1,
+	}}})
+	m = next.(DashboardModel)
+	m.screen = screenKeys
+
+	view := m.View()
+	for _, raw := range []string{"\x1b]0;PWNED", "\a", "\x1b[2J"} {
+		if strings.Contains(view, raw) {
+			t.Fatalf("key screen shows raw %q: %q", raw, view)
+		}
+	}
+	for _, want := range []string{`"\x1b]0;PWNED\a"`, `"\x1b[2J"`} {
+		if !strings.Contains(view, want) {
+			t.Errorf("key screen lacks %s: %q", want, view)
+		}
+	}
+}

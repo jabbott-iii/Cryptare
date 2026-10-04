@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/term"
@@ -300,7 +301,7 @@ func newKeysListCmd(open DatabaseOpener) *cobra.Command {
 			}
 			for _, k := range keys {
 				created := time.Unix(k.CreatedAt_, 0).Format("2006-01-02 15:04")
-				if _, err := fmt.Fprintf(w, "%-20s  %-12s  %s\n", k.KeyID, k.Algorithm, created); err != nil {
+				if _, err := fmt.Fprintf(w, "%-20s  %-12s  %s\n", displayText(k.KeyID), displayText(k.Algorithm), created); err != nil {
 					return fmt.Errorf("write command output: %w", err)
 				}
 			}
@@ -617,7 +618,7 @@ const maxPasswordFileSize = 64 << 10
 // readPasswordFile returns the first line of the file at path, keeping spaces and
 // removing only the line ending, the same way a password piped to the prompt is read.
 func readPasswordFile(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the file the user gave with --password-file
 	if err != nil {
 		return "", fmt.Errorf("open password file: %w", err)
 	}
@@ -634,6 +635,20 @@ func readPasswordFile(path string) (string, error) {
 		return "", fmt.Errorf("password file %s: first line is too long (over %s)", path, formatSize(maxPasswordFileSize))
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// displayText returns a stored value ready to print to a terminal (SEC-016). A value
+// holding a control character, another non-printable character or invalid UTF-8 is
+// shown Go-quoted, so an escape sequence prints as text such as "\x1b[2J" instead of
+// acting on the terminal. Other values are returned unchanged. The CLI and the TUI
+// both use it for key IDs and algorithms read from the database.
+func displayText(s string) string {
+	for _, r := range s {
+		if r == utf8.RuneError || !strconv.IsPrint(r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 // withLimitHint tells CLI users how to change the extraction limits.

@@ -108,6 +108,7 @@ cryptare                             # opens the interactive TUI
   - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
   - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
   - `--password` now prints a warning on stderr; switch scripts to `--password-file` or piped input;
+  - on Linux and macOS, the `keys` commands and the TUI refuse a key store that another user owns or that others can write to (see `CRYPTARE_DB_PATH` under [Configuration](#configuration));
   - extracted files and folders no longer keep the archive's permissions; they are owner-only (see above).
 
 ## Core CLI capabilities
@@ -217,7 +218,7 @@ Examples:
 
 | Setting | Default | Description |
 |---|---|---|
-| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you). An existing key store that others can read is set to 0600 when it is opened. |
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
 Command flags (`--output`, `--password-file`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).

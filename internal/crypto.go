@@ -158,7 +158,7 @@ func EncryptFile(src, dst, password string) (err error) {
 
 // encryptSingleFile streams the file at src, encrypted, to w.
 func encryptSingleFile(w io.Writer, src, password string) (err error) {
-	in, err := os.Open(src)
+	in, err := os.Open(src) // #nosec G304 -- src is the file the user chose to encrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
@@ -219,7 +219,7 @@ func DecryptFile(src, dst, password string) error {
 // Version 2 files are decrypted as a stream. Files in the legacy (version 1) formats,
 // which have no header, are still read, whole, as before.
 func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) (err error) {
-	f, err := os.Open(src)
+	f, err := os.Open(src) // #nosec G304 -- src is the file the user chose to decrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
@@ -473,7 +473,7 @@ func defaultDecryptOutput(src string) string {
 // ImportKeyFromFile reads an export file, in the version 2 or the legacy format, and
 // returns a KeyModel (not yet persisted).
 func ImportKeyFromFile(path, masterPassword string) (*KeyModel, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is the key export the user chose to import
 	if err != nil {
 		return nil, fmt.Errorf("read export file: %w", err)
 	}

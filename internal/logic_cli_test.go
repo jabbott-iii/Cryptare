@@ -1571,3 +1571,57 @@ func TestKeysExportReportsWrittenPath(t *testing.T) {
 		t.Fatalf("export files = %v, want exactly one", matches)
 	}
 }
+
+// TestDisplayText checks that only values holding non-printable characters or invalid
+// UTF-8 are quoted for display (SEC-016).
+func TestDisplayText(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"AES-256-GCM", "AES-256-GCM"},
+		{"0123456789abcdef", "0123456789abcdef"},
+		{"clé für 鍵", "clé für 鍵"},
+		{"", ""},
+		{"\x1b[2J", `"\x1b[2J"`},
+		{"id\twith tab", `"id\twith tab"`},
+		{"\u009b31m", `"\u009b31m"`},       // C1 control (CSI)
+		{"abc\u202edef", `"abc\u202edef"`}, // right-to-left override
+		{"bad\xffutf8", `"bad\xffutf8"`},   // invalid UTF-8
+	}
+	for _, tc := range tests {
+		if got := displayText(tc.in); got != tc.want {
+			t.Errorf("displayText(%q) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestKeysListEscapesControlCharacters is SEC-016's display check for the CLI: a
+// stored key ID and algorithm holding terminal escape sequences are listed quoted,
+// not raw.
+func TestKeysListEscapesControlCharacters(t *testing.T) {
+	db := newTestDatabase(t, false)
+	if err := db.SaveKey(&KeyModel{
+		KeyID:         "\x1b]0;PWNED\a\x1b[31m",
+		Algorithm:     "\x1b[2J",
+		EncryptedBlob: "blob",
+		CreatedAt_:    time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("SaveKey: %v", err)
+	}
+
+	rootCmd := NewRootCmd(db)
+	rootCmd.SetArgs([]string{"keys", "list"})
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("keys list: %v", err)
+	}
+
+	got := out.String()
+	if strings.ContainsAny(got, "\x1b\a") {
+		t.Fatalf("keys list printed raw control characters: %q", got)
+	}
+	for _, want := range []string{`"\x1b]0;PWNED\a\x1b[31m"`, `"\x1b[2J"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("keys list output %q lacks %s", got, want)
+		}
+	}
+}

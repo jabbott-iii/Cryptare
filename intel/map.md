@@ -1,6 +1,6 @@
 # Repository Map
 
-Last updated: 2026-09-27. Architecture rules live in [`maint.md`](maint.md).
+Last updated: 2026-10-03. Architecture rules live in [`maint.md`](maint.md).
 
 ## Structure
 
@@ -15,7 +15,9 @@ Cryptare/
 │   ├── crypto.go            # file/dir encryption, legacy (v1) reads, key blobs, key export/import
 │   ├── format_v2.go         # version 2 format: header, Argon2id, chunked AES-GCM stream
 │   ├── compress.go          # gzip / tar.gz / zip create + extract; closeWithError helper
-│   ├── database.go          # GORM + SQLite, KeyModel, key CRUD
+│   ├── database.go          # GORM + SQLite, KeyModel, key CRUD, database file trust check
+│   ├── fileowner_unix.go    # fileOwner: a file's owner on Unix (build-tagged)
+│   ├── fileowner_other.go   # fileOwner stub for other platforms
 │   ├── logic-cli.go         # Cobra commands, password/confirm prompts, output-name helpers
 │   ├── ui-dashboard.go      # Bubble Tea model types, messages, constructors, Init
 │   ├── logic-tui.go         # Bubble Tea Update/View, forms, vim mode, action commands
@@ -35,12 +37,12 @@ Cryptare/
 | Component | Key symbols | Notes |
 |---|---|---|
 | Entry | `main`, `newRootCmd`, `databaseOpener`, `version`, `databasePathFromEnv` | Passes a lazy opener; the DB is opened only by the `keys` commands and the TUI. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
-| CLI | `NewRootCmd`, `NewRootCmdLazy`, `DatabaseOpener`, `openOnce`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output` | `--vim` is a root flag; `--password/-p` (prints a warning) and `--password-file` (`passwordFlags`) on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. |
-| TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd`, `checkTUINewPassword` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. Forms that set a password have a "Confirm password" field. |
+| CLI | `NewRootCmd`, `NewRootCmdLazy`, `DatabaseOpener`, `openOnce`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output`, `displayText` | `--vim` is a root flag; `--password/-p` (prints a warning) and `--password-file` (`passwordFlags`) on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. |
+| TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd`, `checkTUINewPassword` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. Forms that set a password have a "Confirm password" field. The key table shows stored values through `displayText`. |
 | Crypto | `EncryptFile`, `DecryptFile`, `DecryptFileWithLimits`, `encryptSingleFile`, `encryptDirectory`, `writeDirectoryArchive`, `restoreDirectoryArchive`, `decryptBytesWithAAD` (legacy), `GenerateKey`, `EncryptKeyBlob`, `DecryptKeyBlob`, `openKeyData`, `ExportKeyToFile`, `ImportKeyFromFile`, `validateKeyExport`, `validStoredKeyBlob`, `CheckPasswordPolicy` | Writes only the version 2 format and streams files and folders; legacy (version 1) data is still read, whole. Directory mode reuses `writeTarGz` and `extractTarGz`. `CheckPasswordPolicy` guards every path that sets a new password (`maint.md` §4). |
 | Format v2 | `v2Header`, `newV2Header`, `parseV2Header`, `argon2Params`, `passwordKDF`, `encryptingWriter`, `decryptingReader`, `sealV2`, `openV2`, `errDecrypt`, `errUnsupportedFormat` | 46-byte header, Argon2id key, 64 KiB AES-256-GCM chunks (STREAM). `parseV2Header` refuses unknown values and Argon2id settings above its limits before deriving a key. Layout in `maint.md` §3. |
 | Compression | `CompressFileWithFormat`, `DecompressFile`, `DecompressFileWithLimits`, `ExtractLimits`, `writeTarGz`, `writeZip`, `extractTarGz`, `extractZip`, `extractToDir`, `walkSourceTree`, `CheckOutputPath`, `writeFileAtomic` | Rejects symlinks, special files and `..` traversal. Folders are read through an `os.Root` (`walkSourceTree`). `CheckOutputPath` enforces the output-safety rules (`maint.md` §4). Extraction runs under `ExtractLimits` into a temporary folder (`extractToDir`), writes through an `os.Root`, and sets owner-only permissions (`extractDirMode`, `extractFileMode`). |
-| Storage | `NewDatabase`, `prepareDatabaseFile`, `withSecureDelete`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). Connections open with SQLite `secure_delete` on, so deleted rows are overwritten. The file is created 0600, and an existing one is tightened to 0600. |
+| Storage | `NewDatabase`, `prepareDatabaseFile`, `checkDatabaseFileTrust`, `fileOwner`, `ErrUntrustedDatabase`, `withSecureDelete`, `KeyModel`, `SaveKey`, `ListKeys`, `GetKey`, `DeleteKey` | `DeleteKey` uses raw SQL `DELETE … RETURNING` (a hard delete). Connections open with SQLite `secure_delete` on, so deleted rows are overwritten. The file is created 0600, and an existing one is tightened to 0600. On Unix, a database or side file another user owns or others can write is refused (SEC-016). |
 
 ## Dependencies
 

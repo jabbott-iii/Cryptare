@@ -97,8 +97,8 @@ validation for each fix are in `history.md`.
     `keys` commands and the TUI fail (`maint.md` §6).
   - Some README guarantees don't hold: "Commands don't overwrite anything by default"
     (BUG-017), "a command that fails part-way leaves no partial output" (SEC-015) and
-    "everything the tool writes is private to you" (SEC-019 on Windows; parent folders
-    are created 0755, SEC-012's G301 triage).
+    "everything the tool writes is private to you" (SEC-019 on Windows). Missing
+    parent folders were created 0755 until the 2026-10-03 G301 fix (SEC-012).
 - **CI runs `go test` without `-race`,** although every CI runner has a C toolchain and
   `maint.md` §7 asks for it when one is available. The code's concurrency is small (the
   password prompt's signal goroutine, Bubble Tea commands), but the check is cheap.
@@ -119,13 +119,13 @@ validation for each fix are in `history.md`.
 | Q-006 | Was the `NOTICE` third-party list removed on purpose, to be regenerated? The file now ends mid-sentence. Where dependency attributions and license texts should live (NOTICE, or a bundled licenses file with the binaries) is a licensing decision for the owner. | Licensing hygiene. |
 | Q-008 | Should the Argon2id settings accepted when reading (up to 1 GiB of memory, 10 passes, 16 lanes) be lowered, for example to 256 MiB (four times the 64 MiB default), or made configurable? | A crafted 62-byte file costs about 1 GiB of memory and 2 s per attempt (SEC-005), enough to kill a small VM or container. A lower limit restricts stronger settings in the future. |
 | Q-009 | Should passwords for new data be Unicode-normalised (NFC, or NFKC as NIST SP 800-63B suggests), and should a UTF-8 byte-order mark at the start of a `--password-file` be dropped? | The same-looking password typed on another system or input method can produce different bytes, so a file may not decrypt there. Normalising needs a header or KDF flag so existing data stays readable, and possibly `golang.org/x/text` (already an indirect dependency) as a direct one. |
-| Q-010 | For SEC-016: refuse a key database that another user owns or that others can write to, or only warn? | Refusing is safer; warning keeps unusual set-ups, such as a shared service account, working. |
 | Q-011 | For BUG-022: add a gunzip-only option (for example `decompress --raw`), record in the archive that the input was a single file, or only document the behaviour? | Decides how `compress x.tar` round-trips without changing how ordinary tarballs are extracted. |
 | Q-012 | For SEC-019: set owner-only access-control lists on Windows (needs `golang.org/x/sys/windows` as a direct dependency), or only document the limitation? | Windows output currently inherits the permissions of the folder it is written to. |
 
 Answered or closed: Q-001 (release builds use native CGO per OS), Q-002 (stored keys
 should be usable; plan 3.4), Q-004 (the default password policy, `maint.md` §4) and
-Q-007 (v1.0.0 is left as it is). Their discussion is in `history.md`.
+Q-007 (v1.0.0 is left as it is) and Q-010 (an untrusted key database is refused, not
+warned about; SEC-016). Their discussion is in `history.md`.
 
 ## 5. Reproducing the validation locally
 
