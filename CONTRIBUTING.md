@@ -45,8 +45,11 @@ CRYPTARE_DB_PATH="$HOME/.cryptare-dev.db" ./cryptare --help
 ```
 
 The `keys` commands and the TUI open (and create, if missing) the SQLite key store at
-`CRYPTARE_DB_PATH`, or at `./cryptare.db` when the variable is unset. Other commands
-don't touch it. `*.db` is git-ignored. **Never commit a database file.**
+`CRYPTARE_DB_PATH`, or at `cryptare/cryptare.db` in your user data folder when the
+variable is unset (`./cryptare keys path` prints which). Other commands don't touch it.
+Set `CRYPTARE_DB_PATH` while developing so you don't use your real key store. `*.db`
+and `*.ckey` are git-ignored, and CI fails if a key database or key export is tracked.
+**Never commit a database file.**
 
 ## Workflow
 
@@ -99,7 +102,10 @@ The full rules are in [`intel/maint.md`](intel/maint.md). In short:
 - **Filesystem.** Write outputs with mode `0o600`. Keep rejecting symlinks, special
   files and path traversal.
 - **Dependencies.** Don't add one when the standard library or an existing dependency
-  already does the job.
+  already does the job. Release archives carry the licence of every module linked into
+  the binaries: run `scripts/third-party-licenses.sh` after a dependency change, and
+  add a module that ships no licence file to its `stated_licence` list once you have
+  checked its licence (the release fails until then).
 - **Tests.** Use `t.TempDir()`; close database handles (Windows CI depends on it);
   follow the existing CLI (`SetArgs`/`SetIn`/`SetOut`) and TUI (`tea.KeyMsg`) test
   patterns.

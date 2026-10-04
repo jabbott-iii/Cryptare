@@ -31,6 +31,9 @@ go.work.sum
 *.db-wal
 *.db-shm
 
+# Generated for release archives by scripts/third-party-licenses.sh (Q-006)
+/THIRD_PARTY_LICENSES.txt
+
 # env file
 .env
 

@@ -55,6 +55,8 @@ func FuzzParseV2Header(f *testing.F) {
 			f.Fatalf("newV2Header: %v", err)
 		}
 		f.Add(h.marshal())
+		h.kdfID = kdfArgon2idNFKC
+		f.Add(h.marshal())
 	}
 	f.Add([]byte(v2Magic))
 	f.Add([]byte{})

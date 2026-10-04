@@ -109,6 +109,24 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No module cache in the job that publishes the release.
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Licence texts of the Go standard library and of every module in the
+      # binaries; each archive carries them with LICENSE and NOTICE (Q-006).
+      - name: Generate third-party licences
+        shell: bash
+        run: bash scripts/third-party-licenses.sh THIRD_PARTY_LICENSES.txt
+
       - name: Download binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -120,13 +138,16 @@ jobs:
         shell: bash
         run: |
           cd dist
+          # Each archive holds the binary, LICENSE, NOTICE and THIRD_PARTY_LICENSES.txt.
+          docs=(LICENSE NOTICE THIRD_PARTY_LICENSES.txt)
           for bin in cryptare_*; do
             name="${bin%.exe}"
             chmod +x "$bin"
             if [ "$bin" != "$name" ]; then
               zip -q "${name}.zip" "$bin"
+              (cd .. && zip -q "dist/${name}.zip" "${docs[@]}")
             else
-              tar -czf "${name}.tar.gz" "$bin"
+              tar -czf "${name}.tar.gz" "$bin" -C .. "${docs[@]}"
             fi
             rm "$bin"
           done

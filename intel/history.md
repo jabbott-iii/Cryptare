@@ -1029,3 +1029,106 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `internal/fuzz_test.go` and `keys_output_test.go`; `README.md`, `CONTRIBUTING.md`,
   `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`, `intel/notes.md`,
   `intel/plan.md` and this file. Not committed.
+
+## 2026-10-04 — v1.2.0 released; Q-003, Q-005, Q-006, Q-008 and Q-009 answered and implemented
+
+- **Verified on GitHub:** the owner committed round 3 as `eb330a3` and `89a64e8` and
+  tagged `89a64e8` as v1.2.0. CI #141/#142, Docker #22/#23, Security #147/#148 and CD #4
+  passed, and the release carries the drafted notes. Docker #23 resolved both pinned
+  image digests. Closed: SEC-002 (its migration notes are released), SEC-017 (CI green)
+  and SEC-019 (wording committed and published). BUG-019 to BUG-024 moved to the
+  resolved index.
+- **Owner decisions:** Q-003: move the default key store to a per-user data folder,
+  with a notice-only migration. Q-005: no history purge; delete the Copilot branch; add
+  a CI guard. Q-006: rewrite `NOTICE` and ship a generated licence file in the release
+  archives. Q-008: keep the Argon2id read limits (1 GiB, 10 passes, 16 lanes). Q-009:
+  NFKC normalisation, byte order mark handling, `golang.org/x/text` as a direct
+  dependency.
+- **Q-005 / SEC-003:** the `copilot/research-compression-implementation` branch was no
+  longer on GitHub when checked (`git ls-remote origin`) and had no pull request. Its
+  tip was `e910ff1de2dd757d6bc2278058825b45ddc9affd` (2026-09-10, "Tighten archive path
+  validation"), with three commits not in `main`: `0441cd3` "Add directory compression
+  support", `e78ba4d` "Harden tar archive extraction" and `e910ff1` (merge base
+  `61fd049`; 8 files, +405/−64). The owner's clone still has them as
+  `origin/copilot/research-compression-implementation` until a `git fetch --prune`, and
+  `git push origin e910ff1de2dd757d6bc2278058825b45ddc9affd:refs/heads/copilot/research-compression-implementation`
+  would restore the branch from there. `cryptare.db` stays in the history and in tag
+  `v1.0.0`. `ci.yml` gains a "Refuse committed key material" step after checkout.
+- **Q-006 / plan 4.5:** `NOTICE` now holds the project's attribution and a pointer to
+  `THIRD_PARTY_LICENSES.txt`. New `scripts/third-party-licenses.sh` lists the modules
+  `go list -deps` reports for each release target (CGO on), and writes their licence
+  files, the Go standard library's `LICENSE` and a note on SQLite (public domain). A
+  module without a licence file stops it unless listed in `stated_licence`
+  (`github.com/mattn/go-localereader`, MIT per its README). The `cd.yml` release job
+  checks out the repository (`persist-credentials: false`), sets up Go from `go.mod`
+  without a cache, runs the script, and puts `LICENSE`, `NOTICE` and
+  `THIRD_PARTY_LICENSES.txt` in every `.tar.gz` and `.zip` next to the binary.
+  `/THIRD_PARTY_LICENSES.txt` is git-ignored. Found while doing it: the static Linux
+  binaries contain glibc (LGPL), which the file doesn't cover (Q-013, plan 4.10).
+- **Q-009:** new data is protected by the password without a leading byte order mark,
+  in NFKC form (`normalizePassword`). The header's KDF byte is `2` when that differs
+  from the password as given and `1` otherwise, so v1.2.0 reads any data whose password
+  normalisation leaves alone, and refuses the rest as "key derivation 2" instead of
+  reporting a wrong password. Reads of KDF `1` and of the legacy formats try the
+  password without a leading byte order mark, then as given if it had one, then its
+  NFKC form (`passwordCandidates`); KDF `2` uses the NFKC form only.
+  `newDecryptingReader` now authenticates the first chunk itself, trying each
+  candidate, so a wrong password fails before any output is created.
+  `CheckPasswordPolicy` counts the normalised password. `golang.org/x/text` moved to
+  the direct requires (no `go.sum` change; it was already linked in through GORM).
+- **Q-003 / plan 3.5:** without `CRYPTARE_DB_PATH`, the key store is
+  `cryptare/cryptare.db` in the user data folder (`databasePath`, `userDataDir`):
+  `%LocalAppData%` on Windows, `~/Library/Application Support` on macOS,
+  `$XDG_DATA_HOME` (absolute only) or `~/.local/share` elsewhere. A missing or relative
+  folder is an error naming `CRYPTARE_DB_PATH`. The opener creates the folder 0700. A
+  `cryptare.db` in the current folder gets a notice on stderr (`noticeLegacyDatabase`)
+  suggesting `mv`/`move` or `CRYPTARE_DB_PATH`, and is never opened. New `cryptare keys
+  path` prints the path and creates nothing. Plan 4.6: the `tasks.db` fixture is now
+  `keys.db`.
+- **Tests:** `TestNormalizePassword`, `TestPasswordCandidates`,
+  `TestCheckPasswordPolicyCountsNormalizedPassword`,
+  `TestUnicodePasswordFormsOpenTheSameData` (files, folders, stored keys and key
+  exports), `TestNormalizedPasswordHeader`, `TestEarlierDataOpensWithPasswordForms`, a
+  "key derivation identifier changed" tampering case, an id-2 fuzz seed;
+  `TestDatabasePathDefaultsToDataFolder`, `TestUserDataDir`,
+  `TestDatabaseOpenerUsesPrivateDataFolder`, `TestLegacyDatabaseNotice`,
+  `TestQuotePath`. Against `89a64e8`, `TestUnicodePasswordFormsOpenTheSameData` (4 of 4
+  cases) and the policy test (5 of 5) fail.
+- **Validation** (scratch copies, Go 1.26.8, linux/amd64, non-root):
+  - `gofmt -s -l .` and `go vet ./...` clean, plus `go vet` and test builds for
+    windows, darwin and freebsd; `go test -race -count=1 ./...` passes; gosec v2.29.0:
+    0 issues (9 `#nosec`); actionlint 1.7.12: nothing. `go mod tidy` can't run here;
+    `go mod tidy -e` leaves `go.mod` as edited.
+  - The licence script wrote 30 modules for the five targets (27 for linux/amd64
+    alone; `coninput`, `mousetrap` and `go-localereader` only on Windows) and failed,
+    writing nothing, with `go-localereader` taken out of `stated_licence`. The release
+    packaging steps, run on stand-in binaries, gave archives holding the binary,
+    `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`.
+  - The CI guard passes on this tree, and fails on `v1.0.0`'s (`cryptare.db`) and on a
+    scratch repository tracking `keys.CKEY` and `x.db-wal`.
+  - Real binaries, v1.2.0 source (`89a64e8`) against this round, through password
+    files: v1.2.0 data opens in the new build with the same password, and with
+    combining accents when it was made with precomposed letters; new data with an
+    ASCII or precomposed password (KDF 1) opens in v1.2.0; new data with combining
+    accents or a byte-order-mark password file (KDF 2) is refused by v1.2.0 as
+    "unsupported encrypted data: key derivation 2" and opens in the new build however
+    the password is entered; v1.2.0 data made through a byte-order-mark file opens with
+    the same file. As designed, v1.2.0 data made with combining accents doesn't open
+    with precomposed letters, and a wrong password writes nothing.
+  - Q-003, umask 022: v1.2.0's `keys generate` created `./cryptare.db`. The new build's
+    `--help` and `encrypt` created nothing; `keys path` printed the new path and the
+    notice and created nothing; `keys list` created `~/.local/share/cryptare` (0700)
+    and the store (0600), and left `./cryptare.db` byte-identical. The old key was
+    listed after the suggested `mv`, or with `CRYPTARE_DB_PATH=./cryptare.db`. With
+    `HOME` unset the commands fail with the `CRYPTARE_DB_PATH` hint.
+- **Not run:** golangci-lint and govulncheck locally, Windows and macOS at runtime
+  (their CI jobs run the new tests), the release job itself (first run on the next
+  tag), `go version -m` on the v1.2.0 binaries (SEC-018) and the image's UID check
+  (SEC-013).
+- **Changed:** `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.gitignore`,
+  `NOTICE`, `go.mod`, new `scripts/third-party-licenses.sh`, `database_path.go`,
+  `main.go`, `internal/crypto.go`, `internal/format_v2.go`; tests in
+  `database_path_test.go`, `lazy_database_test.go`, `internal/format_v2_test.go`,
+  `internal/fuzz_test.go` and new `internal/password_norm_test.go`; `README.md`,
+  `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`,
+  `intel/notes.md`, `intel/plan.md` and this file. Not committed.

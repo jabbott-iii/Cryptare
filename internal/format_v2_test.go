@@ -253,6 +253,8 @@ func TestStreamRejectsTampering(t *testing.T) {
 			return d
 		}},
 		{"Argon2id memory changed", func(d []byte) []byte { d[16] ^= 1; return d }},
+		// 1 and 2 both parse (Q-009), so the change must fail authentication.
+		{"key derivation identifier changed", func(d []byte) []byte { d[12] = 3 - d[12]; return d }},
 		{"final chunk dropped", func(d []byte) []byte { return d[:header+3*sealedChunk] }},
 		{"truncated inside the final chunk", func(d []byte) []byte { return d[:len(d)-5] }},
 		{"middle chunk dropped", func(d []byte) []byte {
@@ -321,7 +323,7 @@ func TestDecryptRejectsUnsupportedHeaders(t *testing.T) {
 		{"format version 3", set(9, 3)},
 		{"unknown content type", set(10, 9)},
 		{"stored-key source (reserved for plan 3.4)", set(11, 2)},
-		{"unknown KDF", set(12, 2)},
+		{"unknown KDF", set(12, 3)},
 		{"4 GiB of memory", put32(13, 4<<20)},
 		{"memory below 8 KiB per lane", put32(13, 7)},
 		{"zero passes", put32(17, 0)},

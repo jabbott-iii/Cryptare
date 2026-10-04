@@ -24,7 +24,7 @@ It has no network surface: there is no HTTP server and nothing calls a remote se
 
 | Layer | Files | Responsibility | May depend on |
 |---|---|---|---|
-| Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare.db` in the current directory), build the root command with a lazy database opener, run it | `internal` |
+| Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare/cryptare.db` in the user data folder), build the root command with a lazy database opener and `keys path`, run it | `internal` |
 | Interfaces | `internal/logic-cli.go` (Cobra); `internal/ui-dashboard.go` + `internal/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
 | Core operations | `internal/crypto.go`, `internal/compress.go` | Encryption formats, key blobs, key export/import, archive creation/extraction | stdlib, `golang.org/x/crypto` |
 | Storage | `internal/database.go` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
@@ -54,6 +54,16 @@ Rules:
    owns or that group or others can write (`ErrUntrustedDatabase`, SEC-016). A plain
    path containing `?` is refused (`ErrUnsupportedDatabasePath`); a `file:` URI is
    prepared like a path (SEC-010).
+6. **The default key store is per user** (Q-003). Without `CRYPTARE_DB_PATH`,
+   `databasePath` uses `cryptare/cryptare.db` in `userDataDir`: `%LocalAppData%` on
+   Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` (absolute
+   only) or `~/.local/share` elsewhere. A data folder that isn't an absolute path is an
+   error that names `CRYPTARE_DB_PATH`; never fall back to the current folder. The
+   opener creates the folder 0700 and is still the only thing that creates anything.
+   A `cryptare.db` left in the current folder by an earlier version only gets a notice
+   on stderr (`noticeLegacyDatabase`); it is never opened, moved or copied, because it
+   may not be the user's (SEC-016). `keys path` is defined in package `main`, because
+   it needs `databasePath`, and opens nothing.
 
 ## 3. On-disk formats (compatibility contract)
 
@@ -71,7 +81,7 @@ already written, and tests covering both.
 | 9 | 1 | format version, `2` |
 | 10 | 1 | content type: `1` file, `2` folder (tar.gz), `3` stored key, `4` key export |
 | 11 | 1 | key source: `1` password (`2` is reserved for stored keys, plan 3.4) |
-| 12 | 1 | KDF: `1` Argon2id |
+| 12 | 1 | KDF: `1` Argon2id over the password, `2` Argon2id over its normalised form (Q-009) |
 | 13 | 4 | Argon2id memory in KiB, big-endian (default 65,536 = 64 MiB) |
 | 17 | 4 | Argon2id passes, big-endian (default 3) |
 | 21 | 1 | Argon2id lanes (default 4) |
@@ -80,6 +90,16 @@ already written, and tests covering both.
 | 39 | 7 | random nonce prefix |
 
 - **Key:** Argon2id(password, salt, the header's settings), 32 bytes, for AES-256-GCM.
+- **Password bytes (Q-009):** new data uses the password without a leading byte order
+  mark, in Unicode NFKC form (`normalizePassword`). The header records KDF `2` when
+  that differs from the password as given, and `1` otherwise, so data protected with
+  any other password is exactly what earlier versions write and read. Readers try, for
+  KDF `1` and for the legacy formats, the password without a leading byte order mark,
+  then as given if it had one, then its NFKC form (`passwordCandidates`, at most three
+  key derivations); for KDF `2`, the NFKC form only. Builds up to v1.2.0 refuse KDF `2`
+  as unknown ("unsupported encrypted data: key derivation 2"). The first chunk is
+  authenticated when the reader is created (`newDecryptingReader`), so a wrong password
+  is reported before any output exists.
 - **Body:** the plaintext in chunks of the chunk size, each sealed with its own 16-byte
   tag. The last chunk may be shorter or empty; data that ends on a chunk boundary ends
   with a full last chunk. A chunk's nonce is the prefix, a 4-byte big-endian chunk
@@ -121,6 +141,8 @@ Tests that guard this contract; keep them passing:
 - version 2: `TestEncryptWritesVersion2Format`, `TestDefaultPasswordKDFIsWritten`,
   `TestStreamRoundTripSizes`, `TestStreamRejectsTampering`,
   `TestDecryptRejectsUnsupportedHeaders` and `TestDecryptRejectsWrongContentType`;
+- password forms: `TestNormalizedPasswordHeader`, `TestEarlierDataOpensWithPasswordForms`
+  and `TestUnicodePasswordFormsOpenTheSameData` (`password_norm_test.go`);
 - the legacy KDF: `TestDeriveKey` (PBKDF2 known answers).
 
 ## 4. Coding conventions
@@ -209,7 +231,8 @@ These are observed in the codebase and required for new code:
 - **Password policy.** Any operation that protects new data with a password
   (`EncryptFile`, `EncryptKeyBlob`, and so `ExportKeyToFile`) calls
   `CheckPasswordPolicy`: at least `MinPasswordLength` (15) Unicode code points, not
-  one repeated character, and no composition rules or maximum length. Operations that
+  one repeated character, and no composition rules or maximum length, counted on the
+  normalised password that actually protects the data (Q-009). Operations that
   read existing data (decrypt, `DecryptKeyBlob`, import) must not check it, so older
   files and keys stay readable. Interfaces also confirm a typed new password: the CLI
   with `readNewPassword` (terminal input only) and the TUI with a "Confirm password"
@@ -234,6 +257,8 @@ These are observed in the codebase and required for new code:
   - GORM with `gorm.io/driver/sqlite`, which uses `github.com/mattn/go-sqlite3` (CGO)
   - `golang.org/x/crypto`, used for `argon2` (the version 2 format). The legacy PBKDF2
     key uses the standard library's `crypto/pbkdf2` (since plan 3.1).
+  - `golang.org/x/text`, used for `unicode/norm` (password normalisation, Q-009). It
+    was already linked in through GORM; it is direct since Q-009.
 
   `github.com/charmbracelet/x/term` (direct since 2026-09-24) provides `ReadPassword` and
   `IsTerminal` for the CLI's hidden password prompt (`readPassword` in `logic-cli.go`).
@@ -289,6 +314,16 @@ These are observed in the codebase and required for new code:
   triggers `.github/workflows/cd.yml`. It publishes
   `cryptare_<os>_<arch>.tar.gz`/`.zip` archives for linux/amd64, linux/arm64,
   darwin/amd64, darwin/arm64 and windows/amd64, plus `checksums.txt`.
+- **Licences in releases (Q-006):** each archive holds the binary, `LICENSE`, `NOTICE`
+  (the project's own attribution only) and `THIRD_PARTY_LICENSES.txt`. The release job
+  generates the last with `scripts/third-party-licenses.sh`, which lists the modules
+  that `go list -deps` reports for each release target (keep its target list in step
+  with the `cd.yml` matrix) and copies each module's licence files and the Go standard
+  library's `LICENSE`. A module with no licence file stops the release until it is
+  added to the script's `stated_licence` list, so every new dependency gets its
+  licence checked. C code is not covered: SQLite (public domain) is noted with
+  go-sqlite3, but the C libraries the platform toolchains link in, such as glibc in the
+  static Linux binaries, are not listed (Q-013).
 - **Version stamping:** `main.version` defaults to `dev`. Release builds set it with
   `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
@@ -308,7 +343,8 @@ These are observed in the codebase and required for new code:
 
 Before opening a pull request:
 
-1. `gofmt -s -l .` prints nothing.
+1. `gofmt -s -l .` prints nothing. No key database or key export (`*.db`, its SQLite
+   side files, `*.ckey`) is tracked; CI fails if one is (SEC-003).
 2. `go mod tidy` leaves `go.mod`/`go.sum` unchanged, unless the change adds a
    dependency on purpose.
 3. `go vet ./...` and `golangci-lint run` are clean.

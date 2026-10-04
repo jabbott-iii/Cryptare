@@ -66,7 +66,7 @@ Tagged releases publish these assets, built by `.github/workflows/cd.yml`, toget
 | macOS Apple silicon | `cryptare_darwin_arm64.tar.gz` |
 | Windows x86-64 | `cryptare_windows_amd64.zip` |
 
-Each archive holds one binary named after it (`cryptare_linux_amd64`, `cryptare_windows_amd64.exe`, …). There is no Windows ARM64 build.
+Each archive holds the binary named after it (`cryptare_linux_amd64`, `cryptare_windows_amd64.exe`, …). Archives of releases after v1.2.0 also hold `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`, which has the licences of the Go standard library and of the Go modules built into the binary. There is no Windows ARM64 build.
 
 > ⚠️ The v1.0.0 binaries were built with CGO disabled and exit on every command with `go-sqlite3 requires cgo to work`. Use v1.0.1 or later (BUG-001 in [intel/notes.md](intel/notes.md)).
 
@@ -106,6 +106,7 @@ cryptare                             # opens the interactive TUI
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
 - New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
 - When you type a new password in a terminal or the TUI, you're asked to type it again to confirm it. Piped input is read once.
+- A password is the same however its characters were entered: an accented letter typed as one character or as a letter followed by a combining accent, full-width letters, ligatures and similar variants are made equal (Unicode NFKC normalisation), and a byte order mark that an editor put at the start of a `--password-file` is ignored. The 15-character minimum counts the password after this.
 - Decrypting and importing accept any password, so files and keys protected with a shorter password before this rule existed still open.
 - In scripts, keep passwords off the command line: use `--password-file` (the first line of a file, ideally one only you can read) or pipe the password in (`cryptare encrypt ./secret.txt < pw.txt`). `--password` still works but prints a warning, because other users can see command-line arguments and your shell saves them in its history.
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
@@ -124,6 +125,10 @@ cryptare                             # opens the interactive TUI
   - files without Cryptare's format header (from v1.1.0 and earlier) are read whole, so `decrypt` refuses one larger than `--max-size` (default 10 GiB) before reading it; raise `--max-size` for a bigger one. `keys import` refuses files over 1 MiB;
   - a `CRYPTARE_DB_PATH` containing `?` is refused (SQLite opened a different file); use a `file:` URI with `%3F`;
   - the Docker image runs as an unprivileged user (UID 10001); for a bind-mounted data folder, add `--user "$(id -u):$(id -g)"` (see [Docker](#docker)).
+- ⚠️ **Upgrading from v1.2.0 or earlier** (changes on `main` since v1.2.0):
+  - the key store is no longer `cryptare.db` in the current folder but `cryptare/cryptare.db` in your user data folder (see `CRYPTARE_DB_PATH` under [Configuration](#configuration)); `cryptare keys path` prints where it is. When a `keys` command or the TUI finds a `cryptare.db` in the current folder, it says so on stderr and shows how to move it there, or to keep using it with `CRYPTARE_DB_PATH`. It never opens or moves that file itself;
+  - new data protected with a password that normalisation changes (accents typed as combining characters, full-width letters, a `--password-file` starting with a byte order mark, …) records this in its header, and v1.2.0 and earlier refuse it with "unsupported encrypted data: key derivation 2". Data protected with any other password is written as before, and v1.2.0 reads it;
+  - data that v1.2.0 or earlier protected with a password typed with combining accents still needs the password typed that way.
 
 ## Core CLI capabilities
 
@@ -204,6 +209,7 @@ Examples:
 ### keys
 
 - cryptare keys list — list stored encryption keys
+- cryptare keys path — print the key store's path (nothing is opened or created)
 - cryptare keys generate — generate and store a new random encryption key
 - cryptare keys export [key-id] — export an encrypted key to a file
 - cryptare keys import [file] — import an encrypted key from a file (only exports in the format `keys export` writes are accepted)
@@ -215,6 +221,7 @@ Examples:
 
 Examples:
 - cryptare keys list
+- cryptare keys path
 - cryptare keys generate --password-file ~/.config/cryptare/master.txt
 - cryptare keys export key-123 --output key-123.ckey
 - cryptare keys import ./key-123.ckey
@@ -236,7 +243,7 @@ Examples:
 
 | Setting | Default | Description |
 |---|---|---|
-| `CRYPTARE_DB_PATH` (environment variable) | `cryptare.db` in the current working directory | Location of the SQLite key store, as a path or a SQLite `file:` URI. A plain path can't contain `?` (SQLite would cut it there); use a `file:` URI with `%3F` instead. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you on Linux and macOS; on Windows it gets the folder's permissions). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare/cryptare.db` in your user data folder: `$XDG_DATA_HOME` (if absolute) or `~/.local/share` on Linux and other Unix systems, `~/Library/Application Support` on macOS, `%LocalAppData%` on Windows | Location of the SQLite key store, as a path or a SQLite `file:` URI. `cryptare keys path` prints the one in use. The default's `cryptare` folder is created, readable only by you, the first time a `keys` command or the TUI needs it; versions up to v1.2.0 used `cryptare.db` in the current folder instead (see the upgrade note above). A plain path can't contain `?` (SQLite would cut it there); use a `file:` URI with `%3F` instead. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you on Linux and macOS; on Windows it gets the folder's permissions). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
 Command flags (`--output`, `--password-file`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
@@ -286,7 +293,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
 ## Project structure
 
 ```text
-main.go, database_path.go   entry point and CRYPTARE_DB_PATH handling
+main.go, database_path.go   entry point, key store path (CRYPTARE_DB_PATH or default) and `keys path`
 internal/crypto.go          AES-256-GCM encryption, key blobs, key export/import
 internal/format_v2.go       versioned format: header, Argon2id, chunked encryption
 internal/compress.go        gzip, tar.gz and zip creation and extraction
@@ -296,10 +303,11 @@ internal/ui-dashboard.go,
 internal/logic-tui.go       Bubble Tea terminal UI
 intel/                      architecture, security, plans and repository map
 .github/workflows/          CI, CD, Docker and security workflows
+scripts/                    third-party-licenses.sh: licence texts for release archives
 ```
 
 [intel/map.md](intel/map.md) has the detailed map and diagrams.
 
 ## Contributing and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Cryptare is licensed under the Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Cryptare is licensed under the Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Release archives also include `THIRD_PARTY_LICENSES.txt`, with the licences of the third-party code in the binaries (generated by `scripts/third-party-licenses.sh`).

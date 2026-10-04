@@ -40,7 +40,7 @@ import (
 //	9      1    format version, 2
 //	10     1    content type: 1 file, 2 folder (tar.gz), 3 stored key, 4 key export
 //	11     1    key source: 1 password (2 is reserved for stored keys, plan 3.4)
-//	12     1    KDF: 1 Argon2id
+//	12     1    KDF: 1 Argon2id over the password, 2 Argon2id over its NFKC form (Q-009)
 //	13     4    Argon2id memory in KiB (big-endian)
 //	17     4    Argon2id passes (big-endian)
 //	21     1    Argon2id lanes
@@ -68,7 +68,17 @@ const (
 	contentKeyExport byte = 4
 
 	keySourcePassword byte = 1
-	kdfArgon2id       byte = 1
+
+	// Key derivation identifiers. Both are Argon2id; they differ in the bytes of the
+	// password it is applied to (Q-009). This version writes kdfArgon2id when the
+	// normalised password (normalizePassword) is the password as given, so the header
+	// is the one earlier versions write and they can read the data with the same
+	// password. Otherwise it writes kdfArgon2idNFKC, which earlier versions refuse as
+	// an unknown key derivation instead of reporting a wrong password. Data recorded as
+	// kdfArgon2id is read with each form passwordCandidates returns, kdfArgon2idNFKC
+	// data with the normalised form only.
+	kdfArgon2id     byte = 1
+	kdfArgon2idNFKC byte = 2
 
 	defaultChunkShift = 16 // 64 KiB
 	minChunkShift     = 10
@@ -105,6 +115,7 @@ var errDecrypt = errors.New("decryption failed: wrong password or corrupted file
 // v2Header is a parsed version 2 header.
 type v2Header struct {
 	content     byte
+	kdfID       byte
 	kdf         argon2Params
 	salt        [saltLen]byte
 	chunkShift  uint8
@@ -117,9 +128,9 @@ func isV2(data []byte) bool {
 }
 
 // newV2Header returns a header for new content, with a fresh salt and nonce prefix and
-// the current password KDF setting.
+// the current password KDF setting, recorded as kdfArgon2id.
 func newV2Header(content byte) (v2Header, error) {
-	h := v2Header{content: content, kdf: passwordKDF, chunkShift: defaultChunkShift}
+	h := v2Header{content: content, kdfID: kdfArgon2id, kdf: passwordKDF, chunkShift: defaultChunkShift}
 	if _, err := rand.Read(h.salt[:]); err != nil {
 		return v2Header{}, fmt.Errorf("generate salt: %w", err)
 	}
@@ -132,7 +143,7 @@ func newV2Header(content byte) (v2Header, error) {
 func (h v2Header) marshal() []byte {
 	b := make([]byte, 0, v2HeaderLen)
 	b = append(b, v2Magic...)
-	b = append(b, formatV2, h.content, keySourcePassword, kdfArgon2id)
+	b = append(b, formatV2, h.content, keySourcePassword, h.kdfID)
 	b = binary.BigEndian.AppendUint32(b, h.kdf.memoryKiB)
 	b = binary.BigEndian.AppendUint32(b, h.kdf.iterations)
 	b = append(b, h.kdf.threads)
@@ -158,8 +169,9 @@ func parseV2Header(b []byte) (v2Header, error) {
 	if b[11] != keySourcePassword {
 		return v2Header{}, fmt.Errorf("%w: key source %d", errUnsupportedFormat, b[11])
 	}
-	if b[12] != kdfArgon2id {
-		return v2Header{}, fmt.Errorf("%w: key derivation %d", errUnsupportedFormat, b[12])
+	h.kdfID = b[12]
+	if h.kdfID != kdfArgon2id && h.kdfID != kdfArgon2idNFKC {
+		return v2Header{}, fmt.Errorf("%w: key derivation %d", errUnsupportedFormat, h.kdfID)
 	}
 	h.kdf = argon2Params{
 		memoryKiB:  binary.BigEndian.Uint32(b[13:17]),
@@ -234,14 +246,18 @@ type encryptingWriter struct {
 }
 
 // newEncryptingWriter writes a new version 2 header for content to w and returns a
-// writer that encrypts into w with a key derived from password. Close must be called to
-// write the final chunk; it doesn't close w.
+// writer that encrypts into w with a key derived from the normalised password (Q-009).
+// Close must be called to write the final chunk; it doesn't close w.
 func newEncryptingWriter(w io.Writer, password string, content byte) (*encryptingWriter, error) {
 	h, err := newV2Header(content)
 	if err != nil {
 		return nil, err
 	}
-	aead, err := h.aead(password)
+	normalized := normalizePassword(password)
+	if normalized != password {
+		h.kdfID = kdfArgon2idNFKC
+	}
+	aead, err := h.aead(normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +334,10 @@ type decryptingReader struct {
 }
 
 // newDecryptingReader reads a version 2 header from r, checks that its content type is
-// one of wanted, derives the key from password and returns the header with a reader
-// of the plaintext.
+// one of wanted, and authenticates the first chunk with a key derived from password,
+// trying each form of it that may have protected the data (passwordCandidates). It
+// returns the header with a reader of the plaintext. A wrong password is therefore
+// reported here, before the caller creates any output.
 func newDecryptingReader(r *bufio.Reader, password string, wanted ...byte) (v2Header, io.Reader, error) {
 	hb := make([]byte, v2HeaderLen)
 	if _, err := io.ReadFull(r, hb); err != nil {
@@ -332,15 +350,24 @@ func newDecryptingReader(r *bufio.Reader, password string, wanted ...byte) (v2He
 	if !bytes.Contains(wanted, []byte{h.content}) {
 		return v2Header{}, nil, fmt.Errorf("%w: it holds %s, not %s", errUnsupportedFormat, contentName(h.content), contentName(wanted[0]))
 	}
-	aead, err := h.aead(password)
+	size := h.chunkSize()
+	d := &decryptingReader{
+		r: r, h: h, aad: hb,
+		cbuf: make([]byte, size+gcmTagLen), plain: make([]byte, 0, size), nonce: make([]byte, 0, 12),
+	}
+	n, last, err := d.read()
 	if err != nil {
 		return v2Header{}, nil, err
 	}
-	size := h.chunkSize()
-	return h, &decryptingReader{
-		r: r, h: h, aad: hb, aead: aead,
-		cbuf: make([]byte, size+gcmTagLen), plain: make([]byte, 0, size), nonce: make([]byte, 0, 12),
-	}, nil
+	for _, candidate := range passwordCandidates(password, h.kdfID == kdfArgon2idNFKC) {
+		if d.aead, err = h.aead(candidate); err != nil {
+			return v2Header{}, nil, err
+		}
+		if err = d.open(n, last); err == nil {
+			return h, d, nil
+		}
+	}
+	return v2Header{}, nil, err
 }
 
 func (d *decryptingReader) Read(p []byte) (int, error) {
@@ -360,25 +387,40 @@ func (d *decryptingReader) Read(p []byte) (int, error) {
 
 // next reads, authenticates and decrypts the next chunk.
 func (d *decryptingReader) next() error {
-	n, err := io.ReadFull(d.r, d.cbuf)
-	last := false
+	n, last, err := d.read()
+	if err != nil {
+		return err
+	}
+	return d.open(n, last)
+}
+
+// read reads the next chunk into cbuf and returns its length and whether it is the
+// final one.
+func (d *decryptingReader) read() (n int, last bool, err error) {
+	n, err = io.ReadFull(d.r, d.cbuf)
 	switch {
 	case errors.Is(err, io.EOF):
-		return fmt.Errorf("%w (data ends before its final chunk)", errDecrypt)
+		return 0, false, fmt.Errorf("%w (data ends before its final chunk)", errDecrypt)
 	case errors.Is(err, io.ErrUnexpectedEOF):
 		last = true // a short chunk can only be the final one
 	case err != nil:
-		return fmt.Errorf("read encrypted data: %w", err)
+		return 0, false, fmt.Errorf("read encrypted data: %w", err)
 	default:
 		if _, err := d.r.Peek(1); errors.Is(err, io.EOF) {
 			last = true
 		} else if err != nil {
-			return fmt.Errorf("read encrypted data: %w", err)
+			return 0, false, fmt.Errorf("read encrypted data: %w", err)
 		}
 	}
 	if n < gcmTagLen {
-		return errDecrypt
+		return 0, false, errDecrypt
 	}
+	return n, last, nil
+}
+
+// open authenticates and decrypts the chunk that read left in cbuf. cbuf is left as it
+// was, so a failed open can be retried with another key.
+func (d *decryptingReader) open(n int, last bool) error {
 	plain, err := d.aead.Open(d.plain[:0], d.h.chunkNonce(d.nonce, d.counter, last), d.cbuf[:n], d.aad)
 	if err != nil {
 		return errDecrypt

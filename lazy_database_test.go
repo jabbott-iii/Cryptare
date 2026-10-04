@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,7 +53,7 @@ func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
 			}
 		}
 	})
-	open := databaseOpener()
+	open := databaseOpener(io.Discard)
 	run := func(args ...string) error {
 		cmd := newRootCmd(func() (*internal.Database, error) {
 			db, err := open()
@@ -112,7 +113,7 @@ func TestDatabaseOpenerRefusesUntrustedDatabase(t *testing.T) {
 	}
 	t.Setenv(databasePathEnv, path)
 
-	db, err := databaseOpener()()
+	db, err := databaseOpener(io.Discard)()
 	if db != nil {
 		if sqlDB, err := db.Conn().DB(); err == nil {
 			_ = sqlDB.Close()

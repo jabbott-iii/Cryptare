@@ -4,7 +4,7 @@ This file holds Cryptare's security requirements, identified issues, remediation
 and fix status (see `AGENTS.md` → Security Issue Tracking). Never delete items. Close
 an item only after its remediation is implemented and its validation is complete.
 
-Last updated: 2026-10-04 (round 3)
+Last updated: 2026-10-04 (round 4: v1.2.0 released; Q-003, Q-005, Q-006, Q-008, Q-009 answered)
 
 ## 1. Security requirements
 
@@ -115,7 +115,7 @@ These apply to all changes.
 | ID | Title | Severity | Status |
 |---|---|---|---|
 | SEC-001 | Empty passwords accepted for encryption and key protection | High | Closed |
-| SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | In Progress |
+| SEC-002 | Interactive password prompt truncates at whitespace and echoes input | High | Closed |
 | SEC-003 | Encrypted key material committed to the public repository | Medium | In Progress |
 | SEC-004 | Passwords accepted as command-line arguments | Medium | Closed |
 | SEC-005 | KDF work factor below current guidance; formats unversioned | Medium | Closed |
@@ -130,9 +130,9 @@ These apply to all changes.
 | SEC-014 | Symlink race (TOCTOU) when archiving a directory tree | Low | Closed |
 | SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Closed |
 | SEC-016 | Key database files from untrusted locations are trusted | Low | In Progress |
-| SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | In Progress |
+| SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Closed |
 | SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | In Progress |
-| SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | In Progress |
+| SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Closed |
 
 ## 5. Issue register
 
@@ -201,7 +201,10 @@ These apply to all changes.
 
 ### SEC-002 — Interactive password prompt truncates at whitespace and echoes input
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, verified on GitHub):** v1.2.0 was released by CD #4 on
+  `89a64e8`, and its release notes carry both migration notes (the v1.0.1 prompt
+  change and the 15-character minimum for scripts). That was the last remaining step.
 - **Progress (2026-09-24, committed in `ed46150`):** Remediation steps 1, 2 and 4 are
   implemented and validated.
   - `readPassword` reads the whole line and strips only `\r`/`\n`. On a terminal it
@@ -266,11 +269,28 @@ These apply to all changes.
     full passphrase.
   - A non-TTY test.
   - A manual TTY check that input is not echoed.
-- **Resolution:** —
+- **Resolution:** Fixed in `ed46150` (steps 1, 2 and 4) and `b415ffc` (step 3, the
+  confirmation), validated by the tests and pseudo-terminal checks above; the migration
+  notes shipped with the v1.2.0 release on 2026-10-04. Closed 2026-10-04.
 
 ### SEC-003 — Encrypted key material committed to the public repository
 
 - **Status:** In Progress
+- **Progress (2026-10-04, Q-005 answered; not yet committed):**
+  - Step 4: the owner decided not to purge history (Q-005 = no). `cryptare.db` stays in
+    the history from `d185a94` to its removal in `aa27461` and in tag `v1.0.0`
+    (`768f4cd`); the key it held was discarded (step 2). The
+    `copilot/research-compression-implementation` branch, whose tip still tracked the
+    file, was no longer on GitHub when checked on 2026-10-04 (`git ls-remote`); its tip
+    and unmerged commits are recorded in `history.md`.
+  - Step 5: `ci.yml` has a "Refuse committed key material" step after checkout, which
+    fails when `git ls-files` lists a `*.db`, `*.db-journal`, `*.db-wal`, `*.db-shm` or
+    `*.ckey` file (case-insensitive). Validation: it passes on the current tree, fails
+    on the `v1.0.0` tree (it lists `cryptare.db`) and on a scratch repository with
+    `keys.CKEY` and `x.db-wal` tracked; actionlint 1.7.12 reports nothing.
+  - The step 3 patterns (`*.ckey` and the SQLite side files) were committed in
+    `eb330a3`, with CI green.
+  - Closes once the CI step is committed and CI passes.
 - **Progress (2026-10-04, plan 5.9; not yet committed):** the gap in step 3 is closed:
   `.gitignore` adds `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm`, and `git
   check-ignore` matches each; no tracked file matches them. Remaining: step 4 (Q-005)
@@ -430,7 +450,7 @@ These apply to all changes.
      `crypto/pbkdf2`. The output is identical.
 - **Validation:** Known-answer tests for the new format, the existing legacy tests
   passing, and a benchmark of the KDF cost on target hardware.
-- **Resolution:** Fixed in `0c57aef` (plans 3.1 and 3.2). Validated by the known-answer tests, the legacy tests and the KDF cost measured above, and by green CI on `0c57aef` (CI #134, Docker #16, Security #139), confirmed on 2026-10-04. Q-008 (whether to lower the Argon2id settings accepted when reading) is an open owner question tracked in `notes.md`, not part of this remediation. Closed 2026-10-04.
+- **Resolution:** Fixed in `0c57aef` (plans 3.1 and 3.2). Validated by the known-answer tests, the legacy tests and the KDF cost measured above, and by green CI on `0c57aef` (CI #134, Docker #16, Security #139), confirmed on 2026-10-04. Q-008 (whether to lower the Argon2id settings accepted when reading) is an open owner question tracked in `notes.md`, not part of this remediation. Closed 2026-10-04. Update (2026-10-04): Q-008 is answered; the owner keeps the read limits (1 GiB, 10 passes, 16 lanes) as they are.
 
 ### SEC-006 — Directory encryption stages plaintext in the system temp directory
 
@@ -644,6 +664,28 @@ These apply to all changes.
 ### SEC-010 — Database created world-readable in the current directory on every run
 
 - **Status:** In Progress
+- **Progress (2026-10-04, step 3, plan 3.5; Q-003 answered; not yet committed):** the
+  default key store is per user. Without `CRYPTARE_DB_PATH`, `databasePath` uses
+  `cryptare/cryptare.db` in the user data folder (`%LocalAppData%` on Windows,
+  `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share`
+  elsewhere); a folder that isn't absolute is an error naming `CRYPTARE_DB_PATH`, never
+  the current folder. The opener creates the folder 0700, still only for the `keys`
+  commands and the TUI. Owner's migration choice: notice only. A `cryptare.db` in the
+  current folder gets a notice on stderr suggesting `mv` (or `move`) when the new store
+  doesn't exist, or `CRYPTARE_DB_PATH` when it does; it is never opened. New
+  `cryptare keys path` prints the path without creating anything.
+  - Tests: `TestDatabasePathDefaultsToDataFolder`, `TestUserDataDir` (10 cases across
+    Linux, FreeBSD, macOS and Windows), `TestDatabaseOpenerUsesPrivateDataFolder`
+    (folder 0700, file 0600, nothing in the current folder), `TestLegacyDatabaseNotice`
+    and `TestQuotePath`. The existing `main` package tests pass with the new opener.
+  - Real binaries, umask 022: `keys generate` from the v1.2.0 source (`89a64e8`)
+    created `./cryptare.db`; the new build's `--help` and `encrypt` created nothing,
+    `keys path` printed the new path and the notice and created nothing, and `keys
+    list` created `~/.local/share` and `cryptare/` at 0700 and the store at 0600, left
+    `./cryptare.db` byte-identical, and listed the old key once moved as suggested or
+    with `CRYPTARE_DB_PATH=./cryptare.db`. With `HOME` unset the commands fail with
+    the `CRYPTARE_DB_PATH` hint.
+  - Closes once committed and CI passes on Linux, macOS and Windows.
 - **Progress (2026-10-04, plan 5.8; not yet committed):** the path gap is fixed.
   `databaseFilePath` works out the file SQLite will open: a plain path, or the
   percent-decoded path of a `file:` URI (read-only `mode=ro` URIs aren't created;
@@ -846,6 +888,13 @@ These apply to all changes.
 ### SEC-013 — Container runs as root; base images not pinned
 
 - **Status:** In Progress
+- **Progress (2026-10-04, verified on GitHub):** the changes are committed (`eb330a3`,
+  `.dockerignore` in `89a64e8`). Docker #22 and #23 passed: the build resolved both
+  pinned digests, and `--help` plus `keys generate`/`keys list` on a new named volume
+  worked as the image's user. Remaining validation: `docker run --rm --entrypoint id
+  <image> -u` printing 10001, which the workflow log doesn't show. Run it once locally,
+  or add `docker run --rm --entrypoint id "$IMAGE_NAME" -u | grep -qx 10001` to
+  `docker.yml`'s smoke test (a CI change for the owner to approve).
 - **Progress (2026-10-04, plans 4.2 and 5.9; owner approved the `Dockerfile` changes;
   not yet committed):**
   - Step 1: the runtime image creates user and group `cryptare` (10001), gives it
@@ -1033,6 +1082,11 @@ These apply to all changes.
 ### SEC-016 — Key database files from untrusted locations are trusted
 
 - **Status:** In Progress
+- **Progress (2026-10-04, step 3; Q-003 answered; not yet committed):** the key store
+  no longer depends on the current folder: without `CRYPTARE_DB_PATH` it is in the
+  user's own data folder, created 0700, and a `cryptare.db` in the current folder is
+  never opened, only reported (details and validation under SEC-010). Closes with
+  SEC-010 once committed and CI passes.
 - **Progress (2026-10-04, plan 5.8):** the ownership and permission check now also
   covers a database given as a `file:` URI (it used to be skipped).
 - **Progress (2026-10-04):** steps 1 and 2 are committed in `4ba516a`, and CI #136,
@@ -1112,7 +1166,10 @@ These apply to all changes.
 
 ### SEC-017 — GORM's default logger prints SQL with bound values to stdout
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, verified on GitHub):** committed in `eb330a3`, with
+  `TestKeysCommandsKeepStdoutClean` in `89a64e8`; CI #141 and #142 passed on Ubuntu,
+  Windows and macOS, and the change shipped in v1.2.0.
 - **Progress (2026-10-04, plan 5.7; not yet committed):** both remediation steps are
   implemented.
   - `NewDatabase` opens GORM with `logger.Discard.LogMode(logger.Silent)`, so nothing
@@ -1158,13 +1215,21 @@ These apply to all changes.
      "a key with ID … is already stored" for the UNIQUE constraint.
 - **Validation:** CLI tests: `keys export <unknown id>` and a duplicate `keys import`
   write nothing to stdout; the error names the key ID; no output contains the blob.
-- **Resolution:** —
+- **Resolution:** Fixed in `eb330a3` (plan 5.7): a silent GORM logger and typed
+  errors. Validated by `TestKeysCommandsKeepStdoutClean` and
+  `TestDatabaseErrorsAreTyped` (both failing before the fix) and the real-binary
+  comparison above, and by green CI on `89a64e8`. Closed 2026-10-04.
 
 ### SEC-018 — Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities
 
 - **Status:** In Progress. Steps 1–3 are committed (`6a5fcb1`, `b3278ea`) and running
   in CI; the digest pin in step 4 comes with SEC-013, and step 5 is optional. Closes
   once a release built by CD reports go1.26.8.
+- **Progress (2026-10-04, v1.2.0):** CD #4 built and published v1.2.0 from `89a64e8`
+  with the `go.mod` toolchain (1.26.8, through `setup-go`, as in CI), and Docker #23
+  built with `golang:1.26.8-alpine` pinned by digest, so step 4 is done with SEC-013.
+  Remaining: `go version -m` on a v1.2.0 release binary (it needs the asset downloaded,
+  which wasn't done here), then this item closes.
 - **Progress (2026-10-04, verified on GitHub):** on `b3278ea`, `setup-go` installed
   `go version go1.26.8 linux/amd64` (Security #144), the Docker build resolved
   `golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c`
@@ -1274,7 +1339,10 @@ These apply to all changes.
 
 ### SEC-019 — Owner-only permission guarantees don't hold on Windows
 
-- **Status:** In Progress
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04):** the owner committed the README and `maint.md` wording in
+  `eb330a3` and published the same caveat in the v1.2.0 release notes, which completes
+  the documented validation (README review).
 - **Progress (2026-10-04, plan 5.10):** the owner chose to document the limitation
   rather than set ACLs (Q-012). The README (the output-safety list and the
   `CRYPTARE_DB_PATH` row) and `maint.md` §4 now say that on Windows outputs and the
@@ -1304,4 +1372,6 @@ These apply to all changes.
      dependency; making it direct is a `go.mod` change that needs approval.
 - **Validation:** README review. If step 2 is done, a Windows CI test reads the DACL of
   an output file and of an extracted folder.
-- **Resolution:** —
+- **Resolution:** Step 1 done (README and `maint.md` §4, `eb330a3`); step 2 declined by
+  the owner (Q-012), so Windows outputs keep the folder's permissions by design, as
+  documented. Closed 2026-10-04. Reopen if owner-only ACLs are wanted later.

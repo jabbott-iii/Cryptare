@@ -24,6 +24,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Key stores and key exports must never be committed (SEC-003).
+      - name: Refuse committed key material
+        shell: bash
+        run: |
+          if git ls-files | grep -iE '\.(db|db-journal|db-wal|db-shm|ckey)$'; then
+            echo "::error::Key databases or key exports are tracked. Remove them with 'git rm --cached' (SEC-003)."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

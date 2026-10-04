@@ -11,6 +11,8 @@ Status: **In progress.**
     [Completed: CI/CD rework](#completed--cicd-rework-v101-2026-09-24).
   - v1.1.0 (`c47a94f`, tagged 2026-09-25): 1.1, 1.1a, 1.2, 1.3 and 1.5. Phase 1 is
     complete.
+  - v1.2.0 (`89a64e8`, released by CD #4 on 2026-10-04, with the drafted notes): Phases
+    2 and 3.1/3.2, and Phase 5 except 5.17, with 4.2, 4.7 and 4.9.
 - **Owner decisions (2026-09-26):**
   - 0.2 and 0.3 are done.
   - Stored keys should be usable (Q-002 = yes), so 3.4 is approved.
@@ -44,26 +46,36 @@ Status: **In progress.**
   `6a5fcb1` and `b3278ea` (Tier A, 5.1–5.5). CI #136–#138, Docker #18–#20 and
   Security #142–#144 passed (checked on GitHub 2026-10-04); Code Scanning has 0 open
   alerts. SEC-004, SEC-005, SEC-011, SEC-012, SEC-014 and SEC-015 are closed.
-- **In progress:**
-  - 4.9: the README release table still lists Windows arm64, which isn't built (W6).
+- **Committed 2026-10-04:** `eb330a3` and `89a64e8` (round 3: Tier B, Tier C except
+  5.17, Tier D, 4.2, 4.7, 4.9). CI #141/#142, Docker #22/#23 and Security #147/#148
+  passed, and v1.2.0 was released from `89a64e8`. SEC-002, SEC-017 and SEC-019 are
+  closed.
+- **Owner decisions (2026-10-04):** Q-003 = move the default key store to a per-user
+  data folder with a notice-only migration (3.5); Q-005 = no history purge, delete the
+  Copilot branch (already gone) and add a CI guard; Q-006 = `NOTICE` rewrite plus a
+  generated licence file in the release archives (4.5); Q-008 = keep the read limits;
+  Q-009 = NFKC normalisation, byte order mark handling and `golang.org/x/text` as a
+  direct dependency.
+- **Done 2026-10-04, not yet committed (round 4):** 3.5, 4.5, 4.6, the Q-005 CI guard
+  (SEC-003 step 5) and Q-009's password normalisation.
 - **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
   (BUG-015–BUG-024), gaps in five existing items and five owner questions
   (Q-008–Q-012). They are planned in
   [Phase 5](#phase-5--remediation-from-the-2026-10-03-analysis).
 - **Next up:**
-  1. Commit and push the round-3 work (Tier B, Tier C except 5.17, 4.2, 4.7, 4.9,
-     5.19–5.21) and check CI (now with `-race`), Docker (the first non-root build) and
-     Security.
-  2. Cut the next release (owner: `make release VERSION=…`; v1.2.0 suggested, since it
-     adds the version 2 format and new flags) and paste the drafted upgrade notes into
-     it (SEC-002's migration notes included). Then check `go version -m` on its
-     binaries (SEC-018).
-  3. The rest of Phase 3:
-     - 3.3: shared key flows for the CLI and TUI (with 5.17);
-     - 3.4: usable stored keys. It will use the header's reserved key source, 2, and
-       its options need the owner's choices first;
-     - 3.5 waits on Q-003, which SEC-016 makes more urgent.
-  4. What remains of Phase 5: 5.17 (with 3.3).
+  1. Review and commit round 4 (3.5, 4.5, 4.6, the CI guard, Q-009), then check CI on
+     all three systems (the default-path tests run on Windows and macOS there for the
+     first time), Docker and Security. That closes SEC-003, SEC-010 and SEC-016.
+  2. Finish two validations: `go version -m` on a v1.2.0 binary (SEC-018) and
+     `docker run --rm --entrypoint id <image> -u` (SEC-013).
+  3. Decide Q-013 (C libraries in the release binaries; 4.10).
+  4. The next release (v1.3.0 suggested: a new command, a moved key store and a new
+     KDF identifier), with the drafted notes. Its CD run is the first with the new
+     packaging step; check that each archive holds `LICENSE`, `NOTICE` and
+     `THIRD_PARTY_LICENSES.txt`.
+  5. The rest of Phase 3: 3.3 (shared key flows, with 5.17) and 3.4 (usable stored keys,
+     using the header's reserved key source 2; needs the owner's choices first).
+  6. Dependabot PR #26 (`golang.org/x/crypto` 0.57.0), the owner's review.
 
 ## Principles
 
@@ -79,7 +91,7 @@ Status: **In progress.**
 
 | # | Action | Refs | Done when | Status |
 |---|---|---|---|---|
-| 0.1 | Push `aa27461` (removes `cryptare.db`); decide on purging history | SEC-003, Q-005 | `origin/main` no longer tracks `cryptare.db` | **Done** (pushed 2026-09-23; verified 2026-09-24). Purging history (Q-005) is still undecided. |
+| 0.1 | Push `aa27461` (removes `cryptare.db`); decide on purging history | SEC-003, Q-005 | `origin/main` no longer tracks `cryptare.db` | **Done** (pushed 2026-09-23; verified 2026-09-24). Q-005 answered 2026-10-04: no purge; a CI step now refuses tracked key material (SEC-003). |
 | 0.2 | Stop using the master password that was used with the committed DB; discard that key | SEC-003 | Owner confirms | **Done** (2026-09-26): the owner discarded the key. |
 | 0.3 | Mark the v1.0.0 release as broken, or pull its assets | BUG-001, Q-007 | Release page updated | **Done** (2026-09-26): v1.1.0 is released and verified. The owner decided to leave v1.0.0 as it is. |
 | 0.4 | Decide the CGO/release strategy | Q-001 | Decision recorded in `notes.md` | **Done:** a native CGO build per OS, verified by the v1.0.1 release (2026-09-24). |
@@ -159,7 +171,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27, with 3.1; committed in `0c57aef`:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
 | 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
 | 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
-| 3.5 | Per-user default DB path plus migration, if Q-003 = yes | Q-003 |
+| 3.5 | Per-user default DB path plus migration, if Q-003 = yes. **Done 2026-10-04, not yet committed (Q-003 = yes, notice-only migration):** `cryptare/cryptare.db` in the user data folder (`databasePath`, `userDataDir`), its folder created 0700 by the opener; a `cryptare.db` in the current folder gets a notice and is never opened; new `keys path` (SEC-010, SEC-016). | Q-003 |
 | 3.6 | `main.version` variable and a `--version` flag. **Done** (2026-09-24, shipped in v1.0.1). It was moved ahead of 1.4 for W4. | BUG-009, W4 |
 
 ## Phase 4 — Tooling, tests, docs
@@ -167,14 +179,15 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | # | Change | Refs |
 |---|---|---|
 | 4.1 | Pin actions to SHAs; pin gosec and upload its SARIF; triage the findings. **In progress:** pins and SARIF upload shipped in v1.0.1, and the Security workflow succeeded. Remaining: confirm gosec alerts appear in Code Scanning, triage them, and decide on govulncheck. **2026-10-03:** the alerts appear in Code Scanning (10 open), and their dispositions are applied in code: G304 annotated `#nosec`, G301 parent folders now 0700. Remaining: push and confirm the alerts close, delete the stale CodeQL configurations left by the removed `codeql.yml`, and decide on govulncheck. **Done 2026-10-04:** all alerts closed after `4ba516a`; govulncheck runs in Security since `6a5fcb1`; SEC-012 closed. | SEC-012 |
-| 4.2 | Non-root container user; pin images by digest **Done 2026-10-04, not yet committed (owner approved):** non-root user 10001 owning `/app/data`, both images pinned by digest; validated by the Docker workflow on the next push (Docker isn't available in the analysis environment). | SEC-013 (needs approval) |
+| 4.2 | Non-root container user; pin images by digest **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (owner approved):** non-root user 10001 owning `/app/data`, both images pinned by digest; validated by the Docker workflow on the next push (Docker isn't available in the analysis environment). | SEC-013 (needs approval) |
 | 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View`. **Partly done:** `readPassword` (1.1), `ImportKeyFromFile` and a CLI import/export of a legacy key (0.5, `TestLegacyShortPasswordCmds`), and traversal rejection (2.2, `TestExtractRejectsPathTraversal`). **Remaining:** a full CLI export/import round trip and the TUI `View`. | `maint.md` §5 |
 | 4.4 | Add `SECURITY.md` with a private reporting channel | `CONTRIBUTING.md` |
-| 4.5 | Settle the contents of `NOTICE` | Q-006 |
-| 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3) | `notes.md` §3 |
-| 4.7 | Replace the README's release "known issue" callout with a note that v1.0.0 is broken and v1.0.1+ works, and re-verify the install steps. **Unblocked:** v1.0.1 works. Waiting for the owner to pull `3c80050` so the README edit doesn't conflict. **Done 2026-10-04, not yet committed:** the callout now says only v1.0.0 is broken; the install steps add the download commands and were run against v1.1.0. | BUG-001 |
+| 4.5 | Settle the contents of `NOTICE`. **Done 2026-10-04, not yet committed (Q-006):** `NOTICE` holds the project's attribution and points to `THIRD_PARTY_LICENSES.txt`, which `scripts/third-party-licenses.sh` writes in the release job; every archive holds it with `LICENSE` and `NOTICE`. | Q-006 |
+| 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3). **Done 2026-10-04, not yet committed:** `keys.db`, with the Q-003 tests. | `notes.md` §3 |
+| 4.10 | Settle the licensing of the C libraries in the release binaries: static glibc on Linux, MinGW-w64 runtime and libgcc on Windows (owner decision Q-013). | Q-013 |
+| 4.7 | Replace the README's release "known issue" callout with a note that v1.0.0 is broken and v1.0.1+ works, and re-verify the install steps. **Unblocked:** v1.0.1 works. Waiting for the owner to pull `3c80050` so the README edit doesn't conflict. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** the callout now says only v1.0.0 is broken; the install steps add the download commands and were run against v1.1.0. | BUG-001 |
 | 4.8 | Doc follow-ups from the 2026-09-24 review. The owner has fixed the `AGENTS.md` typo and `golang.md`'s `gofmt -s`, and `map.md` already covers `intel/` as a directory. **Remaining (owner):** add `intel/golang.md` to the "Repository Intelligence Documents" list in `AGENTS.md`. | `AGENTS.md`, `intel/` |
-| 4.9 | Post-merge doc updates. **Done 2026-09-24:** the CI/CD table in `map.md`, `maint.md` §6, and the CI description in `CONTRIBUTING.md`. **Remaining:** the README release table (W6), after the owner pulls `3c80050`. **Done 2026-10-04, not yet committed:** the Windows ARM64 row is gone (W6). | W3, W6 |
+| 4.9 | Post-merge doc updates. **Done 2026-09-24:** the CI/CD table in `map.md`, `maint.md` §6, and the CI description in `CONTRIBUTING.md`. **Remaining:** the README release table (W6), after the owner pulls `3c80050`. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** the Windows ARM64 row is gone (W6). | W3, W6 |
 
 ## Phase 5 — Remediation from the 2026-10-03 analysis
 
@@ -204,21 +217,21 @@ docs) can run alongside.
 | # | Change | Refs | Acceptance | Approval |
 |---|---|---|---|---|
 | 5.6 | **Database trust.** On Unix, refuse (or warn about, per Q-010) a database or side file that the user doesn't own or that group or others can write. Escape control characters in every stored field that `keys list` and the TUI show. Bring 3.5 (Q-003) forward. **2026-10-03, committed in `4ba516a`, CI green:** the refusal (Q-010: refuse) and the escaping are done and validated (SEC-016); 3.5 stays separate, as the owner chose not to move the default path in this change. | SEC-016, SEC-011 | The tests listed under SEC-016's validation | Q-010 (answered: refuse) |
-| 5.7 | **Quiet database layer.** Silence GORM's logger (`logger.Silent`, or parameterised and on stderr only when enabled). Turn "record not found" and UNIQUE-constraint errors into clear messages. **Done 2026-10-04, not yet committed:** silent GORM logger with error translation; `ErrKeyNotFound`/`ErrKeyExists` explained with the key ID (SEC-017). | SEC-017 | Failed key commands print nothing on stdout; errors name the key ID | No |
-| 5.8 | **Database path handling.** Build the DSN so the driver opens exactly the file `prepareDatabaseFile` prepared (for example a `file:` URI with the path escaped, plus `_secure_delete=on`), or refuse paths containing `?`. Prepare the file behind a `file:` URI as well. **Done 2026-10-04, not yet committed:** `databaseFilePath`; `?` in a plain path refused; `file:` URIs prepared and trust-checked (SEC-010). | SEC-010 gap | Tests with `?` in a folder name and with a `file:` URI: the database holding the keys is 0600 and no stray file is left | No |
-| 5.9 | **Repository and container hygiene.** Add `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm` to `.gitignore`. Add a `.dockerignore`. Drop `sqlite-libs` and `ca-certificates` from the runtime image, and stamp its version. Do it together with 4.2 (SEC-013: non-root user, digest pins). **Done 2026-10-04, not yet committed (owner approved):** `.gitignore` patterns, `.dockerignore`, runtime packages dropped, version stamped (`ARG VERSION`), `-trimpath`; with 4.2 (SEC-003, SEC-013). | SEC-003, SEC-013 | `git check-ignore` matches the new patterns; the Docker smoke test passes; `docker run --entrypoint id <image> -u` isn't 0 | Yes: Dockerfile |
-| 5.10 | **Windows permissions.** State in the README and `maint.md` §4 that on Windows the output inherits the permissions of the folder it is written to. Optionally set owner-only ACLs (Q-012). **Done 2026-10-04, not yet committed (Q-012: document only):** README and `maint.md` §4 (SEC-019). | SEC-019 | README review; with ACLs, a Windows CI test reads an output's DACL | Q-012; `go.mod` if ACLs |
+| 5.7 | **Quiet database layer.** Silence GORM's logger (`logger.Silent`, or parameterised and on stderr only when enabled). Turn "record not found" and UNIQUE-constraint errors into clear messages. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** silent GORM logger with error translation; `ErrKeyNotFound`/`ErrKeyExists` explained with the key ID (SEC-017). | SEC-017 | Failed key commands print nothing on stdout; errors name the key ID | No |
+| 5.8 | **Database path handling.** Build the DSN so the driver opens exactly the file `prepareDatabaseFile` prepared (for example a `file:` URI with the path escaped, plus `_secure_delete=on`), or refuse paths containing `?`. Prepare the file behind a `file:` URI as well. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `databaseFilePath`; `?` in a plain path refused; `file:` URIs prepared and trust-checked (SEC-010). | SEC-010 gap | Tests with `?` in a folder name and with a `file:` URI: the database holding the keys is 0600 and no stray file is left | No |
+| 5.9 | **Repository and container hygiene.** Add `*.ckey`, `*.db-journal`, `*.db-wal` and `*.db-shm` to `.gitignore`. Add a `.dockerignore`. Drop `sqlite-libs` and `ca-certificates` from the runtime image, and stamp its version. Do it together with 4.2 (SEC-013: non-root user, digest pins). **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (owner approved):** `.gitignore` patterns, `.dockerignore`, runtime packages dropped, version stamped (`ARG VERSION`), `-trimpath`; with 4.2 (SEC-003, SEC-013). | SEC-003, SEC-013 | `git check-ignore` matches the new patterns; the Docker smoke test passes; `docker run --entrypoint id <image> -u` isn't 0 | Yes: Dockerfile |
+| 5.10 | **Windows permissions.** State in the README and `maint.md` §4 that on Windows the output inherits the permissions of the folder it is written to. Optionally set owner-only ACLs (Q-012). **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (Q-012: document only):** README and `maint.md` §4 (SEC-019). | SEC-019 | README review; with ACLs, a Windows CI test reads an output's DACL | Q-012; `go.mod` if ACLs |
 
 ### Tier C — lower-severity bugs
 
 | # | Change | Refs | Acceptance |
 |---|---|---|---|
-| 5.11 | **Containment by file identity.** In `checkOutputOutsideDir` and `checkInputOutsideOutput`, walk up from the output's or input's parent comparing folders with `os.SameFile`, instead of comparing spellings. Reuse it in 5.3. **Done 2026-10-04, not yet committed:** `pathWithin` also compares folders by identity (`os.SameFile`) while walking up from the path. | BUG-019 | Tests with a symlinked spelling; a letter-case test on the macOS and Windows runners |
-| 5.12 | **Validate compression options.** Refuse an explicit `--format` that contradicts the output's extension, and a `--level` outside 1–9 (−1 stays the default), in the CLI and TUI. Behaviour change for scripts: owner to confirm, README note. **Done 2026-10-04, not yet committed (behaviour change confirmed):** `resolveCompressFormat` refuses contradictions (`ErrFormatMismatch`); `checkCompressLevel` in the CLI and TUI (`ErrInvalidLevel`). | BUG-020 | CLI and TUI tests for each case |
-| 5.13 | **Shorter temporary names.** Cap the part of the output name copied into temporary file and folder names (for example 64 bytes, cut at a UTF-8 boundary). **Done 2026-10-04, not yet committed:** `tempNamePart` (64 bytes at a UTF-8 boundary) for temporary files and folders. | BUG-021 | Encrypt, decrypt, compress and extract all succeed with a 251-byte name |
-| 5.14 | **Explicit empty password.** Treat `--password` as given when `Flags().Changed("password")`. **Done 2026-10-04, not yet committed:** `passwordFlags.get` uses `Flags().Changed("password")`. | BUG-023 | CLI test: `--password ""` decrypts a legacy empty-password file without reading stdin |
-| 5.15 | **Size caps for whole-file reads.** Refuse a `.ckey` above a small limit (for example 1 MiB). Refuse a legacy-format input above a cap the owner chooses, before reading it, with a clear error. **Done 2026-10-04, not yet committed:** key exports capped at 1 MiB (`ErrInputTooLarge`); legacy-format inputs capped by `--max-size` (owner decision), checked before reading. | BUG-024 | Oversized inputs fail fast with a clear message |
-| 5.16 | **Single `.tar` files.** Per Q-011: a gunzip-only option, recording the input type, or documentation. **Done 2026-10-04, not yet committed (Q-011: `--raw`):** `GunzipFileContext`, `decompress --raw` (CLI only; the TUI always extracts). | BUG-022, Q-011 | `compress x.tar` followed by `decompress` gives `x.tar` back, or the documented route does |
+| 5.11 | **Containment by file identity.** In `checkOutputOutsideDir` and `checkInputOutsideOutput`, walk up from the output's or input's parent comparing folders with `os.SameFile`, instead of comparing spellings. Reuse it in 5.3. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `pathWithin` also compares folders by identity (`os.SameFile`) while walking up from the path. | BUG-019 | Tests with a symlinked spelling; a letter-case test on the macOS and Windows runners |
+| 5.12 | **Validate compression options.** Refuse an explicit `--format` that contradicts the output's extension, and a `--level` outside 1–9 (−1 stays the default), in the CLI and TUI. Behaviour change for scripts: owner to confirm, README note. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (behaviour change confirmed):** `resolveCompressFormat` refuses contradictions (`ErrFormatMismatch`); `checkCompressLevel` in the CLI and TUI (`ErrInvalidLevel`). | BUG-020 | CLI and TUI tests for each case |
+| 5.13 | **Shorter temporary names.** Cap the part of the output name copied into temporary file and folder names (for example 64 bytes, cut at a UTF-8 boundary). **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `tempNamePart` (64 bytes at a UTF-8 boundary) for temporary files and folders. | BUG-021 | Encrypt, decrypt, compress and extract all succeed with a 251-byte name |
+| 5.14 | **Explicit empty password.** Treat `--password` as given when `Flags().Changed("password")`. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `passwordFlags.get` uses `Flags().Changed("password")`. | BUG-023 | CLI test: `--password ""` decrypts a legacy empty-password file without reading stdin |
+| 5.15 | **Size caps for whole-file reads.** Refuse a `.ckey` above a small limit (for example 1 MiB). Refuse a legacy-format input above a cap the owner chooses, before reading it, with a clear error. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** key exports capped at 1 MiB (`ErrInputTooLarge`); legacy-format inputs capped by `--max-size` (owner decision), checked before reading. | BUG-024 | Oversized inputs fail fast with a clear message |
+| 5.16 | **Single `.tar` files.** Per Q-011: a gunzip-only option, recording the input type, or documentation. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (Q-011: `--raw`):** `GunzipFileContext`, `decompress --raw` (CLI only; the TUI always extracts). | BUG-022, Q-011 | `compress x.tar` followed by `decompress` gives `x.tar` back, or the documented route does |
 | 5.17 | **Export password clarity.** Name the prompt and flag help for what they set (the password that protects the export file), and check the key's master password before exporting. Do it with 3.3. | BUG-011 | CLI and TUI tests: a wrong master password is refused; the prompts name the right password |
 
 ### Tier D — tooling and documentation
@@ -226,9 +239,9 @@ docs) can run alongside.
 | # | Change | Refs |
 |---|---|---|
 | 5.18 | Run what the 2026-10-03 analysis couldn't: golangci-lint v2.13.2, gosec v2.29.0 and govulncheck. Triage gosec in Code Scanning (4.1). **Done 2026-10-04:** CI runs golangci-lint v2.13.2 and Security runs gosec v2.29.0 and govulncheck v1.8.0 on every push, all passing on `b3278ea`; gosec and actionlint were also run locally on 2026-10-03. | SEC-012, SEC-018 |
-| 5.19 | Run `go test -race` in CI on Linux and macOS. Needs owner approval (CI change). **Done 2026-10-04, not yet committed (owner approved):** `-race` on the Linux and macOS jobs of `ci.yml`. | `maint.md` §7 |
-| 5.20 | Docs: the README claims that don't hold yet (`notes.md` §3) and `CONTRIBUTING.md`'s CGO statement. Until 5.2–5.5 ship, add README notes on Unicode folder names, `keys export` overwriting and interrupted runs. **Done 2026-10-04, not yet committed:** the README claims hold since Tier A, Windows is documented (5.10), and `CONTRIBUTING.md`'s CGO statement is corrected. | `notes.md` §3 |
-| 5.21 | Fuzz the code that reads untrusted input with Go's built-in fuzzing: `parseV2Header` and `decryptingReader`, `validateKeyExport`, `parseSize`, `extractTarGz` and `extractZipEntries`. **Done 2026-10-04, not yet committed:** `internal/fuzz_test.go` with six targets (header, decrypting reader, key export, `parseSize`, tar and zip extraction); CI runs their seeds. Each ran 25–35 s of coverage-guided fuzzing without a failure, except `FuzzExtractTar`, whose worker stalls in this analysis environment inside Go runtime code; 80,000 uninstrumented fuzz inputs and a 200,000-input mutation stress of tar extraction found no hang, slow input or write outside the output folder. Run it on a normal machine to confirm. | `maint.md` §5 |
+| 5.19 | Run `go test -race` in CI on Linux and macOS. Needs owner approval (CI change). **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (owner approved):** `-race` on the Linux and macOS jobs of `ci.yml`. | `maint.md` §7 |
+| 5.20 | Docs: the README claims that don't hold yet (`notes.md` §3) and `CONTRIBUTING.md`'s CGO statement. Until 5.2–5.5 ship, add README notes on Unicode folder names, `keys export` overwriting and interrupted runs. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** the README claims hold since Tier A, Windows is documented (5.10), and `CONTRIBUTING.md`'s CGO statement is corrected. | `notes.md` §3 |
+| 5.21 | Fuzz the code that reads untrusted input with Go's built-in fuzzing: `parseV2Header` and `decryptingReader`, `validateKeyExport`, `parseSize`, `extractTarGz` and `extractZipEntries`. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `internal/fuzz_test.go` with six targets (header, decrypting reader, key export, `parseSize`, tar and zip extraction); CI runs their seeds. Each ran 25–35 s of coverage-guided fuzzing without a failure, except `FuzzExtractTar`, whose worker stalls in this analysis environment inside Go runtime code; 80,000 uninstrumented fuzz inputs and a 200,000-input mutation stress of tar extraction found no hang, slow input or write outside the output folder. Run it on a normal machine to confirm. | `maint.md` §5 |
 
 ### Decisions and approvals Phase 5 needs
 
@@ -236,8 +249,8 @@ docs) can run alongside.
   5.10's ACLs weren't wanted (Q-012).
 - **Behaviour changes to confirm:** 5.2 and 5.3 were confirmed on 2026-10-03, and 5.12
   on 2026-10-04.
-- **Questions:** Q-003 (now more urgent because of SEC-016), Q-008 (Argon2id read limit),
-  Q-009 (Unicode normalisation). Answered: Q-010 (2026-10-03: refuse), Q-011 (2026-10-04:
-  `--raw`), Q-012 (2026-10-04: document only).
-- **Release:** a patch release once Tier A is merged. Its notes should also carry
-  SEC-002's outstanding migration notes.
+- **Questions:** all answered. Q-010 (2026-10-03: refuse), Q-011 (2026-10-04: `--raw`),
+  Q-012 (2026-10-04: document only), and on 2026-10-04 Q-003 (per-user store, notice-only
+  migration), Q-008 (keep the limits) and Q-009 (NFKC, byte order mark, `x/text`).
+- **Release:** v1.2.0 shipped Tiers A–D (except 5.17) on 2026-10-04, with SEC-002's
+  migration notes.

@@ -19,6 +19,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/jabbott-iii/Cryptare/internal"
@@ -30,7 +31,7 @@ import (
 var version = "dev"
 
 func main() {
-	rootCmd := newRootCmd(databaseOpener())
+	rootCmd := newRootCmd(databaseOpener(os.Stderr))
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(exitCode(err))
 	}
@@ -47,13 +48,23 @@ func exitCode(err error) int {
 	return 1
 }
 
-// databaseOpener opens the key database at CRYPTARE_DB_PATH (default ./cryptare.db).
-// The CLI calls it only for the keys commands and the TUI, so other commands never
-// create the database file. A database refused as untrusted (SEC-016) gets a hint
-// about CRYPTARE_DB_PATH.
-func databaseOpener() internal.DatabaseOpener {
-	path := databasePathFromEnv()
+// databaseOpener opens the key database at CRYPTARE_DB_PATH or, when that isn't set,
+// at the default path in the user's data folder (databasePath), creating that folder
+// first and writing noticeLegacyDatabase's notice, if any, to stderr. The CLI calls it
+// only for the keys commands and the TUI, so other commands never create anything. A
+// database refused as untrusted (SEC-016) gets a hint about CRYPTARE_DB_PATH.
+func databaseOpener(stderr io.Writer) internal.DatabaseOpener {
 	return func() (*internal.Database, error) {
+		path, fromEnv, err := databasePath()
+		if err != nil {
+			return nil, err
+		}
+		if !fromEnv {
+			noticeLegacyDatabase(stderr, path)
+			if err := prepareDefaultDatabaseFolder(path); err != nil {
+				return nil, err
+			}
+		}
 		db, err := internal.NewDatabase(path)
 		if errors.Is(err, internal.ErrUntrustedDatabase) {
 			return nil, fmt.Errorf("%w; set %s to use a key database of your own", err, databasePathEnv)
@@ -62,10 +73,14 @@ func databaseOpener() internal.DatabaseOpener {
 	}
 }
 
-// newRootCmd returns the CLI root command with the build version attached;
-// a non-empty Version makes Cobra register the --version flag.
+// newRootCmd returns the CLI root command with the build version attached (a
+// non-empty Version makes Cobra register the --version flag) and "keys path", which
+// needs databasePath from this package.
 func newRootCmd(open internal.DatabaseOpener) *cobra.Command {
 	cmd := internal.NewRootCmdLazy(open)
 	cmd.Version = version
+	if keys, _, err := cmd.Find([]string{"keys"}); err == nil && keys != cmd {
+		keys.AddCommand(newKeysPathCmd())
+	}
 	return cmd
 }

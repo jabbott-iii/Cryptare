@@ -36,6 +36,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -83,15 +85,56 @@ func deriveKey(password string, salt []byte) ([]byte, error) {
 	return key, nil
 }
 
+// byteOrderMark is U+FEFF. Editors such as Windows Notepad can start a UTF-8 text file
+// with it, so a password read from a password file may begin with one the user never
+// typed.
+const byteOrderMark = "\uFEFF"
+
+// normalizePassword returns the form of password that protects new data (Q-009): without
+// a leading byte order mark, and in Unicode Normalization Form KC, as NIST SP 800-63B
+// recommends. The same characters entered on different keyboards, systems or input
+// methods, such as a precomposed "é" or an "e" followed by a combining accent, or a
+// full-width "Ａ" and an "A", then give the same key. Bytes that aren't valid UTF-8 are
+// kept as they are.
+func normalizePassword(password string) string {
+	return norm.NFKC.String(strings.TrimPrefix(password, byteOrderMark))
+}
+
+// passwordCandidates returns the forms of password to try, in order, when decrypting.
+// Data whose header records the normalised form (kdfArgon2idNFKC) takes only that.
+// Other data, written by an earlier version, in the legacy formats, or by this version
+// with a password that normalising doesn't change, takes the password without a
+// leading byte order mark, then the password as given if it had one, then its
+// normalised form if that differs. So data protected through a password file with a
+// byte order mark opens with the password typed, and data protected with a password
+// in normalised form opens however the password is entered now.
+func passwordCandidates(password string, normalized bool) []string {
+	stripped := strings.TrimPrefix(password, byteOrderMark)
+	nfkc := norm.NFKC.String(stripped)
+	if normalized {
+		return []string{nfkc}
+	}
+	candidates := []string{stripped}
+	if stripped != password {
+		candidates = append(candidates, password)
+	}
+	if nfkc != stripped {
+		candidates = append(candidates, nfkc)
+	}
+	return candidates
+}
+
 // CheckPasswordPolicy reports whether password may protect new data: encrypted files
 // and directories, stored keys and key exports. It returns ErrEmptyPassword for an
 // empty password and ErrWeakPassword for one that is shorter than MinPasswordLength
 // Unicode code points or is a single character repeated. There are no composition
-// rules and no maximum length.
+// rules and no maximum length. It checks the normalised password (normalizePassword),
+// which is what protects the data.
 //
 // Passwords used to decrypt or import are not checked, so data protected before the
 // policy existed stays readable.
 func CheckPasswordPolicy(password string) error {
+	password = normalizePassword(password)
 	if password == "" {
 		return ErrEmptyPassword
 	}
@@ -341,7 +384,8 @@ func decryptBytes(data []byte, password string) ([]byte, error) {
 }
 
 // decryptBytesWithAAD decrypts the legacy (version 1) layout: salt ‖ nonce ‖ ciphertext,
-// with a PBKDF2 key.
+// with a PBKDF2 key derived from each form of password that may have protected it
+// (passwordCandidates).
 func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, error) {
 	if len(data) < saltLen+ivLen {
 		return nil, errors.New("file too small to be a valid encrypted file")
@@ -351,25 +395,24 @@ func decryptBytesWithAAD(data []byte, password string, aad []byte) ([]byte, erro
 	iv := data[saltLen : saltLen+ivLen]
 	ciphertext := data[saltLen+ivLen:]
 
-	key, err := deriveKey(password, salt)
-	if err != nil {
-		return nil, err
+	for _, candidate := range passwordCandidates(password, false) {
+		key, err := deriveKey(candidate, salt)
+		if err != nil {
+			return nil, err
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return nil, fmt.Errorf("create cipher: %w", err)
+		}
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			return nil, fmt.Errorf("create GCM: %w", err)
+		}
+		if plaintext, err := gcm.Open(nil, iv, ciphertext, aad); err == nil {
+			return plaintext, nil
+		}
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("create GCM: %w", err)
-	}
-
-	plaintext, err := gcm.Open(nil, iv, ciphertext, aad)
-	if err != nil {
-		return nil, errDecrypt
-	}
-	return plaintext, nil
+	return nil, errDecrypt
 }
 
 // restoreDirectoryArchive extracts the decrypted tar.gz of an encrypted directory
