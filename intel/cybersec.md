@@ -245,7 +245,7 @@ remains.
 - **Affected component:** `Dockerfile`; the published image.
 - **Remediation:** the image runs as UID 10001, which owns `/app/data`; both base images
   are pinned by digest; a `.dockerignore` keeps the build context to the sources;
-  `docker.yml` and CD's container job check the UID before an image is used or pushed.
+  `docker.yml` and CD's image builds check the UID before an image is used or pushed.
 - **Fixed in:** `eb330a3`, `89a64e8` (v1.2.0); UID checks in `c114573`.
 - **Validation:** Docker workflow smoke tests passed; the UID check prints 10001.
 - **Open:** the UID check's first passing run in CI closes this item.
@@ -307,7 +307,7 @@ remains.
 ### SEC-020 — Release files had no verifiable proof of origin
 
 - **Severity:** Low · **Status:** In Progress
-- **Affected component:** `cd.yml` (release and container jobs); releases up to v1.3.1.
+- **Affected component:** `cd.yml` (release and image-attest jobs); releases up to v1.3.1.
 - **Remediation:** signed build provenance (`actions/attest`) for every release archive,
   `checksums.txt` and the container image on GitHub Packages, with verification steps
   in the README. Optional, by audience: macOS notarisation and Windows code signing.

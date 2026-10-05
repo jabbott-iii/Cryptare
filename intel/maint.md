@@ -383,17 +383,23 @@ These are observed in the codebase and required for new code:
   release job also attaches signed build provenance (`actions/attest`) to each of those
   files (SEC-020), which users check with `gh attestation verify <file> --repo
   jabbott-iii/Cryptare`; that job alone has `id-token: write` and `attestations: write`.
-  After it, the `container` job builds the `Dockerfile` (stamped with the tag, with OCI
-  labels whose `source` links the package to the repository), smoke-tests the image
-  (`--version`, UID 10001, `keys generate`/`keys list`), and pushes it to GitHub
-  Packages as `ghcr.io/<owner>/cryptare` with the tags `X.Y.Z`, plus `X.Y` and `latest`
-  when this is the newest release of its line and overall (checked against the
-  repository's tags, so an older patch release doesn't move them back; pre-releases get
-  only their own tag). It attests the image digest and pushes the attestation to the
-  registry (`create-storage-record: false`: storage records are for organisation
-  repositories). It uses plain `docker` commands, not third-party actions, and only it
-  has `packages: write`. A manual CD run builds and smoke-tests the image without
-  pushing.
+  The container image is built in the `build` job on the linux/amd64 and linux/arm64
+  runners: each builds the `Dockerfile` natively (stamped with the tag, with OCI labels
+  whose `source` links the package to the repository, BuildKit provenance off),
+  smoke-tests it (`--version`, UID 10001, `keys generate`/`keys list`) and saves it as
+  an artifact, so a failing image stops the release. After the release job, the `image`
+  job pushes `ghcr.io/<owner>/cryptare:X.Y.Z-amd64` and `X.Y.Z-arm64`, then joins them
+  into one multi-platform index (`docker buildx imagetools create`, with the description
+  and source as index annotations) tagged `X.Y.Z`, plus `X.Y` and `latest` when this is
+  the newest release of its line and overall (checked against the repository's tags,
+  so an older patch release doesn't move them back; pre-releases get only their own
+  tag). The index is pushed last, so the package page offers it as the install command.
+  The `image` job only has `packages: write`, checks out and builds nothing, and uses
+  plain `docker` commands, not third-party actions. The `image-attest` job then attests
+  the index digest, storing the attestation with the repository's attestations, not in
+  the registry, where GitHub Packages would list it as a `sha256-<digest>` tag
+  (`create-storage-record: false`: storage records are for organisation repositories).
+  A manual CD run builds and smoke-tests the images without pushing.
 - **Licences in releases (Q-006):** each archive holds the binary, `LICENSE`, `NOTICE`
   (the project's own attribution only) and `THIRD_PARTY_LICENSES.txt`. The release job
   generates the last with `scripts/third-party-licenses.sh`, which lists the modules
@@ -411,8 +417,9 @@ These are observed in the codebase and required for new code:
   `-ldflags "-X main.version=<tag>"` (as `cd.yml` does), and `cryptare --version` (or
   `-v`) prints `cryptare version <value>`. Keep the variable's name and package stable,
   because the release workflow depends on it.
-- **Docker:** the `Dockerfile` builds with CGO for `linux/amd64` only (`GOARCH=amd64`),
-  from images pinned by digest, and the runtime runs as user 10001, which owns
+- **Docker:** the `Dockerfile` builds with CGO for the platform it is built on (CD builds
+  linux/amd64 and linux/arm64 on native runners), from images pinned by multi-platform
+  digest, and the runtime runs as user 10001, which owns
   `/app/data` (SEC-013). It adds no runtime packages. `.dockerignore` keeps the build
   context to the sources. When the toolchain line in `go.mod` changes, update the
   builder's tag and digest with it.

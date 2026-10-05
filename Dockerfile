@@ -11,12 +11,15 @@ RUN apk add --no-cache build-base
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source and build. VERSION is what --version reports (default "dev").
+# Copy source and build. VERSION is what --version reports (default "dev"). The
+# binary is built for the platform the image is built on (go-sqlite3 needs CGO, which
+# doesn't cross-compile with the native toolchain): CD builds linux/amd64 and
+# linux/arm64 on runners of each.
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/cryptare .
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/cryptare .
 
-# Runtime, pinned by digest (SEC-013). No packages are added: go-sqlite3 compiles
+# Runtime, pinned by digest (SEC-013); both base images' digests are multi-platform. No packages are added: go-sqlite3 compiles
 # SQLite into the binary, and Cryptare makes no network connections.
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 

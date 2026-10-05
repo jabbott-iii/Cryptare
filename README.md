@@ -270,7 +270,7 @@ Command flags (`--output`, `--password-file`, `--password`, `--key`, `--format`,
 
 ## Docker
 
-Releases after v1.3.1 publish the image to GitHub Packages as `ghcr.io/jabbott-iii/cryptare`, tagged with the version (for example `1.4.0`), its minor line (`1.4`) and `latest`; the last two follow the newest release. It is built for `linux/amd64`. To use it without building:
+Releases after v1.3.1 publish the image to GitHub Packages as `ghcr.io/jabbott-iii/cryptare`, tagged with the version (for example `1.4.0`), its minor line (`1.4`) and `latest`; the last two follow the newest release. Releases after v1.3.2 publish one image for `linux/amd64` and `linux/arm64`, so `docker pull` fetches the one for your machine, and also tag each platform's image on its own (`1.4.0-amd64`, `1.4.0-arm64`); earlier images are `linux/amd64` only. To use it without building:
 
 ```bash
 docker pull ghcr.io/jabbott-iii/cryptare:latest
@@ -280,7 +280,7 @@ gh attestation verify oci://ghcr.io/jabbott-iii/cryptare:latest --repo jabbott-i
 
 Use the published image in the commands below in place of `cryptare:latest`, or build your own.
 
-The image builds Cryptare with CGO enabled for `linux/amd64`, from base images pinned by digest. It runs as an unprivileged user (UID and GID 10001), sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume owned by that user, so a named volume works as is. A bind-mounted host folder is owned by your host user instead, so run the container as that user with `--user "$(id -u):$(id -g)"`; the key store's ownership check (SEC-016) then passes too. Build with `--build-arg VERSION=<tag>` to set what `--version` reports (default `dev`).
+The image builds Cryptare with CGO enabled for the platform it is built on (`linux/amd64` or `linux/arm64`), from base images pinned by digest. It runs as an unprivileged user (UID and GID 10001), sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume owned by that user, so a named volume works as is. A bind-mounted host folder is owned by your host user instead, so run the container as that user with `--user "$(id -u):$(id -g)"`; the key store's ownership check (SEC-016) then passes too. Build with `--build-arg VERSION=<tag>` to set what `--version` reports (default `dev`).
 
 ### Build
 ```bash

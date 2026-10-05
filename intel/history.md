@@ -665,3 +665,35 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 - **Changed:** `main.go`, `pkg/` (package clause, moved files, new `run.go`),
   `Makefile`, `README.md`, `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`,
   `intel/notes.md`, `intel/cybersec.md`, this file. Not committed.
+
+## 2026-10-05 — Multi-platform container image; attestation no longer in the registry
+
+- **Why:** the GitHub Packages page offered `docker pull ghcr.io/jabbott-iii/cryptare:sha256-…`
+  as the install command, because the image attestation was pushed to the registry
+  (`push-to-registry: true`), where GitHub Packages stores it as a `sha256-<digest>` tag
+  and shows it as the newest version. The page also showed no OS/arch: the image was
+  linux/amd64 only. The owner asked for a page like Munus's.
+- **`cd.yml`:** following Munus's layout, the linux/amd64 and linux/arm64 `build` legs
+  build the image natively (`--provenance=false`), smoke-test it (`--version`, UID 10001,
+  `keys generate`/`keys list`) and upload it as an artifact. The `container` job is
+  replaced by `image` (only `packages: write`; no checkout or build), which pushes
+  `X.Y.Z-amd64` and `X.Y.Z-arm64`, then one multi-platform index (`docker buildx
+  imagetools create`, description and source as index annotations) tagged `X.Y.Z`, and
+  `X.Y`/`latest` by the same newest-release rule as before; and `image-attest` (OIDC,
+  no package access), which attests the index digest without pushing to the registry.
+  SEC-020's remediation is unchanged: the image is attested, and `gh attestation verify
+  oci://…` reads the attestation from GitHub. A failing image build now stops the
+  release instead of following it.
+- **`Dockerfile`:** builds for the platform it runs on (no `GOARCH=amd64`); both pinned
+  base image digests are multi-platform indexes that include linux/arm64 (checked on
+  Docker Hub).
+- **Validation:** actionlint 1.7.12 with shellcheck 0.11.0 reports nothing for the
+  workflows; the `image` job's push script, run against stub `docker`, `git` and `jq`,
+  gives the expected tags for a newest release (`X.Y.Z`, `X.Y`, `latest`), an older
+  line's patch (`X.Y.Z`, `X.Y`), a pre-release (its own tag only) and rejects a
+  malformed tag. Not run: the workflow itself, Docker builds (no Docker here).
+- **Owner action:** the `sha256-cc8c…` version that v1.3.2's attestation left in the
+  package stays listed until it is deleted in the package settings.
+- **Changed:** `.github/workflows/cd.yml`, `Dockerfile`, `README.md`,
+  `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`, this file.
+  Not committed.

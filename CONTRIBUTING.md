@@ -104,8 +104,8 @@ round-trip. On every push and pull request, CodeQL, gosec and govulncheck also r
 (`security.yml`), and Dependabot proposes Go module, action and Docker base image updates weekly. Pull requests to `main` get a Docker build smoke test
 (`docker.yml`), which also checks that the image runs as UID 10001. Tagged releases attach a
 signed build provenance attestation to every published file and, after the release, publish
-the Docker image to GitHub Packages (`ghcr.io/<owner>/cryptare`) with its own attestation
-(`cd.yml`).
+the Docker image for `linux/amd64` and `linux/arm64` to GitHub Packages
+(`ghcr.io/<owner>/cryptare`) with its own attestation (`cd.yml`).
 
 ## Coding expectations
 
