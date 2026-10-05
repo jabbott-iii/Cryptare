@@ -1328,3 +1328,39 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   with the round's other workflow changes), `README.md`, `CONTRIBUTING.md`,
   `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`, `intel/notes.md`,
   `intel/plan.md` and this file. Not committed.
+
+## 2026-10-05 — Round 6 (continued): Makefile targets for contributors
+
+- **Owner request:** a Makefile for full contributor building and testing. It held only
+  the release-tagging targets (`tag`, `push-tag`, `release`), which are kept as they were.
+- **Targets:** `make check` runs what `ci.yml` runs, in its order and failing fast:
+  `fmt-check`, `tidy-check` (`go mod tidy -diff`, which changes nothing), `keys-check` (the
+  SEC-003 guard), `vet`, `lint`, `test-race`, `smoke` (CI's smoke test on `bin/cryptare` in
+  a temporary folder with its own key store, plus a stored-key round trip).
+  `make check-all` adds `security` (`sec`: gosec, `vuln`: govulncheck) and `actionlint`.
+  Also `build` (`bin/cryptare`, CGO, `-trimpath`, stamped with `git describe` through
+  `BUILD_VERSION`, so the release targets keep `VERSION`), `test`, `cover`, `cover-html`,
+  `golden`, `fuzz` (`FUZZ`, `FUZZTIME`, `-fuzzminimizetime 3s`), `fmt`, `docker-build`,
+  `docker-smoke` (docker.yml's checks: UID 10001, version, key store on a throwaway
+  volume), `clean`, and a `help` generated from the targets' comments (the default goal).
+- **Tools:** golangci-lint v2.13.2, gosec v2.29.0, govulncheck v1.8.0 and actionlint
+  v1.7.12 run through `go run pkg@version` (the workflows' versions, checked by the Go
+  checksum database, nothing to install); each is a variable that can point at an
+  installed binary. GNU Make 3.81 (macOS) features only; bash recipes.
+- **Also:** `/bin/` in `.gitignore`, `bin` in `.dockerignore`; `CONTRIBUTING.md`
+  (prerequisites, build, a validation table), README "Testing and quality checks",
+  `intel/maint.md` §7, `intel/map.md`, `intel/notes.md` §5, `intel/plan.md` (6.15).
+- **Validation** (GNU Make 4.3, Go 1.26.8, linux/amd64): `make help`, `build`, `smoke`,
+  `test`, `golden`, `fmt-check`, `vet`, `keys-check`, `cover` (81.2%), `cover-html`,
+  `fuzz FUZZ=FuzzExtractTar FUZZTIME=5s` and `clean` pass, and the whole `make check`
+  chain passes in about a minute (with `tidy-check` skipped, below). `lint`, `sec` and
+  `actionlint` pass with the tool variables pointed at the same versions' binaries.
+  `fmt-check` fails on an unformatted file and `keys-check` on a tracked `.db`, each
+  naming the file. `go mod tidy -diff` was checked on a scratch module: it prints the
+  diff, exits 1 and leaves `go.mod` alone when untidy, and exits 0 when tidy.
+  **Not run here:** `tidy-check` on this repository and the default `go run` tool
+  downloads (the module proxy is unreachable in the analysis environment), `vuln`
+  (database unreachable), the `docker-*` targets (no registry access), and GNU Make 3.81.
+- **Changed:** `Makefile`, `.gitignore`, `.dockerignore`, `CONTRIBUTING.md`, `README.md`,
+  `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not
+  committed.

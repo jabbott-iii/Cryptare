@@ -421,7 +421,8 @@ These are observed in the codebase and required for new code:
 
 ## 7. Change checklist
 
-Before opening a pull request:
+Before opening a pull request (`make check-all` runs the automated steps 1–4, plus gosec
+and govulncheck; `make check` runs exactly what `ci.yml` runs):
 
 1. `gofmt -s -l .` prints nothing. No key database or key export (`*.db`, its SQLite
    side files, `*.ckey`) is tracked; CI fails if one is (SEC-003).

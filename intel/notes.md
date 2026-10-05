@@ -186,7 +186,9 @@ discussion is in `history.md`.
 
 ## 5. Reproducing the validation locally
 
-From the repository root, on a machine with Go 1.26 and a C compiler:
+From the repository root, on a machine with Go 1.26 and a C compiler, `make check-all`
+runs the first seven at their CI versions (and the smoke test); `make fuzz FUZZ=… FUZZTIME=…`
+runs the last. By hand:
 
 ```bash
 gofmt -s -l .

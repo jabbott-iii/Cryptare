@@ -309,16 +309,16 @@ docker run --rm -it --user "$(id -u):$(id -g)" -v ~/.cryptare:/app/data cryptare
 
 ## Testing and quality checks
 
-Run these from the repository root (they mirror CI):
+Run these from the repository root (GNU Make and bash; `make help` lists every target):
 
 ```bash
-gofmt -s -l .          # lists files that need formatting; should print nothing
-go vet ./...
-golangci-lint run      # CI uses v2.13.2
-go test ./...
+make build       # bin/cryptare, with CGO, stamped with `git describe`
+make test        # go test ./...
+make check       # what CI runs: formatting, go mod tidy, tracked key material, vet, golangci-lint, race tests, smoke test
+make check-all   # plus gosec, govulncheck and the workflow linter
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
+The linters and scanners run at CI's versions through `go run`, so there is nothing to install. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
 
 ## Project structure
 

@@ -16,7 +16,8 @@ which is authoritative; this guide must stay consistent with it. Also read
 - Confirmation of a pitched concept is required on the issue before making a pull
   request that modifies the code base.
 - The license header must be kept on every source file.
-- Run `gofmt -s -w .` at the repository root before making a pull request.
+- Run `make fmt` (`gofmt -s -w .`) and `make check` at the repository root before making a
+  pull request.
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup
@@ -29,10 +30,16 @@ which is authoritative; this guide must stay consistent with it. Also read
   (`github.com/mattn/go-sqlite3`, pulled in by `gorm.io/driver/sqlite`) requires CGO.
   Builds with `CGO_ENABLED=0` compile, but the `keys` commands and the TUI fail at
   runtime; the file commands still work (`intel/maint.md` §6).
-- **Git.**
+- **Git**, **bash** and **make** (GNU Make; the 3.81 that macOS ships works). On Windows,
+  run `make` from Git Bash.
+- No linters or scanners to install: `make lint`, `make sec`, `make vuln` and
+  `make actionlint` run the exact versions CI uses (golangci-lint v2.13.2, gosec v2.29.0,
+  govulncheck v1.8.0, actionlint v1.7.12) through `go run`, which downloads them once and
+  verifies them against the Go checksum database. To use a binary you installed instead,
+  override the variable, for example `make lint GOLANGCI_LINT=golangci-lint`.
 - Optional:
-  - [golangci-lint](https://golangci-lint.run/) v2.13.2 (the version CI uses);
-  - Docker, for the container build;
+  - shellcheck, which `make actionlint` then uses on the workflows' scripts;
+  - Docker, for `make docker-build` and `make docker-smoke`;
   - the dev container in [`.devcontainer/`](.devcontainer/).
 
 ### Build and run
@@ -40,14 +47,15 @@ which is authoritative; this guide must stay consistent with it. Also read
 ```bash
 git clone https://github.com/jabbott-iii/Cryptare.git
 cd Cryptare
-go build -o cryptare .
-CRYPTARE_DB_PATH="$HOME/.cryptare-dev.db" ./cryptare --help
+make build                                   # bin/cryptare, stamped with `git describe`
+CRYPTARE_DB_PATH="$HOME/.cryptare-dev.db" ./bin/cryptare --help
+make help                                    # every target, grouped
 ```
 
 The `keys` commands, the TUI, `encrypt --key` and `decrypt` of a file encrypted with a
 stored key open (and create, if missing) the SQLite key store at `CRYPTARE_DB_PATH`, or
 at `cryptare/cryptare.db` in your user data folder when the variable is unset
-(`./cryptare keys path` prints which). Other commands don't touch it.
+(`./bin/cryptare keys path` prints which). Other commands don't touch it.
 Set `CRYPTARE_DB_PATH` while developing so you don't use your real key store. `*.db`
 and `*.ckey` are git-ignored, and CI fails if a key database or key export is tracked.
 **Never commit a database file.**
@@ -69,15 +77,26 @@ and `*.ckey` are git-ignored, and CI fails if a key database or key export is tr
 
 ## Validation
 
-These mirror CI (`.github/workflows/ci.yml`). Run them from the repository root:
+Run these from the repository root. `make check` runs what CI runs
+(`.github/workflows/ci.yml`), in the same order, and stops at the first failure:
 
-```bash
-gofmt -s -l .                                        # must print nothing
-go mod tidy && git diff --exit-code go.mod go.sum    # no diff unless you changed dependencies
-go vet ./...
-golangci-lint run                                    # v2.13.2
-go test ./...                                        # add -race when a C toolchain is available (CI does on Linux and macOS)
-```
+| Target | What it runs |
+|---|---|
+| `make fmt-check` | `gofmt -s -l .` must list nothing (`make fmt` fixes it) |
+| `make tidy-check` | `go mod tidy -diff`: no change to `go.mod`/`go.sum` unless you changed dependencies (it changes nothing itself) |
+| `make keys-check` | no key database or key export is tracked (SEC-003) |
+| `make vet` | `go vet ./...` |
+| `make lint` | golangci-lint v2.13.2 |
+| `make test-race` | `go test -race -count=1 ./...` (needs CGO; CI runs `-race` on Linux and macOS) |
+| `make smoke` | builds `bin/cryptare` and runs CI's smoke test in a temporary folder with its own key store: `--version`, `keys generate`/`keys list`, an encrypt/decrypt round trip, and one with a stored key |
+
+`make check-all` adds `make security` (gosec v2.29.0 and govulncheck v1.8.0, as in
+`security.yml`) and `make actionlint`; run it before a pull request. Other targets:
+`make test` (quick, cached), `make cover` and `make cover-html` (coverage),
+`make golden` (only the golden-fixture tests, for format work),
+`make fuzz FUZZ=FuzzExtractTar FUZZTIME=5m` (one fuzz target),
+`make docker-build` and `make docker-smoke` (the image, as `docker.yml` tests it), and
+`make clean`.
 
 CI runs on Ubuntu, Windows and macOS. After the checks above, it builds the binary with
 CGO and smoke-tests it: `--version`, `keys generate`/`keys list`, and an encrypt/decrypt

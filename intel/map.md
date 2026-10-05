@@ -34,7 +34,7 @@ Cryptare/
 ├── .devcontainer/           # Ubuntu + Go + Neovim dev container
 ├── Dockerfile               # CGO build (golang:1.26.8-alpine) → alpine:3.22 runtime, both pinned by digest; runs as UID 10001
 ├── .dockerignore            # keeps the build context to the sources
-├── Makefile                 # release tagging only: tag, push-tag, release
+├── Makefile                 # contributor targets mirroring CI (check, check-all, build, test-race, smoke, lint, sec, vuln, fuzz, docker-smoke, …) and release tagging
 ├── intel/                   # engineering docs (this directory)
 ├── AGENTS.md, README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md (private vulnerability reporting)
 ├── LICENSE (Apache-2.0), NOTICE (project attribution), CODEOWNERS (@jabbott-iii)
