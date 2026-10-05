@@ -111,9 +111,9 @@ the Docker image to GitHub Packages (`ghcr.io/<owner>/cryptare`) with its own at
 
 The full rules are in [`intel/maint.md`](intel/maint.md). In short:
 
-- **Layering.** `internal/crypto.go`, `internal/format_v2.go`, `internal/compress.go` and
+- **Layering.** `pkg`, `pkg`, `pkg` and
   `internal/keys.go` stay UI-agnostic: no printing, prompting, Cobra or Bubble Tea.
-- **CLI and TUI stay in step.** Key-store flows go in `internal/keys.go`, which both use.
+- **CLI and TUI stay in step.** Key-store flows go in `pkg`, which both use.
   A behaviour change must land in both `logic-cli.go` and `logic-tui.go`, with tests for
   each.
 - **Validation that protects data goes in the core layer**, so both interfaces

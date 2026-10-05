@@ -72,7 +72,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 
 ## 2026-09-24 — TUI no longer crashes on unhandled keys (plan 1.3, BUG-002)
 
-- `internal/logic-tui.go`: the three `panic("unhandled default case")` branches are
+- `../pkg`: the three `panic("unhandled default case")` branches are
   gone; forms ignore unused keys and `buildActionCmd` returns an `unsupported action`
   error. New tests in `logic_tui_test.go` failed before the fix and pass after it.
 - Validation (Go 1.26.8): `gofmt -s`, `go mod tidy`, `go vet` and golangci-lint
@@ -128,7 +128,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 
 ## 2026-09-26 — Atomic writes for single-file outputs (plan 2.11, BUG-004)
 
-- `internal/compress.go`: `atomicFile` (`createAtomicFile`, `Commit`, `Abort`) and
+- `../pkg`: `atomicFile` (`createAtomicFile`, `Commit`, `Abort`) and
   `writeFileAtomic` write to a hidden 0600 `.<name>.*.tmp` file, sync, then rename.
   Used by compression, single-file gzip decompression, `EncryptFile`, `DecryptFile`
   and `ExportKeyToFile`. Archive extraction moves to plan 2.2.
@@ -285,7 +285,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   passes and 4 lanes; built together with the versioned header and chunked streaming
   (3.2); every artifact kind written in the new format; old formats readable with no
   time limit, and no migration command.
-- **Format** (`internal/format_v2.go`; `maint.md` §3): a 46-byte header (magic
+- **Format** (`../pkg`; `maint.md` §3): a 46-byte header (magic
   `CRYPTARE\0`, version, content type, key source, KDF, Argon2id settings, salt, chunk
   size, nonce prefix), then 64 KiB AES-256-GCM chunks (STREAM, header as additional
   data). Readers take both versions and release output only after the final chunk
@@ -338,7 +338,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 - **Behaviour change:** on Linux and macOS the `keys` commands and TUI stop on such a
   database (README upgrade note).
 - Six new tests; `go test -race ./...` passes (80.0% `main`, 77.3% `internal`); gosec:
-  0 issues (8 `#nosec`). **Changed:** `main.go`, `internal/` sources and tests,
+  0 issues (8 `#nosec`). **Changed:** `main.go`, `../pkg` sources and tests,
   `README.md`, `intel/` docs, this file. Not committed.
 
 ## 2026-10-03 — Phase 5 Tier A: toolchain, export and encrypt outputs, Unicode names, cancellation (plans 5.1–5.5)
@@ -387,7 +387,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 - Validation (Go 1.26.8): `go test -race ./...` passes (100% `main`, 79.4%
   `internal`); gosec: 0 issues (9 `#nosec`); short fuzz runs found nothing; real-binary
   checks passed.
-- **Changed:** `.dockerignore`, `.gitignore`, `Dockerfile`, `ci.yml`, `internal/`
+- **Changed:** `.dockerignore`, `.gitignore`, `Dockerfile`, `ci.yml`, `../pkg`
   sources and tests, `README.md`, `CONTRIBUTING.md`, `intel/` docs. Not committed.
 
 ## 2026-10-04 — v1.2.0 released; Q-003, Q-005, Q-006, Q-008 and Q-009 answered and implemented
@@ -417,7 +417,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   tree and fails on trees that track key files; data moves between v1.2.0 and the new
   build as designed.
 - **Changed:** `ci.yml`, `cd.yml`, `.gitignore`, `NOTICE`, `go.mod`, the licence script,
-  `database_path.go`, `main.go`, `internal/` sources and tests, docs. Not committed.
+  `database_path.go`, `main.go`, `../pkg` sources and tests, docs. Not committed.
 
 ## 2026-10-04 — v1.3.0 released; Q-013 (musl Linux builds, C library notices); `golang.org/x/crypto` 0.57.0
 
@@ -484,7 +484,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `--export-password-file` or a second prompt; delete warns about files encrypted with
   the key; `silenceUsageOnRun` keeps the usage text for command-line mistakes. The TUI
   gains the matching fields.
-- **Golden fixtures:** `internal/testdata/golden/` holds files, folders, stored keys and
+- **Golden fixtures:** `../pkg` holds files, folders, stored keys and
   exports written by v1.0.1 and v1.3.1 (`linux_amd64` assets checked against their
   `checksums.txt`; archive hashes in its `README.md`), including a KDF 2 file and an
   export with a separate password, plus a stored-key file and folder written by this
@@ -523,7 +523,7 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   and the new workflow steps (they run on the next push and tag).
 - **Changed:** `.github/dependabot.yml`, `cd.yml`, `docker.yml`, `SECURITY.md`,
   `README.md`, `CONTRIBUTING.md`, `main.go` (comment), `database_path.go`, `internal/`
-  sources (new `internal/keys.go`) and tests (new `golden_test.go`, `keys_test.go`,
+  sources (new `../pkg`) and tests (new `golden_test.go`, `keys_test.go`,
   `stored_keys_test.go`, `testdata/golden/`), `intel/` docs and this file. Not
   committed.
 

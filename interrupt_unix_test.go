@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // TestDecryptInterruptedBySignal is SEC-015's end-to-end check: SIGINT while cryptare

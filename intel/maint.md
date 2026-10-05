@@ -19,16 +19,16 @@ It has no network surface: there is no HTTP server and nothing calls a remote se
 - Module: `github.com/jabbott-iii/Cryptare`; `go.mod` declares `go 1.26.0` and
   `toolchain go1.26.8` (SEC-018).
 - Entry point: `main.go` opens the database, builds the Cobra root command and runs it.
-- All application logic lives in one flat Go package, `internal/`.
+- All application logic lives in one flat Go package, `../pkg`.
 
 ## 2. Layers and responsibilities
 
 | Layer | Files | Responsibility | May depend on |
 |---|---|---|---|
 | Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare/cryptare.db` in the user data folder), build the root command with a lazy database opener and `keys path`, run it | `internal` |
-| Interfaces | `internal/logic-cli.go` (Cobra); `internal/ui-dashboard.go` + `internal/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
+| Interfaces | `../pkg` (Cobra); `../pkg` + `internal/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
 | Core operations | `internal/crypto.go`, `internal/format_v2.go`, `internal/compress.go`, `internal/keys.go` | Encryption formats, key blobs, key export/import, archive creation/extraction; `keys.go` holds the key-store flows both interfaces share (plan 3.3) | stdlib, `golang.org/x/crypto`, `golang.org/x/text`; `keys.go` uses storage only through the `Storage` interface |
-| Storage | `internal/database.go` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
+| Storage | `../pkg` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
 
 Rules:
 
@@ -312,11 +312,11 @@ These are observed in the codebase and required for new code:
 
 ## 5. Testing
 
-- Tests sit beside the code (`internal/*_test.go`, `database_path_test.go`). They use
+- Tests sit beside the code (`../pkg`, `database_path_test.go`). They use
   `t.TempDir()` and must not write anywhere else.
 - Database tests use `newTestDatabase(t, useFile)`. Close the SQL handles so Windows
   CI can delete the temporary files.
-- Fuzz tests (`internal/fuzz_test.go`) cover the code that reads untrusted input:
+- Fuzz tests (`../pkg`) cover the code that reads untrusted input:
   the version 2 header and decrypting reader, key exports, `parseSize`, and tar and zip
   extraction (plan 5.21). `go test` runs their seed corpora; fuzz one with
   `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./internal`. The decryption
@@ -336,9 +336,9 @@ These are observed in the codebase and required for new code:
   as a subprocess (through the `TestRunMain` helper) and signals it mid-decrypt, with
   the input fed through a named pipe.
 - TUI tests drive `DashboardModel.Update` and `updateForm` with synthetic
-  `tea.KeyMsg` values; follow `internal/logic_tui_test.go`.
+  `tea.KeyMsg` values; follow `../pkg`.
 - CLI tests run `NewRootCmd(db)` with `SetArgs`, `SetIn` and `SetOut`; follow
-  `internal/logic_cli_test.go`.
+  `../pkg`.
 - The `internal` tests write new data with a cheap Argon2id setting (64 KiB, 1 pass,
   1 lane), set in `TestMain` (`legacy_fixtures_test.go`), so the suite stays fast. The
   setting is recorded in each header, so reading is unaffected;

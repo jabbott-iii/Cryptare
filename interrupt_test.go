@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // helperEnv makes TestRunMain run main, for tests that need cryptare in a subprocess.

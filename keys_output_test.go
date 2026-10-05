@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // runCryptare runs cryptare in a subprocess (through TestRunMain) with its key database

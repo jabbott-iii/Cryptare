@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 func TestNewRootCmdReportsVersion(t *testing.T) {

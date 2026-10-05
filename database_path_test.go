@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 func TestDatabasePathUsesConfiguredPath(t *testing.T) {

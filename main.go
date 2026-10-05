@@ -22,7 +22,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 	"github.com/spf13/cobra"
 )
 

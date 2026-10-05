@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jabbott-iii/Cryptare/internal"
+	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // TestFileCommandsDoNotCreateDatabase is a regression test for SEC-010 and BUG-005:
