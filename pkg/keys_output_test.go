@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
 import (
 	"bytes"
@@ -23,8 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // runCryptare runs cryptare in a subprocess (through TestRunMain) with its key database
@@ -53,7 +51,7 @@ func TestKeysCommandsKeepStdoutClean(t *testing.T) {
 	if _, stderr, err := runCryptare(t, dbPath, "keys", "generate", "--password-file", pw); err != nil {
 		t.Fatalf("keys generate: %v; stderr: %s", err, stderr)
 	}
-	db, err := internal.NewDatabase(dbPath)
+	db, err := NewDatabase(dbPath)
 	if err != nil {
 		t.Fatalf("open key database: %v", err)
 	}

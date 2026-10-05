@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package pkg
 
 import (
 	"archive/tar"
@@ -33,7 +33,7 @@ import (
 
 // Fuzz tests for the code that reads untrusted input (plan 5.21). `go test` runs their
 // seed corpora as ordinary tests; run one with, for example,
-// `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./internal`.
+// `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./pkg`.
 
 // fuzzPassword is the password the fuzz seeds are encrypted with.
 const fuzzPassword = "fuzzing password"

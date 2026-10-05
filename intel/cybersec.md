@@ -124,7 +124,7 @@ remains.
 ### SEC-001 — Empty passwords accepted for encryption and key protection
 
 - **Severity:** High · **Status:** Closed (2026-09-27)
-- **Affected component:** password checks in `internal/crypto.go`; the CLI and TUI forms.
+- **Affected component:** password checks in `pkg/crypto.go`; the CLI and TUI forms.
 - **Remediation:** every path that protects new data with a password applies
   `CheckPasswordPolicy` (15 or more code points, not one repeated character); typed new
   passwords are confirmed; decryption and import still accept older, shorter passwords.
@@ -151,7 +151,7 @@ remains.
 - **Remediation:** the file was removed from `main` and the key it held discarded;
   `.gitignore` covers key databases, their side files and key exports; CI refuses any
   that are tracked. The owner chose not to rewrite history (Q-005). The golden test
-  fixtures (`internal/testdata/golden/`) are public test vectors with published
+  fixtures (`pkg/testdata/golden/`) are public test vectors with published
   passwords, kept as `.txt` so the CI guard keeps its meaning for real key material.
 - **Fixed in:** `aa27461`, `a088f7f` (v1.3.0).
 - **Validation:** the CI guard on Ubuntu, Windows and macOS; no key database or export

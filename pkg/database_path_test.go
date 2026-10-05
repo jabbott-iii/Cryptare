@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
 import (
 	"bytes"
@@ -25,8 +25,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 func TestDatabasePathUsesConfiguredPath(t *testing.T) {
@@ -60,7 +58,7 @@ func useDataFolder(t *testing.T) string {
 
 // closeDatabase closes db when the test ends, before its temporary folder is removed:
 // Windows can't delete a file that is still open.
-func closeDatabase(t *testing.T, db *internal.Database) {
+func closeDatabase(t *testing.T, db *Database) {
 	t.Helper()
 	if db == nil {
 		return
@@ -167,10 +165,10 @@ func TestLegacyDatabaseNotice(t *testing.T) {
 	}
 	keysPath := func() (stdout, stderr string) {
 		t.Helper()
-		cmd := newRootCmd(func() (*internal.Database, error) {
+		cmd := newRootCmd(func() (*Database, error) {
 			t.Fatal("keys path opened the key database")
 			return nil, nil
-		})
+		}, testVersion)
 		var out, errOut bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&errOut)

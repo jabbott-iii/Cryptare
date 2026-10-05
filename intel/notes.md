@@ -199,7 +199,7 @@ golangci-lint run          # v2.13.2
 go test -race -count=1 ./...
 gosec ./...                # v2.29.0
 govulncheck ./...          # checks the toolchain that go.mod selects
-go test -run '^$' -fuzz '^FuzzExtractTar$' -fuzztime 5m -fuzzminimizetime 3s ./internal
+go test -run '^$' -fuzz '^FuzzExtractTar$' -fuzztime 5m -fuzzminimizetime 3s ./pkg
 ```
 
 Run probes that can use a lot of memory, such as decompression or allocation bombs,

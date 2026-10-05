@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
 import (
 	"bytes"
@@ -25,12 +25,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // TestFileCommandsDoNotCreateDatabase is a regression test for SEC-010 and BUG-005:
-// the root command is built the way main builds it, and only the keys commands open
+// the root command is built the way Run builds it, and only the keys commands open
 // the key database. --help, --version and the file commands no longer create
 // cryptare.db, and a database the keys commands create is private (0600).
 func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
@@ -45,7 +43,7 @@ func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
 
 	// Close any database the keys commands open, before the temporary folder is
 	// removed: Windows can't delete a file that is still open.
-	var opened []*internal.Database
+	var opened []*Database
 	t.Cleanup(func() {
 		for _, db := range opened {
 			if sqlDB, err := db.Conn().DB(); err == nil {
@@ -55,13 +53,13 @@ func TestFileCommandsDoNotCreateDatabase(t *testing.T) {
 	})
 	open := databaseOpener(io.Discard)
 	run := func(args ...string) error {
-		cmd := newRootCmd(func() (*internal.Database, error) {
+		cmd := newRootCmd(func() (*Database, error) {
 			db, err := open()
 			if db != nil {
 				opened = append(opened, db)
 			}
 			return db, err
-		})
+		}, testVersion)
 		var out bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&out)
@@ -119,7 +117,7 @@ func TestDatabaseOpenerRefusesUntrustedDatabase(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	}
-	if !errors.Is(err, internal.ErrUntrustedDatabase) {
+	if !errors.Is(err, ErrUntrustedDatabase) {
 		t.Fatalf("open err = %v, want ErrUntrustedDatabase", err)
 	}
 	if !strings.Contains(err.Error(), databasePathEnv) {

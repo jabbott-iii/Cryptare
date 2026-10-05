@@ -3,7 +3,8 @@
 This is the authoritative source for Cryptare's architecture and maintainability
 rules (see `AGENTS.md`). `CONTRIBUTING.md` must stay consistent with it.
 
-Last reviewed: 2026-10-05 (round 6: stored keys, golden fixtures; docs round)
+Last reviewed: 2026-10-05 (package `internal` renamed `pkg`, and the root files other than
+`main.go` moved into it; earlier: round 6: stored keys, golden fixtures; docs round)
 
 ## 1. System overview
 
@@ -18,17 +19,18 @@ It has no network surface: there is no HTTP server and nothing calls a remote se
 
 - Module: `github.com/jabbott-iii/Cryptare`; `go.mod` declares `go 1.26.0` and
   `toolchain go1.26.8` (SEC-018).
-- Entry point: `main.go` opens the database, builds the Cobra root command and runs it.
-- All application logic lives in one flat Go package, `../pkg`.
+- Entry point: `main.go` holds the build version and calls `pkg.Run`, which builds the
+  Cobra root command with a lazy database opener and runs it.
+- All application logic lives in one flat Go package, `pkg` (`pkg/`).
 
 ## 2. Layers and responsibilities
 
 | Layer | Files | Responsibility | May depend on |
 |---|---|---|---|
-| Entry | `main.go`, `database_path.go` | Work out the DB path (`CRYPTARE_DB_PATH`, default `cryptare/cryptare.db` in the user data folder), build the root command with a lazy database opener and `keys path`, run it | `internal` |
-| Interfaces | `../pkg` (Cobra); `../pkg` + `internal/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
-| Core operations | `internal/crypto.go`, `internal/format_v2.go`, `internal/compress.go`, `internal/keys.go` | Encryption formats, key blobs, key export/import, archive creation/extraction; `keys.go` holds the key-store flows both interfaces share (plan 3.3) | stdlib, `golang.org/x/crypto`, `golang.org/x/text`; `keys.go` uses storage only through the `Storage` interface |
-| Storage | `../pkg` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
+| Entry | `main.go`; `pkg/run.go`, `pkg/database_path.go` | `main.go` holds `version` (set with `-X main.version`) and calls `Run`. `Run` works out the DB path (`CRYPTARE_DB_PATH`, default `cryptare/cryptare.db` in the user data folder), builds the root command with a lazy database opener and `keys path`, runs it and returns the exit status | `main.go`: `pkg.Run` only; `run.go`: interfaces, storage |
+| Interfaces | `pkg/logic-cli.go` (Cobra); `pkg/ui-dashboard.go` + `pkg/logic-tui.go` (Bubble Tea) | Parse input, prompt, call core/storage, render results | core, storage |
+| Core operations | `pkg/crypto.go`, `pkg/format_v2.go`, `pkg/compress.go`, `pkg/keys.go` | Encryption formats, key blobs, key export/import, archive creation/extraction; `keys.go` holds the key-store flows both interfaces share (plan 3.3) | stdlib, `golang.org/x/crypto`, `golang.org/x/text`; `keys.go` uses storage only through the `Storage` interface |
+| Storage | `pkg/database.go` | GORM/SQLite schema (`KeyModel`) and key CRUD | GORM, SQLite driver |
 
 Rules:
 
@@ -48,7 +50,7 @@ Rules:
 4. **One persistence type.** `*Database` is the only persistence type. The shared key
    flows in `keys.go` take it as a `Storage`, the interface it implements, so core code
    doesn't depend on GORM.
-5. **Only commands that use stored keys open the database.** `main.go` passes a
+5. **Only commands that use stored keys open the database.** `Run` passes a
    `DatabaseOpener` to `NewRootCmdLazy`. Only the `keys` commands, the TUI, `encrypt
    --key`, and `decrypt` of a regular file whose header names a stored key
    (`EncryptedWithStoredKey`) call it, at most once per run (SEC-010). Don't add other
@@ -67,8 +69,8 @@ Rules:
    opener creates the folder 0700 and is still the only thing that creates anything.
    A `cryptare.db` left in the current folder by an earlier version only gets a notice
    on stderr (`noticeLegacyDatabase`); it is never opened, moved or copied, because it
-   may not be the user's (SEC-016). `keys path` is defined in package `main`, because
-   it needs `databasePath`, and opens nothing.
+   may not be the user's (SEC-016). `keys path` (`newKeysPathCmd`, `database_path.go`)
+   is added by `newRootCmd`, not `NewRootCmdLazy`, and opens nothing.
 
 ## 3. On-disk formats (compatibility contract)
 
@@ -78,7 +80,7 @@ with no time limit; there is no migration command (owner decision, 2026-09-27). 
 further change needs a new format version or content type, a read path for everything
 already written, and tests covering both.
 
-**Version 2** (`internal/format_v2.go`). Every artifact starts with a 46-byte header:
+**Version 2** (`pkg/format_v2.go`). Every artifact starts with a 46-byte header:
 
 | Offset | Size | Field |
 |---|---|---|
@@ -287,8 +289,8 @@ These are observed in the codebase and required for new code:
   master password goes through `unlockStoredKey`, which prompts with the key's ID.
 - **Usage text.** `NewRootCmdLazy` wraps every command's `RunE` with
   `silenceUsageOnRun`, so the usage text follows only command-line mistakes that Cobra
-  reports before a command runs. A command added outside it (such as `keys path` in
-  `main`) sets `SilenceUsage` itself.
+  reports before a command runs. A command added outside it (such as `keys path`,
+  which `newRootCmd` adds) sets `SilenceUsage` itself.
 - Symlinks and non-regular files are rejected when reading directory trees, which
   are always read through `walkSourceTree` (an `os.Root` on the source folder,
   SEC-014). Path traversal (`..`) is rejected when extracting, before the `os.Root`
@@ -312,14 +314,14 @@ These are observed in the codebase and required for new code:
 
 ## 5. Testing
 
-- Tests sit beside the code (`../pkg`, `database_path_test.go`). They use
+- Tests sit beside the code (`pkg/*_test.go`). They use
   `t.TempDir()` and must not write anywhere else.
 - Database tests use `newTestDatabase(t, useFile)`. Close the SQL handles so Windows
   CI can delete the temporary files.
-- Fuzz tests (`../pkg`) cover the code that reads untrusted input:
+- Fuzz tests (`pkg/fuzz_test.go`) cover the code that reads untrusted input:
   the version 2 header and decrypting reader, key exports, `parseSize`, and tar and zip
   extraction (plan 5.21). `go test` runs their seed corpora; fuzz one with
-  `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./internal`. The decryption
+  `go test -run '^$' -fuzz FuzzParseV2Header -fuzztime 1m ./pkg`. The decryption
   fuzzers skip headers that ask for an expensive Argon2id setting, and
   `FuzzDecryptingReader` tries each input with a password and with a stored key. For
   the extraction fuzzers, add `-fuzzminimizetime 3s`: by default the fuzzer spends up to
@@ -327,26 +329,29 @@ These are observed in the codebase and required for new code:
 - Golden fixtures (`golden_test.go`, `testdata/golden/`, with its `README.md`) are files
   written by released binaries, with their passwords; §3 says how to treat them. Their
   `.gitattributes` keeps Windows checkouts from converting their line endings.
-- Subprocess tests run cryptare through the `TestRunMain` helper (`interrupt_test.go`),
+- Subprocess tests run cryptare through the `TestRunMain` helper (`interrupt_test.go`,
+  which calls `Run` as `main` does),
   for behaviour an in-process test can't see: exit statuses after a signal, and
   stdout written by GORM's logger (`keys_output_test.go`, SEC-017).
 - Cancellation tests stop operations partway through with a context that reports
   itself cancelled after a set number of checks (`cancelAfter` in
-  `internal/cancel_test.go`), not with timing. `interrupt_unix_test.go` runs cryptare
+  `pkg/cancel_test.go`), not with timing. `interrupt_unix_test.go` runs cryptare
   as a subprocess (through the `TestRunMain` helper) and signals it mid-decrypt, with
   the input fed through a named pipe.
 - TUI tests drive `DashboardModel.Update` and `updateForm` with synthetic
-  `tea.KeyMsg` values; follow `../pkg`.
+  `tea.KeyMsg` values; follow `pkg/logic_tui_test.go`.
 - CLI tests run `NewRootCmd(db)` with `SetArgs`, `SetIn` and `SetOut`; follow
-  `../pkg`.
-- The `internal` tests write new data with a cheap Argon2id setting (64 KiB, 1 pass,
-  1 lane), set in `TestMain` (`legacy_fixtures_test.go`), so the suite stays fast. The
+  `pkg/logic_cli_test.go`.
+- The tests write new data with a cheap Argon2id setting (64 KiB, 1 pass, 1 lane), set
+  in `TestMain` (`legacy_fixtures_test.go`), so the suite stays fast. It applies to every
+  test in `pkg`, including the `TestRunMain` subprocesses. The
   setting is recorded in each header, so reading is unaffected;
   `TestDefaultPasswordKDFIsWritten` checks the real default.
 - Every security fix needs a regression test that fails before the fix. Record it in
   `intel/cybersec.md`.
-- Baseline on 2026-10-04 (Go 1.26.8, linux/amd64): `go test -race ./...` passes with
-  89.2% (`main`) and 80.9% (`internal`) statement coverage (`make cover`). The least
+- Baseline on 2026-10-05 (Go 1.26.8, linux/amd64), after the root tests moved into
+  `pkg`: `go test -race ./...` passes with 81.4% statement coverage in `pkg` (`make
+  cover`). `main.go` only calls `pkg.Run` and has no tests of its own. The least
   covered code is the TUI's `View`, the terminal-only password reading, and a few error
   paths (`notes.md` §1).
 

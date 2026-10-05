@@ -111,16 +111,16 @@ the Docker image to GitHub Packages (`ghcr.io/<owner>/cryptare`) with its own at
 
 The full rules are in [`intel/maint.md`](intel/maint.md). In short:
 
-- **Layering.** `pkg`, `pkg`, `pkg` and
-  `internal/keys.go` stay UI-agnostic: no printing, prompting, Cobra or Bubble Tea.
-- **CLI and TUI stay in step.** Key-store flows go in `pkg`, which both use.
+- **Layering.** `pkg/crypto.go`, `pkg/format_v2.go`, `pkg/compress.go` and
+  `pkg/keys.go` stay UI-agnostic: no printing, prompting, Cobra or Bubble Tea.
+- **CLI and TUI stay in step.** Key-store flows go in `pkg/keys.go`, which both use.
   A behaviour change must land in both `logic-cli.go` and `logic-tui.go`, with tests for
   each.
 - **Validation that protects data goes in the core layer**, so both interfaces
   inherit it.
 - **Compatibility.** Existing encrypted files, directory artifacts, stored keys and
   `.ckey` exports must stay readable. Format changes need a versioned header and a
-  legacy read path. The golden fixtures in `internal/testdata/golden/` must keep
+  legacy read path. The golden fixtures in `pkg/testdata/golden/` must keep
   opening; never regenerate or edit them to make a test pass.
 - **Error handling.** Wrap errors with context (`fmt.Errorf("…: %w", err)`) and check
   errors from output writes. Use `closeWithError` for deferred closes on writers.

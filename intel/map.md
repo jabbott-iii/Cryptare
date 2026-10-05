@@ -1,20 +1,21 @@
 # Repository Map
 
-Last updated: 2026-10-04 (round 6: stored keys, plans 3.3/3.4, golden fixtures, attestations; earlier: Q-003, Q-005, Q-006, Q-009, Q-013). Architecture rules live in [`maint.md`](maint.md).
+Last updated: 2026-10-05 (package `internal` renamed `pkg`; the root files other than `main.go` moved into it; earlier: round 6 stored keys, plans 3.3/3.4, golden fixtures, attestations; Q-003, Q-005, Q-006, Q-009, Q-013). Architecture rules live in [`maint.md`](maint.md).
 
 ## Structure
 
 ```text
 Cryptare/
-├── main.go                  # entry: build Cobra root command with a lazy DB opener, execute
-├── database_path.go         # key store path: CRYPTARE_DB_PATH or the user data folder; legacy notice; `keys path`
-├── database_path_test.go    # default path per OS, private folder, legacy-database notice
-├── version_test.go          # --version flag test
-├── lazy_database_test.go    # only keys commands open (and create) the DB
-├── interrupt_test.go        # exit codes; TestRunMain helper for subprocess tests
-├── interrupt_unix_test.go   # SIGINT during a decrypt: exit 130, nothing left behind
-├── keys_output_test.go      # keys commands keep stdout clean (subprocess, SEC-017)
-├── internal/                # single Go package `internal`
+├── main.go                  # entry: holds the build version (-X main.version) and calls pkg.Run
+├── pkg/                     # single Go package `pkg`
+│   ├── run.go               # Run: root command with a lazy DB opener and `keys path`, execute, exit status
+│   ├── database_path.go     # key store path: CRYPTARE_DB_PATH or the user data folder; legacy notice; `keys path`
+│   ├── database_path_test.go    # default path per OS, private folder, legacy-database notice
+│   ├── version_test.go      # --version flag test
+│   ├── lazy_database_test.go    # only keys commands open (and create) the DB
+│   ├── interrupt_test.go    # exit codes; TestRunMain helper for subprocess tests
+│   ├── interrupt_unix_test.go   # SIGINT during a decrypt: exit 130, nothing left behind
+│   ├── keys_output_test.go  # keys commands keep stdout clean (subprocess, SEC-017)
 │   ├── crypto.go            # file/dir encryption, legacy (v1) reads, key blobs, key export/import
 │   ├── format_v2.go         # version 2 format: header, Argon2id or stored key (HKDF), chunked AES-GCM stream
 │   ├── keys.go              # key-store flows shared by CLI and TUI: generate, unlock (StoredKeyCredential), import
@@ -27,6 +28,7 @@ Cryptare/
 │   ├── logic-tui.go         # Bubble Tea Update/View, forms, vim mode, action commands
 │   ├── testdata/golden/     # files written by v1.0.1, v1.3.1 and the first stored-key build, with passwords (README.md)
 │   └── *_test.go            # unit, CLI and TUI tests; legacy_fixtures_test.go writes v1 layouts; cancel_test.go stops operations partway; fuzz_test.go fuzzes the untrusted-input readers; password_norm_test.go covers password normalisation; golden_test.go opens the golden fixtures; keys_test.go and stored_keys_test.go cover stored keys
+├── demo/                    # VHS tapes and the TUI and CLI demo GIFs they record
 ├── .github/workflows/       # ci.yml, cd.yml, docker.yml, security.yml
 ├── .github/dependabot.yml   # weekly gomod, github-actions and docker update PRs
 ├── scripts/third-party-licenses.sh  # writes THIRD_PARTY_LICENSES.txt for release archives (cd.yml)
@@ -45,7 +47,7 @@ Cryptare/
 
 | Component | Key symbols | Notes |
 |---|---|---|
-| Entry | `main`, `newRootCmd`, `databaseOpener`, `version`, `databasePath`, `userDataDir`, `noticeLegacyDatabase`, `newKeysPathCmd` | Passes a lazy opener; the DB is opened only by the `keys` commands, the TUI, `encrypt --key` and `decrypt` of a file encrypted with a stored key. Without `CRYPTARE_DB_PATH` it is `cryptare/cryptare.db` in the user data folder, whose folder the opener creates 0700; a `cryptare.db` in the current folder only gets a notice (Q-003). `keys path` prints the path and opens nothing. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
+| Entry | `main`, `version` (`main.go`); `Run`, `exitCode`, `newRootCmd`, `databaseOpener`, `databasePath`, `userDataDir`, `noticeLegacyDatabase`, `newKeysPathCmd` (`pkg`) | `main` passes `version` to `Run`, which passes a lazy opener; the DB is opened only by the `keys` commands, the TUI, `encrypt --key` and `decrypt` of a file encrypted with a stored key. Without `CRYPTARE_DB_PATH` it is `cryptare/cryptare.db` in the user data folder, whose folder the opener creates 0700; a `cryptare.db` in the current folder only gets a notice (Q-003). `keys path` prints the path and opens nothing. `version` defaults to `dev`; release builds set it with `-X main.version=<tag>`. |
 | CLI | `NewRootCmd`, `NewRootCmdLazy`, `DatabaseOpener`, `openOnce`, `new*Cmd`, `readPassword`, `readNewPassword`, `confirmAction`, `derive*Output`, `displayText`, `runCancellable`, `InterruptedError`, `checkExportOutput`, `unlockStoredKey`, `silenceUsageOnRun`, `withMissingKeyHint`, `withStoredKeyHint` | `--vim` is a root flag; `encrypt --key`/`-k` encrypts with a stored key, and `decrypt` finds a stored key from a regular file's header (plan 3.4); usage text only follows command-line mistakes; `--password/-p` (prints a warning) and `--password-file` (`passwordFlags`) on crypto and key commands. `--force` on `encrypt`, `decrypt`, `compress` and `decompress` allows overwriting an existing output. `--max-size` and `--max-entries` on `decompress` and `decrypt` set the extraction limits. File commands run under `runCancellable`: a signal cancels the operation, which removes its unfinished output, and the exit status is 128 + the signal (SEC-015). `keys export` takes `--force` and never writes over the key database (BUG-017). `--password ""` counts as given (BUG-023). |
 | TUI | `DashboardModel`, `fieldsFor`, `updateForm`, `handleVimFormKey`, `buildActionCmd`, `checkTUINewPassword`, `actionRunner`, `quit` | Forms mirror the CLI operations; actions run as `tea.Cmd`s. Forms that set a password have a "Confirm password" field. The encrypt form's last field takes a stored key ID; export takes the key's master password once, and import has an optional second password field for an older export with a password of its own (either password in either field). The key table shows stored values through `displayText`. Actions run through `actionRunner`; quitting while one runs cancels it and quits once it reports back (SEC-015). |
 | Key flows | `GenerateStoredKey`, `StoredKeyCredential`, `ImportStoredKey`, `ErrWrongMasterPassword`, `ErrWrongExportPassword`, `ErrSeparateKeyPassword`, `keyLookupError`, `keySaveError` | Shared by the CLI and the TUI (plan 3.3), over the `Storage` interface. `StoredKeyCredential` unlocks a key to encrypt (policy-checked master password) or decrypt with it (plan 3.4); `ImportStoredKey` checks the key inside an export, asking for a separate key password for older exports (BUG-011). |
@@ -69,7 +71,8 @@ Cryptare/
 
 ```mermaid
 flowchart TD
-  main["main.go<br/>databasePath"] -->|"opened only by keys, the TUI and stored-key encrypt/decrypt"| dbfile[("SQLite file<br/>CRYPTARE_DB_PATH or<br/>user data folder/cryptare/cryptare.db")]
+  entry["main.go"] --> main["Run<br/>run.go + database_path.go"]
+  main -->|"opened only by keys, the TUI and stored-key encrypt/decrypt"| dbfile[("SQLite file<br/>CRYPTARE_DB_PATH or<br/>user data folder/cryptare/cryptare.db")]
   main --> root["NewRootCmd<br/>logic-cli.go"]
   root -->|no subcommand| tui["TUI<br/>ui-dashboard.go + logic-tui.go"]
   root --> cli["encrypt · decrypt · compress · decompress · keys"]

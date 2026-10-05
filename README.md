@@ -323,16 +323,18 @@ The linters and scanners run at CI's versions through `go run`, so there is noth
 ## Project structure
 
 ```text
-main.go, database_path.go   entry point, key store path (CRYPTARE_DB_PATH or default) and `keys path`
-internal/crypto.go          AES-256-GCM encryption, key blobs, key export/import
-internal/keys.go            stored-key flows shared by the CLI and TUI
-internal/format_v2.go       versioned format: header, Argon2id or stored key, chunked encryption
-internal/testdata/golden/   files written by released versions, which the tests must keep opening
-internal/compress.go        gzip, tar.gz and zip creation and extraction
-internal/database.go        SQLite key store (GORM)
-internal/logic-cli.go       Cobra commands
-internal/ui-dashboard.go,
-internal/logic-tui.go       Bubble Tea terminal UI
+main.go                     entry point: holds the build version and calls pkg.Run
+pkg/run.go                  builds and runs the root command, exit status, lazy key store opener
+pkg/database_path.go        key store path (CRYPTARE_DB_PATH or default) and `keys path`
+pkg/crypto.go               AES-256-GCM encryption, key blobs, key export/import
+pkg/keys.go                 stored-key flows shared by the CLI and TUI
+pkg/format_v2.go            versioned format: header, Argon2id or stored key, chunked encryption
+pkg/testdata/golden/        files written by released versions, which the tests must keep opening
+pkg/compress.go             gzip, tar.gz and zip creation and extraction
+pkg/database.go             SQLite key store (GORM)
+pkg/logic-cli.go            Cobra commands
+pkg/ui-dashboard.go,
+pkg/logic-tui.go            Bubble Tea terminal UI
 intel/                      architecture, security, plans and repository map
 .github/workflows/          CI, CD, Docker and security workflows
 scripts/                    third-party-licenses.sh: licence texts for release archives

@@ -36,7 +36,7 @@ GOSEC ?= $(GO) run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 ACTIONLINT ?= $(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
-# Fuzzing: one target per run (Go's limit). The targets are in internal/fuzz_test.go:
+# Fuzzing: one target per run (Go's limit). The targets are in pkg/fuzz_test.go:
 # FuzzParseV2Header, FuzzDecryptingReader, FuzzKeyExportValidation, FuzzParseSize,
 # FuzzExtractTar and FuzzExtractZip. A short minimisation time keeps the extraction
 # fuzzers from appearing to hang (intel/notes.md §3).
@@ -104,10 +104,10 @@ cover-html: cover ## Write the coverage report to coverage.html
 	@echo "Wrote coverage.html"
 
 golden: ## Run only the golden-fixture tests (on-disk format compatibility)
-	CGO_ENABLED=$(CGO) $(GO) test -count=1 -run '^TestGolden' ./internal
+	CGO_ENABLED=$(CGO) $(GO) test -count=1 -run '^TestGolden' ./pkg
 
 fuzz: ## Fuzz one target: make fuzz FUZZ=FuzzExtractTar FUZZTIME=5m
-	CGO_ENABLED=$(CGO) $(GO) test -run '^$$' -fuzz '^$(FUZZ)$$' -fuzztime $(FUZZTIME) -fuzzminimizetime 3s ./internal
+	CGO_ENABLED=$(CGO) $(GO) test -run '^$$' -fuzz '^$(FUZZ)$$' -fuzztime $(FUZZTIME) -fuzzminimizetime 3s ./pkg
 
 ##@ Code quality (CI: ci.yml)
 

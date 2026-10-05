@@ -13,7 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-package main
+package pkg
 
 import (
 	"errors"
@@ -21,15 +21,13 @@ import (
 	"os"
 	"syscall"
 	"testing"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
-// helperEnv makes TestRunMain run main, for tests that need cryptare in a subprocess.
+// helperEnv makes TestRunMain run cryptare, for tests that need it in a subprocess.
 const helperEnv = "CRYPTARE_TEST_RUN_MAIN"
 
 // TestRunMain isn't a test on its own: a subprocess started with helperEnv set runs
-// main here, with the arguments that follow "--".
+// cryptare here, through Run as main does, with the arguments that follow "--".
 func TestRunMain(t *testing.T) {
 	if os.Getenv(helperEnv) != "1" {
 		t.Skip("runs only as a helper process")
@@ -42,19 +40,18 @@ func TestRunMain(t *testing.T) {
 		}
 	}
 	os.Args = append([]string{"cryptare"}, args...)
-	main()
-	os.Exit(0)
+	os.Exit(Run(testVersion))
 }
 
 // TestExitCode checks the exit status for a command stopped by a signal (SEC-015):
 // 128 plus the signal's number, as shells report it, and 1 for any other error.
 func TestExitCode(t *testing.T) {
-	interrupted := &internal.InterruptedError{Signal: syscall.SIGTERM}
+	interrupted := &InterruptedError{Signal: syscall.SIGTERM}
 	tests := []struct {
 		err  error
 		want int
 	}{
-		{&internal.InterruptedError{Signal: os.Interrupt}, 130},
+		{&InterruptedError{Signal: os.Interrupt}, 130},
 		{interrupted, 143},
 		{fmt.Errorf("decrypt: %w", interrupted), 143},
 		{errors.New("other failure"), 1},

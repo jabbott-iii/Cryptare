@@ -633,3 +633,35 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   against it, Q-005).
 - **Changed:** `AGENTS.md`, `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/history.md`,
   `intel/maint.md`, `intel/notes.md`, `intel/plan.md`. Not committed.
+
+## 2026-10-05 — Package `internal` renamed `pkg`; the root Go files other than `main.go` moved into it
+
+- Follows `d249e7e`, which moved `internal/` to `pkg/` but kept `package internal`.
+- **Package:** every file in `pkg/` declares `package pkg`. `database_path.go` and the
+  root tests (`database_path_test.go`, `interrupt_test.go`, `interrupt_unix_test.go`,
+  `keys_output_test.go`, `lazy_database_test.go`, `version_test.go`) moved into `pkg/`;
+  only `main.go` stays at the root.
+- **Entry point:** `main.go` keeps `version`, so `-X main.version=<tag>` in the
+  Makefile, `Dockerfile` and `cd.yml` is unchanged, and calls `pkg.Run(version)`, the
+  only new exported identifier. `pkg/run.go` holds what `main.go` held (`exitCode`,
+  `databaseOpener`, `newRootCmd`, which now takes the version as a parameter);
+  `TestRunMain` calls `Run`. The moved tests now run under `pkg`'s `TestMain` and its
+  cheap Argon2id setting, subprocesses included.
+- `Makefile`: `golden` and `fuzz` run on `./pkg` (they still named `./internal`).
+- Docs: `README.md`, `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`,
+  `intel/notes.md` (fuzz command) and `intel/cybersec.md` (two component paths) name
+  `pkg/` files; the `../pkg` placeholders that `d249e7e` left in `maint.md` and
+  `CONTRIBUTING.md` are replaced with the files' paths. Earlier entries in this file are
+  unchanged.
+- Validation (Go 1.26.8 built from source, linux/amd64; the modules hosted outside
+  GitHub came from their GitHub mirrors at the same versions, and every other module was
+  checked against `go.sum`): `gofmt -s -l .` lists nothing; `go vet ./...` is clean, and
+  with `GOOS=windows` and `GOOS=darwin` vet and the test build compile;
+  `go test -race -count=1 ./...` passes the same 554 tests and subtests as before the
+  change (552 pass, 2 skip), with 81.4% coverage in `pkg`; `make smoke`, `make golden`
+  and a 10-second `make fuzz` pass; a binary built with `-X main.version=…` reports that
+  version; `go mod tidy -diff` gives the same output before and after the move. Not
+  run: golangci-lint, gosec, govulncheck, actionlint and the Docker build.
+- **Changed:** `main.go`, `pkg/` (package clause, moved files, new `run.go`),
+  `Makefile`, `README.md`, `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`,
+  `intel/notes.md`, `intel/cybersec.md`, this file. Not committed.

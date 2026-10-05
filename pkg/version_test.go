@@ -14,27 +14,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
 import (
 	"bytes"
 	"testing"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
-func TestNewRootCmdReportsVersion(t *testing.T) {
-	previous := version
-	version = "v9.9.9-test"
-	t.Cleanup(func() { version = previous })
+// testVersion is the version the tests build the root command with: what main reports
+// in a build without -ldflags "-X main.version=<tag>".
+const testVersion = "dev"
 
+func TestNewRootCmdReportsVersion(t *testing.T) {
 	for _, flag := range []string{"--version", "-v"} {
 		t.Run(flag, func(t *testing.T) {
 			// The version flag is handled before any command runs, so no database is opened.
-			cmd := newRootCmd(func() (*internal.Database, error) {
+			cmd := newRootCmd(func() (*Database, error) {
 				t.Fatal("--version opened the key database")
 				return nil, nil
-			})
+			}, "v9.9.9-test")
 			var out bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&out)

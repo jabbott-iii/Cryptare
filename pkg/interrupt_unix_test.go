@@ -15,7 +15,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-package main
+package pkg
 
 import (
 	"bytes"
@@ -27,8 +27,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/jabbott-iii/Cryptare/pkg"
 )
 
 // TestDecryptInterruptedBySignal is SEC-015's end-to-end check: SIGINT while cryptare
@@ -47,7 +45,7 @@ func TestDecryptInterruptedBySignal(t *testing.T) {
 		t.Fatalf("write plaintext: %v", err)
 	}
 	encrypted := plain + ".enc"
-	if err := internal.EncryptFile(plain, encrypted, password); err != nil {
+	if err := EncryptFile(plain, encrypted, password); err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
 	data, err := os.ReadFile(encrypted)
