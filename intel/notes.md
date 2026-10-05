@@ -5,17 +5,19 @@ tracked in [`cybersec.md`](cybersec.md), work sequencing in [`plan.md`](plan.md)
 the record of past work, including resolved defects and answered questions, in
 [`history.md`](history.md).
 
-Last updated: 2026-10-04 (round 6)
+Last updated: 2026-10-05 (docs round: security register condensed, drift fixed)
 
-## 1. Current snapshot (2026-10-04, round 6)
+## 1. Current snapshot (2026-10-05)
 
-- **Branch state.** `main` is at `6773ae3`, level with `origin/main` and tagged v1.3.1,
-  which CD released on 2026-10-04 with round 5 (Q-013's musl Linux builds and PR #26's
-  `golang.org/x/crypto` 0.57.0). The working tree holds this round's uncommitted
-  changes: usable stored keys (plans 3.3, 3.4, 5.17; BUG-011), golden format fixtures,
+- **Branch state.** `main` is at `566f96c`, level with `origin/main`. The latest release
+  is v1.3.1 (`6773ae3`). Round 6 is committed but not released: `c114573` (most of it;
+  on its own it didn't build, because the new files weren't added) and `566f96c` (the
+  missing files and the Makefile targets), which builds and passes its tests. It holds
+  usable stored keys (plans 3.3, 3.4, 5.17; BUG-011), golden format fixtures,
   `SECURITY.md`, the README install fix, usage text only for command-line mistakes,
-  release attestations, Dependabot for Docker images, the image UID check, and the
-  Docker image published to GitHub Packages by CD (`ghcr.io/jabbott-iii/cryptare`).
+  release and image attestations, Dependabot for Docker images, the image UID check, the
+  Docker image published to GitHub Packages by CD (`ghcr.io/jabbott-iii/cryptare`), and
+  the contributor Makefile. The CI results on those commits haven't been checked here.
 - **Toolchain.** `go.mod` declares `go 1.26.0` and `toolchain go1.26.8` (`6a5fcb1`), so
   CI, CD and the Docker builder use Go 1.26.8. Every v1.3.1 release binary reports
   go1.26.8 (`go version -m`, SEC-018, closed).
@@ -66,7 +68,7 @@ validation for each fix are in `history.md`.
 | BUG-008 | A second TUI action could start while one was running | `3d9384e` |
 | BUG-009 | No `--version`, and `-X main.version` had no effect | v1.0.1 (`5286920`) |
 | BUG-010 | Encryption and decryption held whole files in memory | `0c57aef` (legacy reads: BUG-024) |
-| BUG-011 | `keys export` didn't check the key's master password and `keys import` didn't check the key inside, so an export could need two passwords; the prompts didn't say which password was meant | round 6, not yet committed (one password per key, Q-015) |
+| BUG-011 | `keys export` didn't check the key's master password and `keys import` didn't check the key inside, so an export could need two passwords; the prompts didn't say which password was meant | `c114573`, `566f96c` (one password per key, Q-015; unreleased) |
 | BUG-012 | Ctrl+C at the hidden prompt left echo off | `ed46150` (other signals: BUG-018) |
 | BUG-013 | A folder could be compressed into an archive inside itself | `c47a94f` (gaps: BUG-016, BUG-019) |
 | BUG-014 | A read-only folder in an archive blocked extraction for non-root users | `d751967` |
@@ -83,7 +85,7 @@ validation for each fix are in `history.md`.
 
 ## 3. Design observations
 
-- **Stored keys encrypt files** (plan 3.4, round 6, not yet committed). `encrypt --key`
+- **Stored keys encrypt files** (plan 3.4, round 6; unreleased). `encrypt --key`
   and the TUI's "Stored key ID" field write a key source 2 header naming the key
   (Q-014); `decrypt` reads the header of a regular file (`EncryptedWithStoredKey`) and
   asks for that key's master password. A stored-key file read through a pipe isn't
@@ -98,17 +100,16 @@ validation for each fix are in `history.md`.
 - **Stale comment.** `ImportKeyFromFile` says "Parse minimal JSON manually to avoid
   import cycle", but it uses `encoding/json`.
 - **Leftover from another project.** `database_path_test.go` used a `tasks.db` fixture
-  (cosmetic; plan 4.6). Renamed to `keys.db` on 2026-10-04 with the Q-003 tests (not yet
-  committed).
+  (cosmetic; plan 4.6). Renamed to `keys.db` with the Q-003 tests (`a088f7f`, v1.3.0).
 - **IDE files.** `.idea/` is tracked (`.gitignore` has `# .idea/` commented out).
   `.junie/plans/` is an empty, untracked agent workspace.
 - **NOTICE** ended at "This product includes third-party software:" with an empty list.
-  Since Q-006 (2026-10-04, not yet committed) it holds the project's attribution and
+  Since Q-006 (`a088f7f`, v1.3.0) it holds the project's attribution and
   points to `THIRD_PARTY_LICENSES.txt`, which the release job generates with
   `scripts/third-party-licenses.sh` and puts in every archive.
 - **C libraries in the release binaries (Q-013).** Up to v1.3.0 the Linux binaries were
   linked statically against the Ubuntu runner's GNU C Library (glibc,
-  LGPL-2.1-or-later). Since round 5 (not yet committed) they are linked statically
+  LGPL-2.1-or-later). Since v1.3.1 (Q-013) they are linked statically
   against musl (MIT) in the `Dockerfile`'s pinned Alpine builder, and
   `THIRD_PARTY_LICENSES.txt` adds musl's notice for Linux and the MinGW-w64 runtime's
   for Windows (whose runtime code Go's linker always pulls in with `-lmingwex

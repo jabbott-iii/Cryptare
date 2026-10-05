@@ -37,6 +37,7 @@ Maintain the following documents in the repository-root `intel/` directory:
   changes.
 - `intel/notes.md` — durable engineering notes and unresolved technical questions.
 - `intel/plan.md` — active implementation plans and follow-on work.
+- `intel/golang.md` — authoritative guidance on Go language usage.
 Maintain `CONTRIBUTING.md` and `README.md` at the repository root.
 
 ## Document Update Rules
@@ -45,7 +46,9 @@ Maintain `CONTRIBUTING.md` and `README.md` at the repository root.
   document's purpose.
 - Preserve existing content and structure unless an update is necessary.
 - Do not delete, truncate, rename, or overwrite content in `intel/history.md`.
-  Append new entries only when recording a significant change.
+  Append new entries only when recording a significant change. The only exception is a
+  redaction the owner approves (for example, removing security detail); record it in
+  the file.
 - Treat `intel/maint.md` as the authoritative source for repository architecture
   and maintainability guidance.
 - Keep `CONTRIBUTING.md` consistent with `intel/maint.md` and focused on
@@ -60,35 +63,39 @@ Maintain `CONTRIBUTING.md` and `README.md` at the repository root.
   data, or other restricted content in these documents.
 
 ## Security Issue Tracking
-- Use `intel/cybersec.md` to identify and document security issues discovered
-  during repository analysis, implementation, review, testing, or maintenance.
-- For each identified security issue, create an actionable remediation item in
-  `intel/cybersec.md` that includes:
-  - a unique identifier;
-  - a concise description of the issue and affected component;
-  - the security impact or risk;
-  - required remediation steps;
-  - status: `Open`, `In Progress`, `Blocked`, or `Closed`;
-  - validation required to confirm the remediation.
-- Update the remediation item as work progresses.
+- The repository is public. Record security issues in `intel/cybersec.md` as summary
+  records only. Never put exploit-level detail in any repository document: evidence,
+  reproduction steps, proof-of-concept inputs, attack descriptions, or pointers to
+  commits that hold key material.
+- Keep the details of an open issue private, in a GitHub security advisory draft (see
+  `SECURITY.md`), until it is fixed and the owner decides what to publish.
+- For each identified security issue, create a record in `intel/cybersec.md` that
+  includes:
+  - a unique identifier and a short, neutral title;
+  - severity and status (`Open`, `In Progress`, `Blocked`, or `Closed`);
+  - the affected component;
+  - the remediation, in a sentence or two;
+  - where it was fixed (commits and the first release with the fix);
+  - the validation that confirms it, and, while open, what remains.
+- Update the record as work progresses.
 - Mark an item `Closed` only after the documented remediation is implemented and
   the required validation has been completed.
-- Never delete closed security items. Preserve them as an audit trail of security
-  decisions, fixes, and validation.
+- Never delete security records. Preserve them, in summary form, as an audit trail of
+  security decisions, fixes, and validation.
 - Do not modify code, configuration, dependencies, infrastructure, tests, or
   documentation in a way that weakens, removes, bypasses, or regresses a
   documented security remediation.
 - If a requested change would conflict with a closed or active security
   remediation item, do not implement the conflicting portion. Document the
   conflict and propose a compliant alternative.
-### SEC-001 — Example issue title
+### SEC-000 — Example issue title
 
-- **Status:** Open
-- **Affected component:** `src/auth/`
-- **Risk:** [Concise description]
-- **Required remediation:** [Specific corrective action]
-- **Validation:** [Test, review, scan, or other evidence required]
-- **Resolution:** [Completed only when status is Closed]
+- **Severity:** Low · **Status:** Open
+- **Affected component:** `internal/example.go`
+- **Remediation:** [What was or will be changed, in a sentence or two]
+- **Fixed in:** [Commits and the first release with the fix, once fixed]
+- **Validation:** [Test, review, scan, or other check that confirms it]
+- **Open:** [What remains, while not Closed]
 
 ## Change discipline
 - Keep changes narrowly scoped to the requested task.

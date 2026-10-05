@@ -3,7 +3,7 @@
 This is the authoritative source for Cryptare's architecture and maintainability
 rules (see `AGENTS.md`). `CONTRIBUTING.md` must stay consistent with it.
 
-Last reviewed: 2026-10-04 (round 6: stored keys, golden fixtures)
+Last reviewed: 2026-10-05 (round 6: stored keys, golden fixtures; docs round)
 
 ## 1. System overview
 
@@ -345,9 +345,10 @@ These are observed in the codebase and required for new code:
   `TestDefaultPasswordKDFIsWritten` checks the real default.
 - Every security fix needs a regression test that fails before the fix. Record it in
   `intel/cybersec.md`.
-- Baseline on 2026-09-23 (Go 1.26.8, linux/amd64): `go test -race ./...` passes with
-  59.8% statement coverage. These have no tests: `readPassword`, `ImportKeyFromFile`,
-  the TUI `View`, and archive path-traversal rejection.
+- Baseline on 2026-10-04 (Go 1.26.8, linux/amd64): `go test -race ./...` passes with
+  89.2% (`main`) and 80.9% (`internal`) statement coverage (`make cover`). The least
+  covered code is the TUI's `View`, the terminal-only password reading, and a few error
+  paths (`notes.md` §1).
 
 ## 6. Build and release
 

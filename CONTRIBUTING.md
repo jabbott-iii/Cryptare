@@ -147,6 +147,10 @@ The full rules are in [`intel/maint.md`](intel/maint.md). In short:
   security scans to get a build to pass.
 - Don't report suspected vulnerabilities in public issues. Report them privately as
   [`SECURITY.md`](SECURITY.md) describes.
+- Keep security fixes at summary level in pull requests, commit messages and docs:
+  what changed and how it is tested, not how the weakness could be exploited. Details
+  stay in the private advisory, and `intel/cybersec.md` gets a summary record
+  (`AGENTS.md`).
 
 ## Pull request expectations
 
