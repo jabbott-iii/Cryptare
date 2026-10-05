@@ -15,6 +15,9 @@ Status: **In progress.**
     2 and 3.1/3.2, and Phase 5 except 5.17, with 4.2, 4.7 and 4.9.
   - v1.3.0 (`a088f7f`, released by CD #5 on 2026-10-04): 3.5, 4.5, 4.6, the SEC-003 CI
     guard and Q-009's password normalisation. SEC-003, SEC-010 and SEC-016 are closed.
+  - v1.3.1 (`6773ae3`, released by CD on 2026-10-04): round 5, 4.10 (musl Linux builds,
+    the Windows DLL check, C library notices) and PR #26's `x/crypto` 0.57.0 update.
+    Its binaries report go1.26.8, which closed SEC-018.
 - **Owner decisions (2026-09-26):**
   - 0.2 and 0.3 are done.
   - Stored keys should be usable (Q-002 = yes), so 3.4 is approved.
@@ -62,26 +65,38 @@ Status: **In progress.**
   musl and ship the C library notices; leave the published releases as they are. PR
   #26 = take the `golang.org/x/crypto` 0.57.0 update (with `x/text` 0.42.0), add a
   normalisation known-answer test and note the change in v1.3.1's release notes.
-- **Done 2026-10-04, not yet committed (round 5):** 4.10 (musl Linux builds, the
+- **Committed 2026-10-04 (round 5, `6773ae3`, v1.3.1):** 4.10 (musl Linux builds, the
   Windows DLL check, C library notices) and PR #26's update with
   `TestNormalizePasswordKnownAnswers`.
+- **Owner decisions (2026-10-04, round 6):** build 3.3 and 3.4 now; Q-014 = a file
+  encrypted with a stored key records the key's ID in its header; Q-015 = one password
+  per key (exports use the key's master password); approved: attestations in `cd.yml`,
+  the Dependabot `docker` entry and the UID check in `docker.yml`; `SECURITY.md`:
+  acknowledge within 7 days, latest minor line (1.3.x) supported.
+- **Done 2026-10-04, not yet committed (round 6):** Phase 6 below, with 3.3, 3.4, 4.4
+  and 5.17.
 - **2026-10-03 analysis:** five new security items (SEC-015–SEC-019), ten new defects
   (BUG-015–BUG-024), gaps in five existing items and five owner questions
   (Q-008–Q-012). They are planned in
   [Phase 5](#phase-5--remediation-from-the-2026-10-03-analysis).
 - **Next up:**
-  1. Review and commit round 5. Committing `go.mod` and `go.sum` as they are makes
-     Dependabot close PR #26 as no longer needed; to merge #26 on GitHub instead,
-     merge it first and discard the local `go.mod`/`go.sum` changes before pulling
-     (they're identical).
-  2. Before tagging, run CD by hand (Actions → CD → Run workflow on `main`): it builds,
-     smoke-tests and packages every target without publishing, so the musl Linux
-     builds (both architectures) and the Windows DLL check are proven before a release.
-  3. Release v1.3.1 with the drafted notes (they cover the `x/text` normalisation fix).
-  4. Finish two validations: `go version -m` on a release binary (SEC-018) and
-     `docker run --rm --entrypoint id <image> -u` (SEC-013).
-  5. The rest of Phase 3: 3.3 (shared key flows, with 5.17) and 3.4 (usable stored keys,
-     using the header's reserved key source 2; needs the owner's choices first).
+  1. Review round 6. It changes the file format (key source 2) and `keys export`'s
+     behaviour, so read the README's "Upgrading from v1.3.1 or earlier" note first, and
+     confirm the golden-fixture naming noted under SEC-003. Then commit it.
+  2. Watch the first CI, Docker and Security runs: the Docker UID check (closes
+     SEC-013), the golden tests on Windows (the fixtures' `.gitattributes`), and the
+     race-enabled jobs.
+  3. Run CD by hand on `main` before tagging, then release the next version (a minor
+     version, since the format gains key source 2) with notes drawn from the README's
+     v1.3.1 upgrade note. Check its attestation step and run `gh attestation verify` on
+     an asset (SEC-020).
+  4. After that release's CD run: the image is on GitHub Packages
+     (`ghcr.io/jabbott-iii/cryptare`); GitHub creates a new package as private, so make
+     it public in the package's settings, then check `docker pull` and
+     `gh attestation verify oci://ghcr.io/jabbott-iii/cryptare:<version> --repo jabbott-iii/Cryptare`.
+  5. When the new minor version ships, update `SECURITY.md`'s supported line.
+  6. Still open: W7 (darwin/amd64 never run), 4.3's TUI `View` tests, 4.8, and a longer
+     fuzz run of `FuzzExtractTar` with `-fuzzminimizetime` set (`notes.md` §3).
 
 ## Principles
 
@@ -175,8 +190,8 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 |---|---|---|
 | 3.1 | Versioned file header, Argon2id (or PBKDF2 ≥ 600k), legacy read path; switch to stdlib `crypto/pbkdf2`. **Done 2026-09-27, with 3.2; committed in `0c57aef`.** Owner choices: Argon2id at 64 MiB, 3 passes, 4 lanes; header and streaming together; every artifact written in the new format; old formats readable with no time limit, no migration command. What was built: a 46-byte header (`format_v2.go`, layout in `maint.md` §3) on files, folders, stored keys and key exports; read limits on the header's Argon2id settings; legacy reads kept; `deriveKey` on `crypto/pbkdf2`. | SEC-005 |
 | 3.2 | Streaming, chunked authenticated encryption for large files (depends on 3.1). **Done 2026-09-27, with 3.1; committed in `0c57aef`:** 64 KiB AES-256-GCM chunks in the STREAM construction; folders stream their tar.gz; output is kept only after the final chunk authenticates. A 1 GiB file peaks at 77 MiB instead of 3 GiB. | BUG-010 |
-| 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI | `maint.md` §2 |
-| 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. | Q-002, BUG-011 |
+| 3.3 | Move the key generate/export/import flows into shared core functions used by both CLI and TUI. **Done 2026-10-04 (round 6, not yet committed):** `keys.go` (`GenerateStoredKey`, `StoredKeyCredential`, `ImportStoredKey`), with exports through `ExportKeyToFile`; the `Storage` interface is their parameter type. | `maint.md` §2 |
+| 3.4 | Wire stored keys into encrypt/decrypt. **Approved 2026-09-26 (Q-002 = yes).** Needs 3.1's versioned header to record which key encrypted a file. **Done 2026-10-04 (round 6, not yet committed; Q-014):** key source 2 with KDF 3 (HKDF-SHA256 over the header's salt) and the key's ID in a 54-byte header; `encrypt --key`, a TUI field, and `decrypt` finding the key from the header. | Q-002, BUG-011 |
 | 3.5 | Per-user default DB path plus migration, if Q-003 = yes. **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0 (Q-003 = yes, notice-only migration):** `cryptare/cryptare.db` in the user data folder (`databasePath`, `userDataDir`), its folder created 0700 by the opener; a `cryptare.db` in the current folder gets a notice and is never opened; new `keys path` (SEC-010, SEC-016). | Q-003 |
 | 3.6 | `main.version` variable and a `--version` flag. **Done** (2026-09-24, shipped in v1.0.1). It was moved ahead of 1.4 for W4. | BUG-009, W4 |
 
@@ -187,7 +202,7 @@ Step-by-step details and the pre-merge checks are in `history.md`.
 | 4.1 | Pin actions to SHAs; pin gosec and upload its SARIF; triage the findings. **In progress:** pins and SARIF upload shipped in v1.0.1, and the Security workflow succeeded. Remaining: confirm gosec alerts appear in Code Scanning, triage them, and decide on govulncheck. **2026-10-03:** the alerts appear in Code Scanning (10 open), and their dispositions are applied in code: G304 annotated `#nosec`, G301 parent folders now 0700. Remaining: push and confirm the alerts close, delete the stale CodeQL configurations left by the removed `codeql.yml`, and decide on govulncheck. **Done 2026-10-04:** all alerts closed after `4ba516a`; govulncheck runs in Security since `6a5fcb1`; SEC-012 closed. | SEC-012 |
 | 4.2 | Non-root container user; pin images by digest **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (owner approved):** non-root user 10001 owning `/app/data`, both images pinned by digest; validated by the Docker workflow on the next push (Docker isn't available in the analysis environment). | SEC-013 (needs approval) |
 | 4.3 | Fill test gaps: `readPassword`, `ImportKeyFromFile`, CLI export/import round-trip, extraction traversal rejection, TUI `View`. **Partly done:** `readPassword` (1.1), `ImportKeyFromFile` and a CLI import/export of a legacy key (0.5, `TestLegacyShortPasswordCmds`), and traversal rejection (2.2, `TestExtractRejectsPathTraversal`). **Remaining:** a full CLI export/import round trip and the TUI `View`. | `maint.md` §5 |
-| 4.4 | Add `SECURITY.md` with a private reporting channel | `CONTRIBUTING.md` |
+| 4.4 | Add `SECURITY.md` with a private reporting channel. **Done 2026-10-04 (round 6, not yet committed):** the GitHub template it held is replaced: supported 1.3.x, private vulnerability reporting, acknowledgement within 7 days. | `CONTRIBUTING.md` |
 | 4.5 | Settle the contents of `NOTICE`. **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0 (Q-006):** `NOTICE` holds the project's attribution and points to `THIRD_PARTY_LICENSES.txt`, which `scripts/third-party-licenses.sh` writes in the release job; every archive holds it with `LICENSE` and `NOTICE`. | Q-006 |
 | 4.6 | Rename the `tasks.db` fixture in `database_path_test.go` (the Munus names in the workflows are covered by W3). **Done 2026-10-04, committed in `a088f7f`, released in v1.3.0:** `keys.db`, with the Q-003 tests. | `notes.md` §3 |
 | 4.10 | Settle the licensing of the C libraries in the release binaries: static glibc on Linux, MinGW-w64 runtime and libgcc on Windows (owner decision Q-013). **Done 2026-10-04, not yet committed (Q-013: musl; past releases left as they are):** `cd.yml` builds Linux in the `Dockerfile`'s pinned `golang:1.26.8-alpine` image, statically against musl; the Windows smoke test fails if the binary imports a MinGW-w64 toolchain DLL; `scripts/third-party-licenses.sh` adds the musl and MinGW-w64 runtime notices from `scripts/licenses/`. | Q-013 |
@@ -238,7 +253,7 @@ docs) can run alongside.
 | 5.14 | **Explicit empty password.** Treat `--password` as given when `Flags().Changed("password")`. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** `passwordFlags.get` uses `Flags().Changed("password")`. | BUG-023 | CLI test: `--password ""` decrypts a legacy empty-password file without reading stdin |
 | 5.15 | **Size caps for whole-file reads.** Refuse a `.ckey` above a small limit (for example 1 MiB). Refuse a legacy-format input above a cap the owner chooses, before reading it, with a clear error. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0:** key exports capped at 1 MiB (`ErrInputTooLarge`); legacy-format inputs capped by `--max-size` (owner decision), checked before reading. | BUG-024 | Oversized inputs fail fast with a clear message |
 | 5.16 | **Single `.tar` files.** Per Q-011: a gunzip-only option, recording the input type, or documentation. **Done 2026-10-04, committed in `eb330a3`/`89a64e8`, released in v1.2.0 (Q-011: `--raw`):** `GunzipFileContext`, `decompress --raw` (CLI only; the TUI always extracts). | BUG-022, Q-011 | `compress x.tar` followed by `decompress` gives `x.tar` back, or the documented route does |
-| 5.17 | **Export password clarity.** Name the prompt and flag help for what they set (the password that protects the export file), and check the key's master password before exporting. Do it with 3.3. | BUG-011 | CLI and TUI tests: a wrong master password is refused; the prompts name the right password |
+| 5.17 | **Export password clarity.** Name the prompt and flag help for what they set (the password that protects the export file), and check the key's master password before exporting. Do it with 3.3. **Done 2026-10-04 (round 6, not yet committed; Q-015):** the export is protected by the key's master password, asked for once by name and checked; import checks the key inside. | BUG-011 | CLI and TUI tests: a wrong master password is refused; the prompts name the right password |
 
 ### Tier D — tooling and documentation
 
@@ -260,3 +275,26 @@ docs) can run alongside.
   migration), Q-008 (keep the limits) and Q-009 (NFKC, byte order mark, `x/text`).
 - **Release:** v1.2.0 shipped Tiers A–D (except 5.17) on 2026-10-04, with SEC-002's
   migration notes.
+
+## Phase 6 — Production-readiness review (2026-10-04)
+
+From the 2026-10-04 review of v1.3.1. Approvals and decisions are under "Owner
+decisions (2026-10-04, round 6)" above. All done in round 6 and not yet committed,
+except where the status says otherwise.
+
+| # | Change | Refs | Status |
+|---|---|---|---|
+| 6.1 | `SECURITY.md`: replace GitHub's template (it listed versions 5.1.x and 4.0.x and no way to report) | 4.4 | Done |
+| 6.2 | Usable stored keys and one password per key | 3.3, 3.4, 5.17, BUG-011, Q-014, Q-015 | Done |
+| 6.3 | Golden format fixtures written by v1.0.1 and v1.3.1 (and stored-key files by this build), opened by `golden_test.go`; a round-trip test can't catch a format change made in the writer and the reader alike | `maint.md` §3, SEC-003 note | Done |
+| 6.4 | README install: it pinned `VERSION=v1.1.0`, which can't read version 2 files and was built with Go 1.26.0; now `releases/latest/download` | SEC-018 | Done |
+| 6.5 | Usage text only for command-line mistakes (`silenceUsageOnRun`) | — | Done |
+| 6.6 | Build provenance attestations on release files, and verification in the README | SEC-020 | Done; validated by the next tag |
+| 6.7 | Dependabot for the `Dockerfile`'s digest-pinned images (golang patch updates only) | SEC-018, SEC-013 | Done |
+| 6.8 | `docker.yml` checks that the image runs as UID 10001 | SEC-013 | Done; closes SEC-013 when it passes in CI |
+| 6.9 | Close SEC-018 with `go version -m` on the v1.3.1 binaries | SEC-018 | Done (closed) |
+| 6.10 | Document why `FuzzExtractTar` seems to stall (minimisation) and the flag that avoids it | 5.21 | Done (`notes.md` §3, `maint.md` §5) |
+| 6.11 | Bring `notes.md` §1 and this plan up to date with v1.3.1 | — | Done |
+| 6.12 | Run darwin/amd64 once on an Intel Mac or under Rosetta | W7 | Open (owner) |
+| 6.13 | Optional: macOS notarisation and Windows Authenticode signing, depending on audience | SEC-020 step 2 | Open (owner decision) |
+| 6.14 | Publish the Docker image to GitHub Packages on each release (owner request, 2026-10-04): `cd.yml`'s `container` job, after the release; `ghcr.io/<owner>/cryptare` tagged `X.Y.Z`, plus `X.Y` and `latest` for the newest release; smoke test before pushing; attestation on the digest. After the first tagged run, the owner makes the package public in its settings (GitHub creates it private) | SEC-020, SEC-013 | Done; validated by the next tag |

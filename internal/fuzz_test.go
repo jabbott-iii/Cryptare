@@ -38,6 +38,17 @@ import (
 // fuzzPassword is the password the fuzz seeds are encrypted with.
 const fuzzPassword = "fuzzing password"
 
+// fuzzStoredKey returns the stored key that the stored-key fuzz seeds are encrypted
+// with (plan 3.4).
+func fuzzStoredKey(tb testing.TB) Credential {
+	tb.Helper()
+	cred, err := newStoredKeyCredential("0123456789abcdef", bytes.Repeat([]byte{7}, keyLen), true)
+	if err != nil {
+		tb.Fatalf("newStoredKeyCredential: %v", err)
+	}
+	return cred
+}
+
 // cheapToOpen reports whether opening data would derive a key cheaply. parseV2Header
 // allows Argon2id settings up to 1 GiB on purpose (Q-008), which would make each fuzz
 // run slow; inputs whose header asks for more than the tests' setting are skipped.
@@ -57,6 +68,10 @@ func FuzzParseV2Header(f *testing.F) {
 		f.Add(h.marshal())
 		h.kdfID = kdfArgon2idNFKC
 		f.Add(h.marshal())
+		if err := h.useStoredKey("0123456789abcdef"); err != nil {
+			f.Fatalf("useStoredKey: %v", err)
+		}
+		f.Add(h.marshal()) // refused for stored keys and key exports
 	}
 	f.Add([]byte(v2Magic))
 	f.Add([]byte{})
@@ -68,45 +83,51 @@ func FuzzParseV2Header(f *testing.F) {
 			}
 			return
 		}
-		if got := h.marshal(); !bytes.Equal(got, data[:v2HeaderLen]) {
-			t.Fatalf("header doesn't round-trip:\n read %x\nwrote %x", data[:v2HeaderLen], got)
+		if got := h.marshal(); !bytes.Equal(got, data[:len(got)]) {
+			t.Fatalf("header doesn't round-trip:\n read %x\nwrote %x", data[:len(got)], got)
 		}
 	})
 }
 
 // FuzzDecryptingReader feeds damaged and arbitrary streams to the version 2 decryption,
-// which must fail cleanly: no panic, no hang, and no plaintext from a stream that
-// doesn't authenticate to its final chunk.
+// with the seeds' password and with their stored key (plan 3.4), which must fail
+// cleanly: no panic, no hang, and no plaintext from a stream that doesn't authenticate
+// to its final chunk.
 func FuzzDecryptingReader(f *testing.F) {
-	for _, size := range []int{0, 1, 100, 70_000} { // 70,000 bytes span two 64 KiB chunks
-		var buf bytes.Buffer
-		w, err := newEncryptingWriter(&buf, fuzzPassword, contentFile)
-		if err != nil {
-			f.Fatalf("newEncryptingWriter: %v", err)
+	creds := []Credential{PasswordCredential(fuzzPassword), fuzzStoredKey(f)}
+	for _, cred := range creds {
+		for _, size := range []int{0, 1, 100, 70_000} { // 70,000 bytes span two 64 KiB chunks
+			var buf bytes.Buffer
+			w, err := newEncryptingWriter(&buf, cred, contentFile)
+			if err != nil {
+				f.Fatalf("newEncryptingWriter: %v", err)
+			}
+			if _, err := w.Write(bytes.Repeat([]byte{'x'}, size)); err != nil {
+				f.Fatalf("write: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				f.Fatalf("close: %v", err)
+			}
+			f.Add(buf.Bytes())
 		}
-		if _, err := w.Write(bytes.Repeat([]byte{'x'}, size)); err != nil {
-			f.Fatalf("write: %v", err)
-		}
-		if err := w.Close(); err != nil {
-			f.Fatalf("close: %v", err)
-		}
-		f.Add(buf.Bytes())
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if !cheapToOpen(data) {
 			t.Skip("header asks for an expensive key derivation")
 		}
-		_, plain, err := newDecryptingReader(bufio.NewReader(bytes.NewReader(data)), fuzzPassword, contentFile, contentFolder)
-		if err != nil {
-			return
-		}
-		got, err := io.ReadAll(plain)
-		if err != nil {
-			return
-		}
-		// Whatever decrypts must be one of the seeds' plaintexts: all 'x'.
-		if len(bytes.Trim(got, "x")) != 0 {
-			t.Fatalf("decrypted %d bytes that aren't a seed's plaintext", len(got))
+		for _, cred := range creds {
+			_, plain, err := newDecryptingReader(bufio.NewReader(bytes.NewReader(data)), cred, contentFile, contentFolder)
+			if err != nil {
+				continue
+			}
+			got, err := io.ReadAll(plain)
+			if err != nil {
+				continue
+			}
+			// Whatever decrypts must be one of the seeds' plaintexts: all 'x'.
+			if len(bytes.Trim(got, "x")) != 0 {
+				t.Fatalf("decrypted %d bytes that aren't a seed's plaintext", len(got))
+			}
 		}
 	})
 }

@@ -66,6 +66,15 @@ const (
 	labelConfirm  = "Type DELETE to confirm"
 
 	labelConfirmPassword = "Confirm password"
+
+	// Stored keys (plans 3.3 and 3.4, BUG-011). The encrypt form's key field comes last,
+	// so the fields before it keep their order.
+	labelPasswordOrKey    = "Password (or the stored key's master password)"
+	labelConfirmOrKey     = "Confirm password (not needed with a stored key)"
+	labelStoredKeyID      = "Stored key ID (optional, instead of a password)"
+	labelDecryptPassword  = "Password (or, for a file encrypted with a stored key, its master password)"
+	labelKeyPassword      = "The key's master password"
+	labelOlderExportField = "The export's own password, if different (exports from v1.3.1 or earlier)"
 )
 
 //--------------------------------------------------form field sets------------------------------------------------------------------------------//
@@ -76,14 +85,15 @@ func fieldsFor(action actionKind) []formField {
 		return []formField{
 			{label: labelFilePath},
 			{label: labelOutput},
-			{label: labelPassword, password: true},
-			{label: labelConfirmPassword, password: true},
+			{label: labelPasswordOrKey, password: true},
+			{label: labelConfirmOrKey, password: true},
+			{label: labelStoredKeyID},
 		}
 	case actionDecrypt:
 		return []formField{
 			{label: labelFilePath},
 			{label: labelOutput},
-			{label: labelPassword, password: true},
+			{label: labelDecryptPassword, password: true},
 		}
 	case actionCompress:
 		return []formField{
@@ -106,13 +116,13 @@ func fieldsFor(action actionKind) []formField {
 		return []formField{
 			{label: labelKeyID},
 			{label: labelOutput},
-			{label: labelPassword, password: true},
-			{label: labelConfirmPassword, password: true},
+			{label: labelKeyPassword, password: true},
 		}
 	case actionKeysImport:
 		return []formField{
 			{label: labelFilePath},
-			{label: labelPassword, password: true},
+			{label: labelKeyPassword, password: true},
+			{label: labelOlderExportField, password: true},
 		}
 	case actionKeysDelete:
 		return []formField{
@@ -141,7 +151,7 @@ func actionTitle(action actionKind) string {
 	case actionKeysImport:
 		return "Import a key"
 	case actionKeysDelete:
-		return "Delete a key"
+		return "Delete a key (files encrypted with it can't be decrypted without it or an export of it)"
 	default:
 		return ""
 	}
@@ -582,6 +592,12 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 	format := m.fieldValue(labelFormat)
 	confirm := m.fieldValue(labelConfirm)
 	passwordAgain := m.fieldValue(labelConfirmPassword)
+	passwordOrKey := m.fieldValue(labelPasswordOrKey)
+	passwordOrKeyAgain := m.fieldValue(labelConfirmOrKey)
+	storedKeyID := strings.TrimSpace(m.fieldValue(labelStoredKeyID))
+	decryptPassword := m.fieldValue(labelDecryptPassword)
+	keyPassword := m.fieldValue(labelKeyPassword)
+	separateKeyPassword := m.fieldValue(labelOlderExportField)
 
 	switch action {
 	case actionEncrypt:
@@ -596,10 +612,22 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 			if err := checkOutputOutsideFolder(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := checkTUINewPassword(password, passwordAgain); err != nil {
-				return actionResultMsg{err: err}
+			var cred Credential
+			if storedKeyID != "" {
+				// The key's master password was set when the key was made; it is checked
+				// against the key, so it isn't confirmed (plan 3.4).
+				c, err := StoredKeyCredential(db, storedKeyID, passwordOrKey, true)
+				if err != nil {
+					return actionResultMsg{err: err}
+				}
+				cred = c
+			} else {
+				if err := checkTUINewPassword(passwordOrKey, passwordOrKeyAgain); err != nil {
+					return actionResultMsg{err: err}
+				}
+				cred = PasswordCredential(passwordOrKey)
 			}
-			if err := EncryptFileContext(ctx, file, dst, password); err != nil {
+			if err := EncryptFileWithCredentialContext(ctx, file, dst, cred); err != nil {
 				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Encrypted: %s → %s", file, dst)}
@@ -614,8 +642,16 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 			if err := checkTUIOutput(file, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := DecryptFileWithLimitsContext(ctx, file, dst, password, DefaultExtractLimits()); err != nil {
-				return actionResultMsg{err: withTUILimitHint(err)}
+			cred := PasswordCredential(decryptPassword)
+			if keyID, ok := EncryptedWithStoredKey(file); ok {
+				c, err := StoredKeyCredential(db, keyID, decryptPassword, false)
+				if err != nil {
+					return actionResultMsg{err: withMissingKeyHint(err, file, keyID)}
+				}
+				cred = c
+			}
+			if err := DecryptFileWithCredentialContext(ctx, file, dst, cred, DefaultExtractLimits()); err != nil {
+				return actionResultMsg{err: withStoredKeyHint(withTUILimitHint(err))}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Decrypted: %s → %s", file, dst)}
 		}
@@ -670,33 +706,12 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 				return actionResultMsg{err: err}
 			}
 
-			rawKey, err := GenerateKey()
+			km, err := GenerateStoredKey(db, password)
 			if err != nil {
 				return actionResultMsg{err: err}
 			}
 
-			keyID, err := newKeyID()
-			if err != nil {
-				return actionResultMsg{err: err}
-			}
-
-			blob, err := EncryptKeyBlob(rawKey, password)
-			if err != nil {
-				return actionResultMsg{err: err}
-			}
-
-			km := &KeyModel{
-				KeyID:         keyID,
-				Algorithm:     "AES-256-GCM",
-				EncryptedBlob: blob,
-				CreatedAt_:    time.Now().Unix(),
-			}
-
-			if err := db.SaveKey(km); err != nil {
-				return actionResultMsg{err: fmt.Errorf("save key: %w", err)}
-			}
-
-			return actionResultMsg{message: fmt.Sprintf("Generated key: %s", keyID), reload: true}
+			return actionResultMsg{message: fmt.Sprintf("Generated key: %s", km.KeyID), reload: true}
 		}
 
 	case actionKeysExport:
@@ -713,10 +728,9 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 			if err := withTUIOutputHint(checkExportOutput(db, dst, false)); err != nil {
 				return actionResultMsg{err: err}
 			}
-			if err := checkTUINewPassword(password, passwordAgain); err != nil {
-				return actionResultMsg{err: err}
-			}
-			if err := ExportKeyToFile(km, password, dst); err != nil {
+			// The export is protected by the key's master password, which
+			// ExportKeyToFile checks against the key (BUG-011), so it isn't confirmed.
+			if err := ExportKeyToFile(km, keyPassword, dst); err != nil {
 				return actionResultMsg{err: err}
 			}
 			return actionResultMsg{message: fmt.Sprintf("Exported key %s → %s", keyID, dst)}
@@ -724,13 +738,18 @@ func (m DashboardModel) actionFunc() func(ctx context.Context) tea.Msg {
 
 	case actionKeysImport:
 		return func(ctx context.Context) tea.Msg {
-			km, err := ImportKeyFromFile(file, password)
+			// Either password may be in either field: ImportStoredKey tries both on the
+			// export and on the key inside. An empty last field means it wasn't given.
+			var others []string
+			if separateKeyPassword != "" {
+				others = append(others, separateKeyPassword)
+			}
+			km, err := ImportStoredKey(db, file, keyPassword, others...)
+			if len(others) == 0 && (errors.Is(err, ErrSeparateKeyPassword) || errors.Is(err, ErrWrongExportPassword)) {
+				return actionResultMsg{err: fmt.Errorf("%w; if v1.3.1 or earlier made this export with a password of its own, enter both passwords", err)}
+			}
 			if err != nil {
 				return actionResultMsg{err: err}
-			}
-
-			if err := db.SaveKey(km); err != nil {
-				return actionResultMsg{err: keySaveError(km.KeyID, err)}
 			}
 
 			return actionResultMsg{message: fmt.Sprintf("Imported key: %s", km.KeyID), reload: true}

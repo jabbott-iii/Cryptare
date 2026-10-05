@@ -136,6 +136,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Build provenance attestations: signed with the workflow's OIDC identity and
+      # stored with the repository's attestations.
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -188,6 +192,18 @@ jobs:
           cd dist
           sha256sum -- * > checksums.txt
 
+      # Signed SLSA build provenance for every published file, so a download can be
+      # checked as built by this workflow from this repository, which checksums.txt
+      # alone can't show: gh attestation verify <file> --repo jabbott-iii/Cryptare
+      - name: Attest build provenance
+        if: github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -199,3 +215,149 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+
+  # The Docker image, published to GitHub Packages (ghcr.io/<owner>/cryptare) on tags,
+  # after the release job, so an image is never published for a release that failed.
+  # A manual run builds and smoke-tests the image without publishing it. Plain docker
+  # commands, as in docker.yml, keep third-party actions out of the job that holds
+  # packages: write.
+  container:
+    name: Container image
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Build provenance for the image, stored with the repository's attestations and
+      # pushed to the registry next to the image.
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Tags: X.Y.Z always; X.Y and latest only when this is the newest release of that
+      # line and overall, so publishing an older patch release later doesn't move them
+      # back. Pre-releases (vX.Y.Z-rc.1) get only their own tag.
+      - name: Set image metadata
+        id: meta
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cryptare"
+          if [ "$REF_TYPE" = "tag" ]; then
+            if ! [[ "$REF_NAME" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Tag $REF_NAME isn't vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE."
+              exit 1
+            fi
+            major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+            version="${REF_NAME#v}"
+            stamp="$REF_NAME"
+            tags="$version"
+            if [[ "$version" != *-* ]]; then
+              releases="$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)"
+              if [ "$(grep -E "^v${major}\.${minor}\." <<<"$releases" | tail -n1)" = "$REF_NAME" ]; then
+                tags="$tags ${major}.${minor}"
+              fi
+              if [ "$(tail -n1 <<<"$releases")" = "$REF_NAME" ]; then
+                tags="$tags latest"
+              fi
+            fi
+          else
+            version="manual-${GITHUB_RUN_NUMBER}"
+            stamp="$version"
+            tags="$version"
+          fi
+          echo "Image $image, tags: $tags"
+          {
+            echo "image=$image"
+            echo "version=$version"
+            echo "stamp=$stamp"
+            echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+
+      # The source label links the package to this repository on GitHub (its page and
+      # its access settings).
+      - name: Build image
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          STAMP: ${{ steps.meta.outputs.stamp }}
+        run: |
+          docker build --file Dockerfile \
+            --build-arg VERSION="$STAMP" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.licenses=Apache-2.0" \
+            --label "org.opencontainers.image.title=cryptare" \
+            --label "org.opencontainers.image.description=Terminal file encryption and compression tool" \
+            --tag "$IMAGE:$VERSION" .
+
+      - name: Smoke test image
+        shell: bash
+        env:
+          REF: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+          STAMP: ${{ steps.meta.outputs.stamp }}
+        run: |
+          docker run --rm "$REF" --version | grep -qF -- "$STAMP"
+          # The image must run as its unprivileged user, never root (SEC-013).
+          test "$(docker run --rm --entrypoint id "$REF" -u)" = 10001
+          # Throwaway test passphrase, mounted as a file so it stays out of the arguments.
+          docker volume create cryptare-release-smoke
+          printf 'release-smoke-passphrase\n' > smoke-pw.txt
+          docker run --rm -v cryptare-release-smoke:/app/data -v "$PWD/smoke-pw.txt:/run/smoke-pw.txt:ro" \
+            "$REF" keys generate --password-file /run/smoke-pw.txt
+          docker run --rm -v cryptare-release-smoke:/app/data "$REF" keys list | grep -q "AES-256-GCM"
+
+      - name: Log in to GitHub Packages
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push image
+        id: push
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            if [ "$tag" != "$VERSION" ]; then
+              docker tag "$IMAGE:$VERSION" "$IMAGE:$tag"
+            fi
+            docker push "$IMAGE:$tag" | tee -a push.log
+          done
+          # Every tag names the same image; its digest is what the attestation covers.
+          digest="$(grep -oE 'digest: sha256:[0-9a-f]{64}' push.log | head -n1 | cut -d' ' -f2)"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Couldn't read the pushed image's digest."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $IMAGE@$digest as: $TAGS"
+
+      # Verify with: gh attestation verify oci://ghcr.io/<owner>/cryptare:<version> --repo <owner>/Cryptare
+      - name: Attest image provenance
+        if: github.ref_type == 'tag'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.meta.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          # Storage records are only for organisation-owned repositories.
+          create-storage-record: false
+
+      - name: Log out of GitHub Packages
+        if: always() && github.ref_type == 'tag'
+        run: docker logout ghcr.io

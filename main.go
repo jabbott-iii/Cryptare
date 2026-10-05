@@ -51,8 +51,9 @@ func exitCode(err error) int {
 // databaseOpener opens the key database at CRYPTARE_DB_PATH or, when that isn't set,
 // at the default path in the user's data folder (databasePath), creating that folder
 // first and writing noticeLegacyDatabase's notice, if any, to stderr. The CLI calls it
-// only for the keys commands and the TUI, so other commands never create anything. A
-// database refused as untrusted (SEC-016) gets a hint about CRYPTARE_DB_PATH.
+// only for the keys commands, the TUI, encrypt --key and the decryption of a file
+// encrypted with a stored key, so other commands never create anything. A database
+// refused as untrusted (SEC-016) gets a hint about CRYPTARE_DB_PATH.
 func databaseOpener(stderr io.Writer) internal.DatabaseOpener {
 	return func() (*internal.Database, error) {
 		path, fromEnv, err := databasePath()

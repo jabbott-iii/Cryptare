@@ -163,9 +163,23 @@ func EncryptFile(src, dst, password string) error {
 // EncryptFileContext is EncryptFile that stops once ctx is done, checked between reads
 // and archive entries. The partial output is then removed and an existing dst is left
 // as it was (SEC-015).
-func EncryptFileContext(ctx context.Context, src, dst, password string) (err error) {
-	if err := CheckPasswordPolicy(password); err != nil {
-		return err
+func EncryptFileContext(ctx context.Context, src, dst, password string) error {
+	return EncryptFileWithCredentialContext(ctx, src, dst, PasswordCredential(password))
+}
+
+// EncryptFileWithCredentialContext is EncryptFileContext with the data protected by
+// cred: a password, which must meet the password policy, or a stored key unlocked for
+// new data with StoredKeyCredential (plan 3.4), whose ID the output's header records.
+// A stored key unlocked only to decrypt is refused, so the policy on its master
+// password can't be skipped (SEC-001).
+func EncryptFileWithCredentialContext(ctx context.Context, src, dst string, cred Credential) (err error) {
+	switch {
+	case cred.isStoredKey() && !cred.canEncrypt:
+		return fmt.Errorf("stored key %s was unlocked to decrypt, not to encrypt new files", cred.keyID)
+	case !cred.isStoredKey():
+		if err := CheckPasswordPolicy(cred.password); err != nil {
+			return err
+		}
 	}
 
 	info, err := os.Lstat(src)
@@ -198,9 +212,9 @@ func EncryptFileContext(ctx context.Context, src, dst, password string) (err err
 	defer out.Abort()
 
 	if statInfo.IsDir() {
-		err = encryptDirectory(ctx, out, src, password)
+		err = encryptDirectory(ctx, out, src, cred)
 	} else {
-		err = encryptSingleFile(ctx, out, src, password)
+		err = encryptSingleFile(ctx, out, src, cred)
 	}
 	if err != nil {
 		return err
@@ -215,14 +229,14 @@ func EncryptFileContext(ctx context.Context, src, dst, password string) (err err
 }
 
 // encryptSingleFile streams the file at src, encrypted, to w.
-func encryptSingleFile(ctx context.Context, w io.Writer, src, password string) (err error) {
+func encryptSingleFile(ctx context.Context, w io.Writer, src string, cred Credential) (err error) {
 	in, err := os.Open(src) // #nosec G304 -- src is the file the user chose to encrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
 	}
 	defer closeWithError(&err, in, "close source file")
 
-	enc, err := newEncryptingWriter(w, password, contentFile)
+	enc, err := newEncryptingWriter(w, cred, contentFile)
 	if err != nil {
 		return err
 	}
@@ -234,8 +248,8 @@ func encryptSingleFile(ctx context.Context, w io.Writer, src, password string) (
 
 // encryptDirectory streams a tar.gz of the directory tree at src, encrypted, to w. The
 // archive is never held in memory or written anywhere in plaintext (SEC-006).
-func encryptDirectory(ctx context.Context, w io.Writer, src, password string) error {
-	enc, err := newEncryptingWriter(w, password, contentFolder)
+func encryptDirectory(ctx context.Context, w io.Writer, src string, cred Credential) error {
+	enc, err := newEncryptingWriter(w, cred, contentFolder)
 	if err != nil {
 		return err
 	}
@@ -283,7 +297,15 @@ func DecryptFileWithLimits(src, dst, password string, limits ExtractLimits) erro
 // DecryptFileWithLimitsContext is DecryptFileWithLimits that stops once ctx is done,
 // checked between reads and archive entries. The partial plaintext is then removed and
 // an existing dst is left as it was (SEC-015).
-func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string, limits ExtractLimits) (err error) {
+func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string, limits ExtractLimits) error {
+	return DecryptFileWithCredentialContext(ctx, src, dst, PasswordCredential(password), limits)
+}
+
+// DecryptFileWithCredentialContext is DecryptFileWithLimitsContext with cred opening the
+// data: a password, or, for data encrypted with a stored key, that key unlocked with
+// StoredKeyCredential (plan 3.4). Use EncryptedWithStoredKey to find out which one src
+// needs; the wrong kind is refused with ErrStoredKeyRequired or ErrPasswordRequired.
+func DecryptFileWithCredentialContext(ctx context.Context, src, dst string, cred Credential, limits ExtractLimits) (err error) {
 	f, err := os.Open(src) // #nosec G304 -- src is the file the user chose to decrypt
 	if err != nil {
 		return fmt.Errorf("open source file: %w", err)
@@ -300,7 +322,7 @@ func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string
 	r := bufio.NewReader(f)
 	prefix, _ := r.Peek(len(directoryArtifactMagicV1)) // shorter at the end of a small file
 	if isV2(prefix) {
-		h, plain, err := newDecryptingReader(r, password, contentFile, contentFolder)
+		h, plain, err := newDecryptingReader(r, cred, contentFile, contentFolder)
 		if err != nil {
 			return err
 		}
@@ -309,6 +331,10 @@ func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string
 		}
 		return writeStreamAtomic(ctx, dst, plain)
 	}
+	if cred.isStoredKey() {
+		return ErrPasswordRequired // the legacy formats predate stored keys
+	}
+	password := cred.password
 
 	// The legacy formats are read whole, so their size is bounded by the output limit
 	// before reading (BUG-024): a large file that isn't Cryptare's fails fast instead of
@@ -352,6 +378,29 @@ func DecryptFileWithLimitsContext(ctx context.Context, src, dst, password string
 		return fmt.Errorf("write output file: %w", err)
 	}
 	return nil
+}
+
+// EncryptedWithStoredKey reports whether the file at path is version 2 data encrypted
+// with a stored key, and if so that key's ID, read from its header (plan 3.4). The CLI
+// and the TUI call it before decrypting, to unlock the key instead of asking for a
+// password. Only a regular file is read: reading a pipe here would consume the data
+// that decrypting it needs. A file that isn't regular, can't be read, or whose header
+// isn't valid, is reported as not encrypted with a stored key: decrypting it then
+// reports the problem (ErrStoredKeyRequired for a stored-key file read from a pipe).
+func EncryptedWithStoredKey(path string) (keyID string, ok bool) {
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	f, err := os.Open(path) // #nosec G304 -- path is the file the user chose to decrypt
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }() // read-only: a close error can't lose data
+	h, _, err := readV2Header(f)
+	if err != nil || h.keySource != keySourceStoredKey {
+		return "", false
+	}
+	return h.storedKeyID(), true
 }
 
 // legacyTooLargeError reports a legacy-format input larger than the output limit.
@@ -491,7 +540,10 @@ func openKeyData(data []byte, masterPassword string, content byte) ([]byte, erro
 		plaintext, err = decryptBytes(data, masterPassword)
 	}
 	if errors.Is(err, errDecrypt) {
-		return nil, errors.New("decryption failed: wrong master password or corrupted blob")
+		if content == contentKeyExport {
+			return nil, ErrWrongExportPassword
+		}
+		return nil, ErrWrongMasterPassword
 	}
 	if err != nil {
 		return nil, err
@@ -510,12 +562,18 @@ type KeyExport struct {
 	EncryptedBlob string `json:"encrypted_blob"` // base64 AES-256-GCM ciphertext
 }
 
-// ExportKeyToFile writes an encrypted key export to the path using masterPassword,
-// which must meet the password policy (CheckPasswordPolicy). The file is the base64
-// text of version 2 data (content type key export).
+// ExportKeyToFile writes an encrypted key export to the path. The export is protected
+// by the key's own master password (BUG-011), so a key has one password wherever it is:
+// masterPassword must unlock the key (ErrWrongMasterPassword otherwise), and, because
+// it protects a new file, meet the password policy (CheckPasswordPolicy). A key stored
+// by an earlier version under a shorter password therefore can't be exported. The file
+// is the base64 text of version 2 data (content type key export).
 func ExportKeyToFile(km *KeyModel, masterPassword, path string) error {
+	if _, err := DecryptKeyBlob(km.EncryptedBlob, masterPassword); err != nil {
+		return fmt.Errorf("export key %s: %w", displayText(km.KeyID), err)
+	}
 	if err := CheckPasswordPolicy(masterPassword); err != nil {
-		return fmt.Errorf("encrypt export: %w", err)
+		return fmt.Errorf("export key %s: the export is protected by the key's master password, which can't protect a new file: %w", displayText(km.KeyID), err)
 	}
 	export := KeyExport{
 		Version:       1,

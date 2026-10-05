@@ -40,7 +40,9 @@ import (
 //-----------------------------------------core---------------------------------------------------------//
 
 // DatabaseOpener opens the key database. The CLI calls it only for the commands that
-// use the key store, so other commands never create the database file (SEC-010).
+// use the key store (the keys commands, the TUI, encrypt --key, and decrypt of a file
+// encrypted with a stored key), so other commands never create the database file
+// (SEC-010).
 type DatabaseOpener func() (*Database, error)
 
 // NewRootCmd is the cryptare application entry point, using an already-open database.
@@ -49,7 +51,7 @@ func NewRootCmd(db *Database) *cobra.Command {
 }
 
 // NewRootCmdLazy builds the root command around open, which is called at most once,
-// and only by the keys commands and the TUI.
+// and only by the commands that use the key store (see DatabaseOpener).
 func NewRootCmdLazy(open DatabaseOpener) *cobra.Command {
 	var vim bool
 	openDB := openOnce(open)
@@ -75,28 +77,51 @@ func NewRootCmdLazy(open DatabaseOpener) *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		newEncryptCmd(),
-		newDecryptCmd(),
+		newEncryptCmd(openDB),
+		newDecryptCmd(openDB),
 		newCompressCmd(),
 		newDecompressCmd(),
 		newKeysCmd(openDB),
 	)
 	cmd.Flags().BoolVar(&vim, "vim", false, "enable vim keybindings in the TUI")
 
+	silenceUsageOnRun(cmd)
 	return cmd
+}
+
+// silenceUsageOnRun makes cmd and its subcommands print their usage only for the
+// command-line mistakes Cobra reports before a command runs (an unknown flag, a wrong
+// number of arguments, conflicting flags), and not when the command fails: a wrong
+// password or an existing output isn't a usage mistake. Flag values a command checks
+// itself, such as --max-size or --level, are reported without the usage text too.
+// Commands added after this call set SilenceUsage themselves.
+func silenceUsageOnRun(cmd *cobra.Command) {
+	for _, sub := range cmd.Commands() {
+		silenceUsageOnRun(sub)
+	}
+	if run := cmd.RunE; run != nil {
+		cmd.RunE = func(c *cobra.Command, args []string) error {
+			c.SilenceUsage = true
+			return run(c, args)
+		}
+	}
 }
 
 //-----------------------------------------encrypt------------------------------------------------------//
 
-func newEncryptCmd() *cobra.Command {
+func newEncryptCmd(openDB DatabaseOpener) *cobra.Command {
 	var output string
 	var pw passwordFlags
 	var force bool
+	var keyID string
 
 	cmd := &cobra.Command{
 		Use:   "encrypt [path]",
 		Short: "Encrypt a file or directory with AES-256-GCM",
-		Args:  cobra.ExactArgs(1),
+		Long: "Encrypt a file or directory with AES-256-GCM, under a key derived from a password, or with\n" +
+			"a stored key (--key), which asks for that key's master password instead. Decrypting a file\n" +
+			"encrypted with a stored key needs that key in the key database.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]
 			dst := output
@@ -109,18 +134,32 @@ func newEncryptCmd() *cobra.Command {
 			if err := checkOutputOutsideFolder(src, dst); err != nil {
 				return err
 			}
-			password, given, err := pw.get(cmd)
-			if err != nil {
-				return err
-			}
-			if !given {
-				password, err = readNewPassword(cmd, "Enter password: ")
+			var cred Credential
+			if cmd.Flags().Changed("key") {
+				// An empty value (an unset variable in a script) must not fall back
+				// to a password, which would silently protect the file less well.
+				if strings.TrimSpace(keyID) == "" {
+					return errors.New("--key needs a stored key ID (see keys list)")
+				}
+				var err error
+				if cred, err = unlockStoredKey(cmd, openDB, &pw, keyID, true); err != nil {
+					return err
+				}
+			} else {
+				password, given, err := pw.get(cmd)
 				if err != nil {
 					return err
 				}
+				if !given {
+					password, err = readNewPassword(cmd, "Enter password: ")
+					if err != nil {
+						return err
+					}
+				}
+				cred = PasswordCredential(password)
 			}
 			if err := runCancellable(cmd, func(ctx context.Context) error {
-				return EncryptFileContext(ctx, src, dst, password)
+				return EncryptFileWithCredentialContext(ctx, src, dst, cred)
 			}); err != nil {
 				return err
 			}
@@ -132,14 +171,40 @@ func newEncryptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <path>.enc, next to a folder)")
-	pw.register(cmd, "encryption password")
+	pw.register(cmd, "encryption password, or with --key the key's master password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
+	cmd.Flags().StringVarP(&keyID, "key", "k", "", "encrypt with this stored key instead of a password (see keys list)")
 	return cmd
+}
+
+// unlockStoredKey asks for the master password of stored key keyID (or takes it from
+// pw's flags) and unlocks the key from the database, for encrypting (forNewData) or
+// decrypting with it (plan 3.4). The master password was set when the key was made, so
+// it isn't asked for twice.
+func unlockStoredKey(cmd *cobra.Command, openDB DatabaseOpener, pw *passwordFlags, keyID string, forNewData bool) (Credential, error) {
+	db, err := openDB()
+	if err != nil {
+		return Credential{}, err
+	}
+	if _, err := db.GetKey(keyID); err != nil {
+		return Credential{}, keyLookupError(keyID, err)
+	}
+	password, given, err := pw.get(cmd)
+	if err != nil {
+		return Credential{}, err
+	}
+	if !given {
+		password, err = readPassword(cmd, fmt.Sprintf("Enter master password for key %s: ", displayText(keyID)))
+		if err != nil {
+			return Credential{}, err
+		}
+	}
+	return StoredKeyCredential(db, keyID, password, forNewData)
 }
 
 //-----------------------------------------decrypt------------------------------------------------------//
 
-func newDecryptCmd() *cobra.Command {
+func newDecryptCmd(openDB DatabaseOpener) *cobra.Command {
 	var output string
 	var pw passwordFlags
 	var force bool
@@ -148,7 +213,9 @@ func newDecryptCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "decrypt [path]",
 		Short: "Decrypt an AES-256-GCM encrypted file or directory archive",
-		Args:  cobra.ExactArgs(1),
+		Long: "Decrypt a file or directory archive. A file encrypted with a stored key names the key in\n" +
+			"its header: the key is taken from the key database, and its master password is asked for.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			limits, err := limitFlags.limits()
 			if err != nil {
@@ -162,20 +229,28 @@ func newDecryptCmd() *cobra.Command {
 			if err := CheckOutputPath(src, dst, force); err != nil {
 				return withForceHint(err)
 			}
-			password, given, err := pw.get(cmd)
-			if err != nil {
-				return err
-			}
-			if !given {
-				password, err = readPassword(cmd, "Enter password: ")
+			var cred Credential
+			if keyID, ok := EncryptedWithStoredKey(src); ok {
+				if cred, err = unlockStoredKey(cmd, openDB, &pw, keyID, false); err != nil {
+					return withMissingKeyHint(err, src, keyID)
+				}
+			} else {
+				password, given, err := pw.get(cmd)
 				if err != nil {
 					return err
 				}
+				if !given {
+					password, err = readPassword(cmd, "Enter password: ")
+					if err != nil {
+						return err
+					}
+				}
+				cred = PasswordCredential(password)
 			}
 			if err := runCancellable(cmd, func(ctx context.Context) error {
-				return DecryptFileWithLimitsContext(ctx, src, dst, password, limits)
+				return DecryptFileWithCredentialContext(ctx, src, dst, cred, limits)
 			}); err != nil {
-				return withLimitHint(err)
+				return withStoredKeyHint(withLimitHint(err))
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Decrypted: %s → %s\n", src, dst); err != nil {
 				return fmt.Errorf("write command output: %w", err)
@@ -185,10 +260,29 @@ func newDecryptCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file or directory path")
-	pw.register(cmd, "decryption password")
+	pw.register(cmd, "decryption password, or for a file encrypted with a stored key that key's master password")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists")
 	limitFlags.register(cmd)
 	return cmd
+}
+
+// withStoredKeyHint explains ErrStoredKeyRequired, which only a file that isn't regular
+// (a pipe) gets: the key is looked up from the header of a regular file only
+// (EncryptedWithStoredKey).
+func withStoredKeyHint(err error) error {
+	if errors.Is(err, ErrStoredKeyRequired) {
+		return fmt.Errorf("%w; decrypt it from a regular file, not a pipe, so that its key can be looked up", err)
+	}
+	return err
+}
+
+// withMissingKeyHint explains a file encrypted with a stored key that isn't in the key
+// database: the key's export has to be imported first.
+func withMissingKeyHint(err error, src, keyID string) error {
+	if errors.Is(err, ErrKeyNotFound) {
+		return fmt.Errorf("%s is encrypted with stored key %s, which isn't in the key database (%w); import the key's export with \"cryptare keys import\" first", src, keyID, err)
+	}
+	return err
 }
 
 //-----------------------------------------compress-----------------------------------------------------//
@@ -363,33 +457,12 @@ func newKeysGenerateCmd(open DatabaseOpener) *cobra.Command {
 				}
 			}
 
-			rawKey, err := GenerateKey()
+			km, err := GenerateStoredKey(db, password)
 			if err != nil {
 				return err
 			}
 
-			keyID, err := newKeyID()
-			if err != nil {
-				return err
-			}
-
-			blob, err := EncryptKeyBlob(rawKey, password)
-			if err != nil {
-				return err
-			}
-
-			km := &KeyModel{
-				KeyID:         keyID,
-				Algorithm:     "AES-256-GCM",
-				EncryptedBlob: blob,
-				CreatedAt_:    time.Now().Unix(),
-			}
-
-			if err := db.SaveKey(km); err != nil {
-				return fmt.Errorf("save key: %w", err)
-			}
-
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Generated key: %s\n", keyID); err != nil {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Generated key: %s\n", km.KeyID); err != nil {
 				return fmt.Errorf("write command output: %w", err)
 			}
 			return nil
@@ -408,7 +481,9 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export [key-id]",
 		Short: "Export an encrypted key to a file",
-		Args:  cobra.ExactArgs(1),
+		Long: "Export a stored key to a file, to back it up or move it to another key database. The file\n" +
+			"is protected by the key's own master password, which is asked for and checked.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := open()
 			if err != nil {
@@ -433,7 +508,9 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 				return err
 			}
 			if !given {
-				password, err = readNewPassword(cmd, "Enter master password: ")
+				// The key's existing password, checked against the key, so it isn't
+				// asked for twice (BUG-011).
+				password, err = readPassword(cmd, fmt.Sprintf("Enter master password for key %s: ", displayText(keyID)))
 				if err != nil {
 					return err
 				}
@@ -450,7 +527,7 @@ func newKeysExportCmd(open DatabaseOpener) *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file path (default: <key-id>-<timestamp>.ckey)")
-	pw.register(cmd, "master password for export encryption")
+	pw.register(cmd, "the key's master password, which also protects the export")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite the output if it already exists (never the key database)")
 	return cmd
 }
@@ -475,11 +552,16 @@ func checkExportOutput(db *Database, output string, overwrite bool) error {
 
 func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 	var pw passwordFlags
+	var exportPasswordFile string
 
 	cmd := &cobra.Command{
 		Use:   "import [file]",
 		Short: "Import an encrypted key from a file",
-		Args:  cobra.ExactArgs(1),
+		Long: "Import a key export into the key database. The export opens with the key's master\n" +
+			"password. An export made by v1.3.1 or earlier may have a password of its own: give it\n" +
+			"with --export-password-file, or at a terminal Cryptare asks for it. Either password may\n" +
+			"go in either place.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := open()
 			if err != nil {
@@ -492,19 +574,40 @@ func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 				return err
 			}
 			if !given {
-				password, err = readPassword(cmd, "Enter master password: ")
+				password, err = readPassword(cmd, "Enter the key's master password: ")
 				if err != nil {
 					return err
 				}
 			}
-
-			km, err := ImportKeyFromFile(path, password)
-			if err != nil {
-				return err
+			var others []string
+			if exportPasswordFile != "" {
+				other, err := readPasswordFile(exportPasswordFile)
+				if err != nil {
+					return err
+				}
+				others = append(others, other)
 			}
 
-			if err := db.SaveKey(km); err != nil {
-				return keySaveError(km.KeyID, err)
+			km, err := ImportStoredKey(db, path, password, others...)
+			if len(others) == 0 && (errors.Is(err, ErrSeparateKeyPassword) || errors.Is(err, ErrWrongExportPassword)) {
+				// An export with a password of its own (BUG-011), or just a wrong
+				// password. Piped input holds one line, so only a terminal can supply
+				// the other password.
+				if _, interactive := terminalInput(cmd); !interactive {
+					return fmt.Errorf("%w; for an export made by v1.3.1 or earlier with a password of its own, give the other password with --export-password-file", err)
+				}
+				prompt := "This export has a password of its own. Enter the key's master password: "
+				if errors.Is(err, ErrWrongExportPassword) {
+					prompt = "That password doesn't open this export. If v1.3.1 or earlier made it with a password of its own, enter that password: "
+				}
+				other, rerr := readPassword(cmd, prompt)
+				if rerr != nil {
+					return rerr
+				}
+				km, err = ImportStoredKey(db, path, password, other)
+			}
+			if err != nil {
+				return err
 			}
 
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Imported key: %s\n", km.KeyID); err != nil {
@@ -514,7 +617,9 @@ func newKeysImportCmd(open DatabaseOpener) *cobra.Command {
 		},
 	}
 
-	pw.register(cmd, "master password used when key was exported")
+	pw.register(cmd, "the key's master password")
+	cmd.Flags().StringVar(&exportPasswordFile, "export-password-file", "",
+		"for an export made by v1.3.1 or earlier with a password of its own: read that password from the first line of this file")
 	return cmd
 }
 
@@ -533,7 +638,7 @@ func newKeysDeleteCmd(open DatabaseOpener) *cobra.Command {
 			keyID := args[0]
 
 			if !yes {
-				ok, err := confirmAction(cmd, fmt.Sprintf("Delete key %q? This cannot be undone. [y/N]: ", keyID))
+				ok, err := confirmAction(cmd, fmt.Sprintf("Delete key %q? Files encrypted with it can't be decrypted without it or an export of it. This cannot be undone. [y/N]: ", keyID))
 				if err != nil {
 					return err
 				}
@@ -692,23 +797,6 @@ func readPasswordFile(path string) (string, error) {
 		return "", fmt.Errorf("password file %s: first line is too long (over %s)", path, formatSize(maxPasswordFileSize))
 	}
 	return strings.TrimRight(line, "\r\n"), nil
-}
-
-// keyLookupError explains a failed key lookup, naming the key (SEC-017). The ID is
-// quoted, so control characters in it are escaped.
-func keyLookupError(keyID string, err error) error {
-	if errors.Is(err, ErrKeyNotFound) {
-		return fmt.Errorf("%w: %q", ErrKeyNotFound, keyID)
-	}
-	return fmt.Errorf("look up key %q: %w", keyID, err)
-}
-
-// keySaveError explains a failed save of an imported key, naming the key (SEC-017).
-func keySaveError(keyID string, err error) error {
-	if errors.Is(err, ErrKeyExists) {
-		return fmt.Errorf("%w: %q", ErrKeyExists, keyID)
-	}
-	return fmt.Errorf("save imported key %q: %w", keyID, err)
 }
 
 // displayText returns a stored value ready to print to a terminal (SEC-016). A value

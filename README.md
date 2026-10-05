@@ -21,9 +21,10 @@ Cryptare is a terminal tool for encrypting, decrypting, compressing and extracti
   - Automatic output name derivation
 
 - **Key Management**
-  - Generate and store encryption keys
+  - Generate and store random encryption keys, each protected by a master password
+  - Encrypt files and directories with a stored key instead of a password; decrypting finds the key from the file
   - List stored keys
-  - Export keys to encrypted files
+  - Export keys to encrypted files, protected by the key's own master password, to back them up or move them
   - Import keys from encrypted files
   - Delete stored keys with confirmation safeguards
 
@@ -35,6 +36,7 @@ Cryptare is a terminal tool for encrypting, decrypting, compressing and extracti
 
 - Protect a sensitive document before copying it to a USB drive or cloud storage: `cryptare encrypt ./tax-return.pdf`
 - Back up a project folder as one encrypted file, then restore it later: `cryptare encrypt ./project-dir --output ./project-dir-backup.enc`, then `cryptare decrypt ./project-dir-backup.enc --output ./restored-project-dir`
+- Encrypt with a stored key instead of choosing a password for each file: `cryptare keys generate`, then `cryptare encrypt ./report.pdf --key <key-id>`; `cryptare decrypt ./report.pdf.enc` finds the key and asks for its master password. Keep an export of the key (`cryptare keys export <key-id>`) somewhere safe: files encrypted with it can't be decrypted without it
 - Package build output as a tar.gz or zip archive for sharing, and extract archives you receive: `cryptare compress ./build --format zip`, `cryptare decompress ./build-backup.tar.gz`
 - Use menus instead of flags: run `cryptare` (or `cryptare --vim` for vim-style keys)
 
@@ -70,12 +72,12 @@ Each archive holds the binary named after it (`cryptare_linux_amd64`, `cryptare_
 
 > ⚠️ The v1.0.0 binaries were built with CGO disabled and exit on every command with `go-sqlite3 requires cgo to work`. Use v1.0.1 or later (BUG-001 in [intel/notes.md](intel/notes.md)).
 
-To install a release on Linux, download its archive and `checksums.txt` from the [Releases page](https://github.com/jabbott-iii/Cryptare/releases) (replace `v1.1.0` with the release you want), check the hash, and put the binary on your PATH:
+To install the latest release on Linux, download its archive and `checksums.txt` from the [Releases page](https://github.com/jabbott-iii/Cryptare/releases), check the hash, and put the binary on your PATH (for a specific release, replace `latest/download` with `download/<tag>`, such as `download/v1.3.1`):
 
 ```bash
-VERSION=v1.1.0
-curl -LO "https://github.com/jabbott-iii/Cryptare/releases/download/${VERSION}/cryptare_linux_amd64.tar.gz"
-curl -LO "https://github.com/jabbott-iii/Cryptare/releases/download/${VERSION}/checksums.txt"
+BASE=https://github.com/jabbott-iii/Cryptare/releases/latest/download
+curl -LO "$BASE/cryptare_linux_amd64.tar.gz"
+curl -LO "$BASE/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
 tar -xzf cryptare_linux_amd64.tar.gz
 chmod +x cryptare_linux_amd64
@@ -84,6 +86,12 @@ sudo mv cryptare_linux_amd64 /usr/local/bin/cryptare
 
 - macOS: use the matching `darwin` archive in the same way, and check its hash with `shasum -a 256`.
 - Windows: extract the zip, rename `cryptare_windows_amd64.exe` to `cryptare.exe`, and add it to your PATH.
+
+`checksums.txt` only shows that a download wasn't damaged. Releases after v1.3.1 also carry a signed build provenance attestation for every file, which shows it was built by this repository's release workflow. Check one with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify cryptare_linux_amd64.tar.gz --repo jabbott-iii/Cryptare
+```
 
 ## Quick start
 
@@ -104,7 +112,7 @@ cryptare                             # opens the interactive TUI
 - Stopping a command: Ctrl+C (or `kill`, or closing the terminal) during `encrypt`, `decrypt`, `compress` or `decompress` stops it and removes its unfinished output. It exits with status 128 plus the signal number (130 for Ctrl+C), and a second Ctrl+C ends it at once. At the hidden password prompt, any of these signals ends the command with your terminal's echo restored. Quitting the TUI while an action runs cancels the action first ("Cancelling…"). Only a forced kill (`kill -9`) or a power loss can still leave a hidden `.<name>.*.tmp` file or folder behind.
 - Extraction is limited to protect against decompression bombs: `decompress`, and `decrypt` for an encrypted folder, stop after 10 GiB of output or 100,000 archive entries, and remove what they wrote. Change the limits with `--max-size` and `--max-entries` (`0` means no limit). The TUI always uses the defaults.
 - The password prompt reads the whole line, spaces included, and hides what you type when run in a terminal. When input is piped in, the first line is used.
-- New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt`, `keys generate` and `keys export`, whether the password comes from the prompt, `--password` or the TUI.
+- New passwords must be at least 15 characters long, and a single repeated character (such as `aaaaaaaaaaaaaaa`) is refused. Any characters count, including spaces, and no mix of character types is required, so a few unrelated words make a good password. This applies to `encrypt` and `keys generate`, whether the password comes from the prompt, `--password` or the TUI. `encrypt --key` and `keys export` use a key's existing master password, which must meet the rule too, so a key stored by an earlier version under a shorter password still decrypts but can't encrypt new files or be exported.
 - When you type a new password in a terminal or the TUI, you're asked to type it again to confirm it. Piped input is read once.
 - A password is the same however its characters were entered: an accented letter typed as one character or as a letter followed by a combining accent, full-width letters, ligatures and similar variants are made equal (Unicode NFKC normalisation), and a byte order mark that an editor put at the start of a `--password-file` is ignored. The 15-character minimum counts the password after this.
 - Decrypting and importing accept any password, so files and keys protected with a shorter password before this rule existed still open.
@@ -112,7 +120,7 @@ cryptare                             # opens the interactive TUI
 - ⚠️ **Upgrading from v1.0.1 or earlier:** the old prompt kept only the text before the first space. If you encrypted a file at the prompt with a multi-word passphrase, decrypt it with just the first word. See SEC-002 in [intel/cybersec.md](intel/cybersec.md).
 - ⚠️ **Upgrading from v1.1.0 or earlier:**
   - new encrypted files, folders, stored keys and key exports use the versioned format (see "File format" below), which v1.1.0 and earlier can't read. Upgrade every machine that needs to decrypt them; this version still reads everything older versions wrote;
-  - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. To export a key whose master password is shorter, choose an export password of 15 or more characters;
+  - scripts that pass `encrypt`, `keys generate` or `keys export` a password shorter than 15 characters now fail. (Releases up to v1.3.1 let you export a key whose master password is shorter under a separate, longer export password; later versions protect an export with the key's own master password, so such a key can't be exported. See the v1.3.1 note below);
   - `decompress --force` and `decrypt --force` now replace an existing output folder instead of adding to it;
   - archives over 10 GiB of output or 100,000 entries need `--max-size` or `--max-entries`;
   - `--password` now prints a warning on stderr; switch scripts to `--password-file` or piped input;
@@ -130,6 +138,12 @@ cryptare                             # opens the interactive TUI
   - new data protected with a password that normalisation changes (accents typed as combining characters, full-width letters, a `--password-file` starting with a byte order mark, …) records this in its header, and v1.2.0 and earlier refuse it with "unsupported encrypted data: key derivation 2". Data protected with any other password is written as before, and v1.2.0 reads it;
   - data that v1.2.0 or earlier protected with a password typed with combining accents still needs the password typed that way.
 - ⚠️ **Upgrading from v1.3.0** (changes on `main` since v1.3.0): v1.3.0 normalised a rare kind of password incorrectly: one with a vowel sign or length mark from scripts such as Tamil, Malayalam, Bengali, Oriya, Kannada, Sinhala or Myanmar, followed later by a combining accent such as an acute. A file that v1.3.0 protected with such a password doesn't open in later versions. Decrypt it with v1.3.0 and encrypt it again. Every other password works as before.
+- ⚠️ **Upgrading from v1.3.1 or earlier** (changes on `main` since v1.3.1):
+  - stored keys can encrypt files (`encrypt --key <key-id>`, or the "Stored key ID" field in the TUI). A file encrypted with a stored key names the key in its header, and v1.3.1 and earlier refuse it with "unsupported encrypted data: key source 2";
+  - `keys export` asks once for the key's master password, checks it against the key, and protects the export with it, so a key has one password everywhere. `--password` and `--password-file` give that master password: a script that passed a different export password now fails with "wrong master password", and a key whose master password is shorter than 15 characters can't be exported (generate a new key instead);
+  - `keys import` checks that the key inside the export opens. An export made by v1.3.1 or earlier with a separate export password needs both passwords, in either order: give the second with `--export-password-file` (or at the prompt, at a terminal), or in the TUI's second password field;
+  - `encrypt --key`, and `decrypt` of a file encrypted with a stored key, open the key store; other file commands still never do;
+  - a command that fails no longer prints its usage text after the error; only mistakes in the command line itself (an unknown flag, a missing argument) do.
 
 ## Core CLI capabilities
 
@@ -149,14 +163,16 @@ Cryptare is organized into focused command groups:
 - cryptare encrypt [path] --force — overwrite the output if it already exists
 - cryptare encrypt [path] --password-file [file] — read the encryption password from the first line of a file
 - cryptare encrypt [path] --password [value] — provide the password on the command line (prints a warning; prefer --password-file)
+- cryptare encrypt [path] --key [key-id] — encrypt with a stored key instead of a password (`-k` for short); it asks for the key's master password, which `--password-file` can give instead
 
 Examples:
 - cryptare encrypt ./secret.txt
 - cryptare encrypt ./secret.txt --output ./secret.txt.enc
 - cryptare encrypt ./project-dir --output ./project-dir-backup.enc
 - cryptare encrypt ./secret.txt --password-file ~/.config/cryptare/pw.txt
+- cryptare encrypt ./secret.txt --key 3f9a1c0e7b2d4a6f
 
-File format: encrypted files and folders, stored keys and key exports are written in Cryptare's versioned format. Each password use runs Argon2id with 64 MiB of memory, 3 passes and 4 lanes, so it takes a moment. Files are encrypted and decrypted as a stream, so memory use doesn't grow with file size. This version still reads files, keys and exports made by earlier versions, and there's nothing to convert. Earlier versions, v1.1.0 included, can't read the new format: they report it as a wrong password or corrupted file. The layout is described in [intel/maint.md](intel/maint.md) §3.
+File format: encrypted files and folders, stored keys and key exports are written in Cryptare's versioned format. A file encrypted with a stored key gets a key of its own, derived from the stored key, and its header names the stored key; versions up to v1.3.1 can't read it. Each password use runs Argon2id with 64 MiB of memory, 3 passes and 4 lanes, so it takes a moment. Files are encrypted and decrypted as a stream, so memory use doesn't grow with file size. This version still reads files, keys and exports made by earlier versions, and there's nothing to convert. Earlier versions, v1.1.0 included, can't read the new format: they report it as a wrong password or corrupted file. The layout is described in [intel/maint.md](intel/maint.md) §3.
 
 ### decrypt
 
@@ -165,6 +181,7 @@ File format: encrypted files and folders, stored keys and key exports are writte
 - cryptare decrypt [path] --force — overwrite the output if it already exists
 - cryptare decrypt [path] --password-file [file] — read the decryption password from the first line of a file
 - cryptare decrypt [path] --password [value] — provide the password on the command line (prints a warning; prefer --password-file)
+- a file encrypted with a stored key names the key in its header: `decrypt` takes the key from the key store and asks for its master password (or reads it from `--password-file`). The key has to be in the key store; import its export with `keys import` first if it isn't. The header is read from regular files only, so decrypt such a file from a file, not a pipe
 - cryptare decrypt [path] --max-size [size] --max-entries [n] — change the extraction limits for an encrypted folder (defaults 10 GiB and 100,000; 0 means no limit). `--max-size` also caps a file without Cryptare's format header (from v1.1.0 or earlier), which is read whole
 
 Examples:
@@ -212,12 +229,12 @@ Examples:
 - cryptare keys list — list stored encryption keys
 - cryptare keys path — print the key store's path (nothing is opened or created)
 - cryptare keys generate — generate and store a new random encryption key
-- cryptare keys export [key-id] — export an encrypted key to a file
-- cryptare keys import [file] — import an encrypted key from a file (only exports in the format `keys export` writes are accepted)
+- cryptare keys export [key-id] — export a key to a file, protected by the key's own master password, which is asked for and checked
+- cryptare keys import [file] — import a key from an export (only exports in the format `keys export` writes are accepted); the key inside must open with its master password. An export made by v1.3.1 or earlier with a separate export password needs that password too: `--export-password-file [file]`, or the prompt at a terminal (either password may go in either place)
 - cryptare keys delete [key-id] — delete a stored encryption key (irreversible)
 - cryptare keys delete [key-id] --yes — delete non-interactively (automation)
 - cryptare keys delete [key-id] --force — delete non-interactively (automation)
-- `generate`, `export` and `import` also take `--password-file [file]` (or `--password [value]`, which prints a warning)
+- `generate`, `export` and `import` also take `--password-file [file]` (or `--password [value]`, which prints a warning); `import` also takes `--export-password-file [file]` for an older export's own password
 - `export` takes `--force` to overwrite an existing output file; it never writes over the key store
 
 Examples:
@@ -228,6 +245,8 @@ Examples:
 - cryptare keys import ./key-123.ckey
 - cryptare keys delete key-123
 - cryptare keys delete key-123 --yes
+
+⚠️ A file encrypted with a stored key can only be decrypted with that key. Keep an export of every key you encrypt with (`keys export`) somewhere other than the key store: if the key is deleted, or the key store is lost, without an export, those files can't be recovered.
 
 ⚠️ Key deletion is permanent. Deleting a key removes it and overwrites its encrypted data in the database file, so it can't be recovered from that file. Copies made earlier (backups, synced folders, git history) are not affected, and keys deleted with v1.1.0 or earlier may still be recoverable from the file until SQLite reuses that space.
 
@@ -244,12 +263,22 @@ Examples:
 
 | Setting | Default | Description |
 |---|---|---|
-| `CRYPTARE_DB_PATH` (environment variable) | `cryptare/cryptare.db` in your user data folder: `$XDG_DATA_HOME` (if absolute) or `~/.local/share` on Linux and other Unix systems, `~/Library/Application Support` on macOS, `%LocalAppData%` on Windows | Location of the SQLite key store, as a path or a SQLite `file:` URI. `cryptare keys path` prints the one in use. The default's `cryptare` folder is created, readable only by you, the first time a `keys` command or the TUI needs it; versions up to v1.2.0 used `cryptare.db` in the current folder instead (see the upgrade note above). A plain path can't contain `?` (SQLite would cut it there); use a `file:` URI with `%3F` instead. Only the `keys` commands and the TUI open it, creating it if missing with mode 0600 (readable only by you on Linux and macOS; on Windows it gets the folder's permissions). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
+| `CRYPTARE_DB_PATH` (environment variable) | `cryptare/cryptare.db` in your user data folder: `$XDG_DATA_HOME` (if absolute) or `~/.local/share` on Linux and other Unix systems, `~/Library/Application Support` on macOS, `%LocalAppData%` on Windows | Location of the SQLite key store, as a path or a SQLite `file:` URI. `cryptare keys path` prints the one in use. The default's `cryptare` folder is created, readable only by you, the first time the key store is needed; versions up to v1.2.0 used `cryptare.db` in the current folder instead (see the upgrade note above). A plain path can't contain `?` (SQLite would cut it there); use a `file:` URI with `%3F` instead. Only the `keys` commands, the TUI, `encrypt --key` and `decrypt` of a file encrypted with a stored key open it, creating it if missing with mode 0600 (readable only by you on Linux and macOS; on Windows it gets the folder's permissions). An existing key store that others can read is set to 0600 when it is opened. On Linux and macOS, a key store, or its `-journal`, `-wal` or `-shm` file, that another user owns or that others can write to is refused; run `chmod 600` on a file of your own, or point `CRYPTARE_DB_PATH` at another key store. |
 | `--vim` (flag) | off | Turns on vim-style key bindings in the TUI. |
 
-Command flags (`--output`, `--password-file`, `--password`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
+Command flags (`--output`, `--password-file`, `--password`, `--key`, `--format`, `--level`, `--yes`/`--force`) are described under [Core CLI capabilities](#core-cli-capabilities).
 
 ## Docker
+
+Releases after v1.3.1 publish the image to GitHub Packages as `ghcr.io/jabbott-iii/cryptare`, tagged with the version (for example `1.4.0`), its minor line (`1.4`) and `latest`; the last two follow the newest release. It is built for `linux/amd64`. To use it without building:
+
+```bash
+docker pull ghcr.io/jabbott-iii/cryptare:latest
+docker run --rm -it ghcr.io/jabbott-iii/cryptare:latest --help
+gh attestation verify oci://ghcr.io/jabbott-iii/cryptare:latest --repo jabbott-iii/Cryptare   # optional: check its build provenance
+```
+
+Use the published image in the commands below in place of `cryptare:latest`, or build your own.
 
 The image builds Cryptare with CGO enabled for `linux/amd64`, from base images pinned by digest. It runs as an unprivileged user (UID and GID 10001), sets `CRYPTARE_DB_PATH=/app/data/cryptare.db` and declares `/app/data` as a volume owned by that user, so a named volume works as is. A bind-mounted host folder is owned by your host user instead, so run the container as that user with `--user "$(id -u):$(id -g)"`; the key store's ownership check (SEC-016) then passes too. Build with `--build-arg VERSION=<tag>` to set what `--version` reports (default `dev`).
 
@@ -296,7 +325,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full validation workflow.
 ```text
 main.go, database_path.go   entry point, key store path (CRYPTARE_DB_PATH or default) and `keys path`
 internal/crypto.go          AES-256-GCM encryption, key blobs, key export/import
-internal/format_v2.go       versioned format: header, Argon2id, chunked encryption
+internal/keys.go            stored-key flows shared by the CLI and TUI
+internal/format_v2.go       versioned format: header, Argon2id or stored key, chunked encryption
+internal/testdata/golden/   files written by released versions, which the tests must keep opening
 internal/compress.go        gzip, tar.gz and zip creation and extraction
 internal/database.go        SQLite key store (GORM)
 internal/logic-cli.go       Cobra commands

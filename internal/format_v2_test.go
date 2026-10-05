@@ -322,8 +322,10 @@ func TestDecryptRejectsUnsupportedHeaders(t *testing.T) {
 	}{
 		{"format version 3", set(9, 3)},
 		{"unknown content type", set(10, 9)},
-		{"stored-key source (reserved for plan 3.4)", set(11, 2)},
-		{"unknown KDF", set(12, 3)},
+		{"stored-key source with Argon2id settings", set(11, 2)},
+		{"unknown key source", set(11, 3)},
+		{"stored-key KDF with a password", set(12, 3)},
+		{"unknown KDF", set(12, 4)},
 		{"4 GiB of memory", put32(13, 4<<20)},
 		{"memory below 8 KiB per lane", put32(13, 7)},
 		{"zero passes", put32(17, 0)},

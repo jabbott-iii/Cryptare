@@ -511,8 +511,14 @@ func TestEncryptRejectsEmptyPassword(t *testing.T) {
 		t.Errorf("EncryptKeyBlob error = %v, want ErrEmptyPassword", err)
 	}
 
+	// A key stored by an earlier version under this password: the export would be
+	// protected by the same password (BUG-011), so it is refused.
+	legacyBlob, err := encryptBytes(rawKey, "")
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
 	exportPath := filepath.Join(tmpDir, "key.ckey")
-	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}
+	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: base64.StdEncoding.EncodeToString(legacyBlob), CreatedAt_: 1}
 	if err := ExportKeyToFile(km, "", exportPath); !errors.Is(err, ErrEmptyPassword) {
 		t.Errorf("ExportKeyToFile error = %v, want ErrEmptyPassword", err)
 	}
@@ -662,8 +668,14 @@ func TestEncryptRejectsWeakPassword(t *testing.T) {
 		t.Errorf("EncryptKeyBlob error = %v, want ErrWeakPassword", err)
 	}
 
+	// A key stored by an earlier version under this password: the export would be
+	// protected by the same password (BUG-011), so it is refused.
+	legacyBlob, err := encryptBytes(rawKey, "hunter2")
+	if err != nil {
+		t.Fatalf("encryptBytes: %v", err)
+	}
 	exportPath := filepath.Join(tmpDir, "key.ckey")
-	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: "blob", CreatedAt_: 1}
+	km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: base64.StdEncoding.EncodeToString(legacyBlob), CreatedAt_: 1}
 	if err := ExportKeyToFile(km, "hunter2", exportPath); !errors.Is(err, ErrWeakPassword) {
 		t.Errorf("ExportKeyToFile error = %v, want ErrWeakPassword", err)
 	}

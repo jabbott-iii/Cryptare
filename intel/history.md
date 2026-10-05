@@ -1193,3 +1193,138 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
   `scripts/licenses/mingw-w64-runtime.txt`, `internal/password_norm_test.go`;
   `README.md`, `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/maint.md`,
   `intel/map.md`, `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-04 — Round 6: production-readiness review; usable stored keys (plans 3.3, 3.4, 5.17); golden fixtures; SECURITY.md; attestations
+
+- **Verified on GitHub and on the release assets:** round 5 was committed as `6773ae3`
+  and released as v1.3.1 by CD. All five v1.3.1 assets match `checksums.txt`, and
+  `go version -m` reports go1.26.8, `CGO_ENABLED=1`, `vcs.revision=6773ae3…` and
+  `vcs.modified=false` for each, so SEC-018 is closed. `cryptare_linux_amd64` (static,
+  musl) runs: `--version`, `keys generate`/`keys list`, and files move both ways
+  between it and a build from source.
+- **Review findings** (2026-10-04, against v1.3.1): `SECURITY.md` was GitHub's
+  template, listing versions 5.1.x and 4.0.x and no reporting channel; stored keys
+  could be generated, exported and imported but never used (plan 3.4), and an export
+  could need two passwords (BUG-011); no test opened files written by a released
+  binary, so a format change made in the writer and the reader alike would pass every
+  test; the README's install example pinned v1.1.0; every runtime error printed the
+  whole usage text; release files had no proof of origin (SEC-020); Dependabot didn't
+  cover the digest-pinned Docker images; the Docker UID check (SEC-013) wasn't
+  automated; `notes.md` and `plan.md` still described round 5 as uncommitted. The
+  `FuzzExtractTar` "stall" (plan 5.21) was reproduced: it is the fuzzer minimising
+  each new input (60 s by default), not a hang; with `-fuzzminimizetime 3s` it ran
+  60 s, about 24,800 inputs, without a failure.
+- **Owner decisions:** build 3.3 and 3.4 now; Q-014 (the header records the stored
+  key's ID); Q-015 (one password per key); approval of the attestation step, the
+  Dependabot `docker` entry and the Docker UID check; `SECURITY.md` with a 7-day
+  acknowledgement and the latest minor line (1.3.x) supported.
+- **Format (plan 3.4, Q-014):** key source 2 with KDF 3: the Argon2id fields are zero,
+  the stored key's 8-byte ID follows the 46 common bytes (a 54-byte header, all of it
+  each chunk's additional data), and the data key is HKDF-SHA256(stored key, salt,
+  "cryptare v2 stored-key data key"). Only files and folders use it. `parseV2Header`
+  refuses every combination this version doesn't write. v1.3.1 refuses such files with
+  "unsupported encrypted data: key source 2".
+- **Code:** `Credential` (password or unlocked stored key) through `newEncryptingWriter`,
+  `newDecryptingReader`, `EncryptFileWithCredentialContext` and
+  `DecryptFileWithCredentialContext`; `EncryptedWithStoredKey` reads a regular file's
+  header only, because reading a pipe there consumed the stream (caught by
+  `TestDecryptInterruptedBySignal`, which feeds decrypt through a named pipe). New
+  `keys.go` (plan 3.3): `GenerateStoredKey`, `StoredKeyCredential` (the policy applies
+  to a key's master password when it encrypts) and `ImportStoredKey` (checks the key
+  inside; `ErrSeparateKeyPassword` for an older export with its own password), over the
+  `Storage` interface. `ExportKeyToFile` checks the master password, then the policy
+  (5.17, BUG-011). CLI: `encrypt --key`/`-k`, decrypt finds the key from the header,
+  export asks once for the key's master password by name, import takes an older
+  export's own password through `--export-password-file` or a second prompt at a
+  terminal (either password in either place), delete warns about files encrypted with the key,
+  and `silenceUsageOnRun` keeps the usage text for command-line mistakes. TUI: a stored
+  key field at the end of the encrypt form, decrypt finding the key, export with one
+  password field, import with an optional field for an older export's key password.
+- **Golden fixtures:** `internal/testdata/golden/` holds files, folders, stored keys and
+  exports written by v1.0.1 and v1.3.1 (`linux_amd64` assets checked against their
+  `checksums.txt`; archive hashes in its `README.md`), including a KDF 2 file and an
+  export with a separate password, plus a stored-key file and folder written by this
+  build with v1.3.1's key. Exports and stored keys are `.txt`, not `.ckey`/`.db`
+  (SEC-003 note); a `.gitattributes` keeps Windows from converting them.
+  `golden_test.go` opens them all. Mutating the nonce's last-chunk flag in both writer
+  and reader fails all four golden tests while the round-trip tests still pass.
+- **Changed behaviour,** in the README's "Upgrading from v1.3.1 or earlier" note:
+  `keys export` takes the key's master password (a separate export password now fails,
+  and a key with a short legacy master password can't be exported); import checks the
+  key inside; errors no longer print the usage text; `encrypt --key` and decrypting a
+  stored-key file open the key store.
+- **Workflows (owner approved):** `cd.yml` attests every published file on tags with
+  `actions/attest` v4.2.2 (SHA-pinned; `id-token: write` and `attestations: write` on
+  the release job only); `docker.yml` fails unless the image runs as UID 10001;
+  `dependabot.yml` adds the `docker` ecosystem (golang patch updates only).
+- **Docs:** `SECURITY.md` rewritten (plan 4.4); README (features, use case, install from
+  `releases/latest`, attestation check, stored keys, upgrade note, configuration);
+  `CONTRIBUTING.md`; `intel/cybersec.md` (SEC-001 update, SEC-003 note, SEC-013
+  progress, SEC-018 closed, new SEC-020), `intel/maint.md`, `intel/map.md`,
+  `intel/notes.md` (BUG-011 resolved; Q-014, Q-015), `intel/plan.md` (Phase 6).
+- **Validation** (scratch copy, Go 1.26.8 built from source; the module proxy was
+  unreachable, so `x/crypto`, `x/text`, `x/sys` and the two GORM modules came from
+  their GitHub mirrors at the `go.mod` versions, the rest checked against `go.sum`;
+  `go.mod` and `go.sum` unchanged): `gofmt -s -l .` and `go vet ./...` clean;
+  `go test -race -count=1 ./...` passes (89.2% `main`, 80.9% `internal`); golangci-lint
+  v2.13.2 and gosec v2.29.0: 0 issues (10 `#nosec`); actionlint 1.7.12: nothing. Tests whose
+  expectations changed by owner decision: the export cases in
+  `TestEncryptRejectsEmptyPassword`, `TestEncryptRejectsWeakPassword`,
+  `TestNewPasswordCmdsRejectWeakPassword`, `TestLegacyShortPasswordCmds`,
+  `TestDashboardRejectsEmptyPassword`, `TestDashboardRejectsWeakOrMismatchedPassword`
+  and `TestDashboardNewPasswordFormsHaveConfirmation`, and TUI tests that step through
+  the encrypt form's new last field.
+- **Independent review** (a separate agent, with probes and 30–40 s fuzz runs of
+  `FuzzParseV2Header` and `FuzzDecryptingReader`, about 450,000 inputs each): no defect
+  in the format or the cryptography. Fixed from its findings: `encrypt --key ""` fell
+  back to a password (now refused); `ImportStoredKey` took an empty key password as
+  "not given" and needed the two passwords of an older export in one order, and scripts
+  had no way to give the second (now order-independent, with `--export-password-file`);
+  the policy on a stored key's master password was enforced only in the interfaces (now
+  `canEncrypt` in core); stale comments and docs about which commands open the key store;
+  gosec G602 on `readV2Header` (rewritten, not suppressed).
+- **Not run:** govulncheck (database unreachable), the Docker build, Windows and macOS,
+  and the new workflow steps (they run on the next push and tag).
+- **Changed:** `.github/dependabot.yml`, `.github/workflows/cd.yml`,
+  `.github/workflows/docker.yml`, `SECURITY.md`, `README.md`, `CONTRIBUTING.md`,
+  `main.go` (comment), `database_path.go`, `internal/crypto.go`, `internal/format_v2.go`,
+  `internal/logic-cli.go`, `internal/logic-tui.go`, new `internal/keys.go`; tests in
+  `internal/crypto_test.go`, `internal/format_v2_test.go`, `internal/fuzz_test.go`,
+  `internal/logic_cli_test.go`, `internal/logic_tui_test.go`,
+  `internal/password_norm_test.go`, new `internal/golden_test.go`,
+  `internal/keys_test.go`, `internal/stored_keys_test.go` and
+  `internal/testdata/golden/`; `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`,
+  `intel/notes.md`, `intel/plan.md` and this file. Not committed.
+
+## 2026-10-04 — Round 6 (continued): Docker image published to GitHub Packages
+
+- **Owner request:** publish a package on GitHub from CD. The owner chose a container
+  image on GitHub Packages over `.deb`/`.rpm` release assets (GitHub Packages has no
+  registry for plain binaries).
+- **`cd.yml`:** a new `container` job after `release` (so no image is published for a
+  failed release). It builds the `Dockerfile` with `VERSION` set to the tag and OCI labels
+  (`org.opencontainers.image.source` links the package to the repository; revision,
+  version, licence, title, description), smoke-tests the image (`--version` carries the
+  tag, `id -u` is 10001, `keys generate`/`keys list` on a volume), then on tags logs in
+  with the job's token on stdin, pushes `ghcr.io/<owner>/cryptare:X.Y.Z`, plus `X.Y` and
+  `latest` when the tag is the newest release of its line and overall (from
+  `git ls-remote --tags`), reads the digest from the push, and attests it with
+  `actions/attest` v4.2.2 (`push-to-registry: true`, `create-storage-record: false`).
+  Permissions on that job only: `contents: read`, `packages: write`, `id-token: write`,
+  `attestations: write`. No new third-party action. A manual CD run builds and
+  smoke-tests the image without pushing.
+- **Docs:** README (Docker: pulling the published image and checking its attestation),
+  `CONTRIBUTING.md`, `intel/maint.md` §6, `intel/map.md`, `intel/cybersec.md` (SEC-020
+  progress, SEC-013 note), `intel/plan.md` (6.14 and the one-time step of making the new
+  package public), `intel/notes.md`.
+- **Validation:** actionlint 1.7.12 with shellcheck 0.11.0: nothing reported for the
+  four workflows. The tag logic, run against simulated release lists, gives
+  `1.4.0 1.4 latest` for a new release, `1.3.2 1.3` for a patch to an older line after
+  1.4.0, only `1.3.1` when 1.3.2 exists, `1.10.0 1.10 latest` after 1.9.0, only the
+  pre-release's own tag, `manual-N` for a manual run, and refuses a tag that isn't
+  `vX.Y.Z[-PRE]`; the owner name is lower-cased. **Not run:** the job itself (Docker isn't
+  available here; it first runs on a manual CD run or the next tag).
+- **Changed:** `.github/workflows/cd.yml` (delivered in `cryptare-round6-workflows.patch`
+  with the round's other workflow changes), `README.md`, `CONTRIBUTING.md`,
+  `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`, `intel/notes.md`,
+  `intel/plan.md` and this file. Not committed.

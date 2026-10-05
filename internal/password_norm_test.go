@@ -202,7 +202,8 @@ func TestUnicodePasswordFormsOpenTheSameData(t *testing.T) {
 				t.Fatalf("EncryptKeyBlob: %v", err)
 			}
 			export := filepath.Join(dir, "key.ckey")
-			km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: keyAlgorithm, EncryptedBlob: validStoredBlob(t), CreatedAt_: 1}
+			// The export is protected by the key's own master password (BUG-011).
+			km := &KeyModel{KeyID: "0123456789abcdef", Algorithm: keyAlgorithm, EncryptedBlob: blob, CreatedAt_: 1}
 			if err := ExportKeyToFile(km, protect, export); err != nil {
 				t.Fatalf("ExportKeyToFile: %v", err)
 			}
@@ -285,7 +286,7 @@ func sealAsEarlierVersion(t *testing.T, plaintext []byte, password string, conte
 	if err != nil {
 		t.Fatalf("newV2Header: %v", err)
 	}
-	aead, err := h.aead(password)
+	aead, err := h.passwordAEAD(password)
 	if err != nil {
 		t.Fatalf("aead: %v", err)
 	}

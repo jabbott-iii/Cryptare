@@ -150,6 +150,7 @@ func newKeysPathCmd() *cobra.Command {
 			"cryptare/cryptare.db in your user data folder. Nothing is opened or created.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true // a failure here isn't a command-line mistake
 			path, fromEnv, err := databasePath()
 			if err != nil {
 				return err

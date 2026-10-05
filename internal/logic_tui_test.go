@@ -18,6 +18,7 @@ package internal
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -166,7 +167,7 @@ func TestDashboardVimFormModeTransitions(t *testing.T) {
 	}
 
 	m = typeString(m, "pw")
-	if got := m.fieldValue(labelPassword); got != "pw" {
+	if got := m.fieldValue(labelPasswordOrKey); got != "pw" {
 		t.Fatalf("password field = %q, want %q", got, "pw")
 	}
 }
@@ -228,6 +229,8 @@ func TestDashboardVimNormalModeLSubmitsLastField(t *testing.T) {
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
 	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // to the optional stored key field
+	m = next.(DashboardModel)
 
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(DashboardModel)
@@ -305,6 +308,8 @@ func TestDashboardEncryptDecryptRoundTrip(t *testing.T) {
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password confirmation
 	m = next.(DashboardModel)
 	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // leave the stored key empty
+	m = next.(DashboardModel)
 
 	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	m = next.(DashboardModel)
@@ -395,6 +400,8 @@ func TestDashboardEncryptDecryptDirectoryRoundTrip(t *testing.T) {
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
 	m = typeString(m, testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // leave the stored key empty
+	m = next.(DashboardModel)
 
 	next, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(DashboardModel)
@@ -581,12 +588,9 @@ func TestDashboardKeysGenerateAndExport(t *testing.T) {
 	m = next.(DashboardModel)
 	outFile := filepath.Join(tmpDir, "exported.ckey")
 	m = typeString(m, outFile)
-	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to the key's master password
 	m = next.(DashboardModel)
-	m = typeString(m, testPassword)
-	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // move to password confirmation
-	m = next.(DashboardModel)
-	m = typeString(m, testPassword)
+	m = typeString(m, testPassword) // checked against the key, so not confirmed (BUG-011)
 
 	_, cmd = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // submit
 	if cmd == nil {
@@ -828,15 +832,13 @@ func TestDashboardRejectsEmptyPassword(t *testing.T) {
 		t.Fatalf("stored keys = %d (err %v), want 0", len(keys), err)
 	}
 
-	// Export an existing key with a blank password.
-	rawKey, err := GenerateKey()
+	// Export a key whose master password, set by a version before SEC-001, is empty:
+	// the export would be protected by that empty password, so it is refused (BUG-011).
+	blobBytes, err := encryptBytes(make([]byte, keyLen), "")
 	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+		t.Fatalf("encryptBytes: %v", err)
 	}
-	blob, err := EncryptKeyBlob(rawKey, testPassword)
-	if err != nil {
-		t.Fatalf("EncryptKeyBlob: %v", err)
-	}
+	blob := base64.StdEncoding.EncodeToString(blobBytes)
 	if err := db.SaveKey(&KeyModel{KeyID: "0123456789abcdef", Algorithm: "AES-256-GCM", EncryptedBlob: blob, CreatedAt_: 1}); err != nil {
 		t.Fatalf("SaveKey: %v", err)
 	}
@@ -876,6 +878,8 @@ func TestDashboardRefusesExistingOutput(t *testing.T) {
 	m = typeString(next.(DashboardModel), testPassword)
 	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // password confirmation
 	m = typeString(next.(DashboardModel), testPassword)
+	next, _ = m.updateForm(tea.KeyMsg{Type: tea.KeyEnter}) // stored key, left empty
+	m = next.(DashboardModel)
 	_, cmd := m.updateForm(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected a command for the encrypt submission")
@@ -922,7 +926,7 @@ func submitForm(t *testing.T, m DashboardModel, values ...string) actionResultMs
 func TestDashboardNewPasswordFormsHaveConfirmation(t *testing.T) {
 	hasConfirm := func(action actionKind) bool {
 		for _, f := range fieldsFor(action) {
-			if f.label == labelConfirmPassword {
+			if f.label == labelConfirmPassword || f.label == labelConfirmOrKey {
 				if !f.password {
 					t.Errorf("action %d: confirmation field is not masked", action)
 				}
@@ -931,12 +935,14 @@ func TestDashboardNewPasswordFormsHaveConfirmation(t *testing.T) {
 		}
 		return false
 	}
-	for _, action := range []actionKind{actionEncrypt, actionKeysGenerate, actionKeysExport} {
+	for _, action := range []actionKind{actionEncrypt, actionKeysGenerate} {
 		if !hasConfirm(action) {
 			t.Errorf("action %d: form has no password confirmation field", action)
 		}
 	}
-	for _, action := range []actionKind{actionDecrypt, actionKeysImport} {
+	// keys export uses the key's existing master password, checked against the key
+	// (BUG-011).
+	for _, action := range []actionKind{actionDecrypt, actionKeysExport, actionKeysImport} {
 		if hasConfirm(action) {
 			t.Errorf("action %d: form asks to confirm an existing password", action)
 		}
@@ -975,8 +981,10 @@ func TestDashboardRejectsWeakOrMismatchedPassword(t *testing.T) {
 		{"encrypt confirmation blank", actionEncrypt, []string{src, "", testPassword}, ErrPasswordMismatch},
 		{"keys generate weak", actionKeysGenerate, []string{"hunter2", "hunter2"}, ErrWeakPassword},
 		{"keys generate mismatch", actionKeysGenerate, []string{testPassword, other}, ErrPasswordMismatch},
-		{"keys export weak", actionKeysExport, []string{keyID, exportPath, "hunter2", "hunter2"}, ErrWeakPassword},
-		{"keys export mismatch", actionKeysExport, []string{keyID, exportPath, testPassword, other}, ErrPasswordMismatch},
+		// The export reuses the key's master password, which must be the right one
+		// (BUG-011); a weak legacy master password is covered by
+		// TestDashboardExportRefusesWeakMasterPassword.
+		{"keys export wrong password", actionKeysExport, []string{keyID, exportPath, other}, ErrWrongMasterPassword},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1053,7 +1061,7 @@ func TestDashboardExportReportsWrittenPath(t *testing.T) {
 
 	m := NewDashboardModel(db)
 	m.startForm(actionKeysExport, screenKeys)
-	result := submitForm(t, m, keyID, "", testPassword, testPassword)
+	result := submitForm(t, m, keyID, "", testPassword)
 	if result.err != nil {
 		t.Fatalf("export: %v", result.err)
 	}
@@ -1174,7 +1182,7 @@ func TestDashboardExportRefusesExistingOutput(t *testing.T) {
 	} {
 		m := NewDashboardModel(db)
 		m.startForm(actionKeysExport, screenKeys)
-		result := submitForm(t, m, keyID, tc.output, testPassword, testPassword)
+		result := submitForm(t, m, keyID, tc.output, testPassword)
 		if !errors.Is(result.err, tc.want) {
 			t.Fatalf("export to %s: err = %v, want %v", tc.output, result.err, tc.want)
 		}

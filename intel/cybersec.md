@@ -42,9 +42,15 @@ These apply to all changes.
    - Values read from the database are escaped before they are shown in a terminal
      (SEC-016).
    - Deleted keys are not recoverable from the database file.
+   - A stored key that encrypts files is unlocked with its master password for that
+     operation only, and each file gets its own key derived from it (plan 3.4); a
+     key's master password must meet the password policy to encrypt new files or
+     protect an export (SEC-001, BUG-011).
 6. **Supply chain and CI.** Security scanning results are visible and actionable.
    Third-party actions and base images are pinned. Builds use a pinned, current Go
-   toolchain, and govulncheck runs in CI (SEC-018).
+   toolchain, and govulncheck runs in CI (SEC-018). Published release files carry
+   signed build provenance (SEC-020), and vulnerabilities are reported privately
+   (`SECURITY.md`).
 7. **No regression.** A change must not weaken a remediation recorded below.
 
 ## 2. Existing controls (verified 2026-09-23)
@@ -131,8 +137,9 @@ These apply to all changes.
 | SEC-015 | Interrupted decrypt or extraction leaves partial plaintext in hidden temporary files | Medium | Closed |
 | SEC-016 | Key database files from untrusted locations are trusted | Low | Closed |
 | SEC-017 | GORM's default logger prints SQL with bound values to stdout | Low | Closed |
-| SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | In Progress |
+| SEC-018 | Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities | Medium | Closed |
 | SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Closed |
+| SEC-020 | Release files have no verifiable proof of origin | Low | In Progress |
 
 ## 5. Issue register
 
@@ -178,6 +185,19 @@ These apply to all changes.
     workflow patch `cryptare-password-policy-workflows.patch` lengthens them (plan W9);
     the owner has applied it.
   - CI passed on `b415ffc` with the patched workflows; closed 2026-09-27.
+- **Update (2026-10-04, round 6, BUG-011 and plan 3.4; not yet committed):** the policy
+  now also covers passwords that protect new data indirectly. `keys export` protects
+  the export with the key's own master password (owner decision, one password per
+  key), so `ExportKeyToFile` checks that the password unlocks the key and then applies
+  `CheckPasswordPolicy` to it; `StoredKeyCredential` applies it when a stored key
+  encrypts new files, and `EncryptFileWithCredentialContext` refuses a stored key that
+  wasn't unlocked for new data, so the check is in core (`TestDecryptOnlyCredentialDoesntEncrypt`). The capability noted above, exporting a key stored under a short
+  master password with a longer export password, is gone: such a key still decrypts,
+  but can't encrypt new files or be exported (the user generates a new key). Nothing
+  protects new data with a password that fails the policy, so this remediation is
+  unchanged. Tests: `TestEncryptRejectsEmptyPassword` and
+  `TestEncryptRejectsWeakPassword` (export of a legacy key under an empty or short
+  master password), `TestLegacyShortPasswordCmds`, `TestStoredKeyCredentialChecks`.
 - **Affected component:**
   - `internal/logic-tui.go` `buildActionCmd` (encrypt, keys generate, keys export)
   - `internal/crypto.go` `EncryptFile`, `EncryptKeyBlob`, `ExportKeyToFile` (none of
@@ -276,6 +296,13 @@ These apply to all changes.
 ### SEC-003 — Encrypted key material committed to the public repository
 
 - **Status:** Closed (2026-10-04)
+- **Note (2026-10-04, round 6; not yet committed):** the golden format fixtures in
+  `internal/testdata/golden/` include stored keys and key exports written by v1.0.1 and
+  v1.3.1. They are deliberate, public test vectors: every password is published in
+  that folder's `README.md`, and the keys protect nothing but the fixtures. They are
+  kept as `.txt` (their base64 text), not `.ckey` or `.db`, so the guard keeps its
+  meaning for real key material and doesn't need an exception. This is a judgement for
+  the owner to confirm; the alternative is an explicit path exception in the guard.
 - **Progress (2026-10-04, verified on GitHub):** the CI guard is committed in `a088f7f`
   and passed on Ubuntu, Windows and macOS in CI #143; it also ran on Dependabot's
   rebased PR #26 (CI #144, #145). `git ls-tree -r a088f7f` lists no key database or key
@@ -829,6 +856,12 @@ These apply to all changes.
 ### SEC-012 — CI security-scan results discarded; actions not pinned
 
 - **Status:** Closed (2026-10-04)
+- **Note (2026-10-04, round 6; not yet committed):** one more G304 annotation, the same
+  disposition as the others: `EncryptedWithStoredKey` in `crypto.go` opens the file the
+  user chose to decrypt, to read its header (plan 3.4). gosec v2.29.0 then reports 0
+  issues with 10 `#nosec`. Two other findings during the round were fixed instead of
+  annotated: G602 on `readV2Header` (rewritten so the slice only shrinks) and G101 on a
+  TUI field label whose identifier contained "Pass" (renamed).
 - **Progress (2026-10-03, step 5; not yet committed):** the govulncheck job is in
   `security.yml` (SEC-018 step 3).
 - **Progress (2026-10-03, dispositions applied in code; not yet committed):** the 10
@@ -905,6 +938,15 @@ These apply to all changes.
 ### SEC-013 — Container runs as root; base images not pinned
 
 - **Status:** In Progress
+- **Note (2026-10-04, round 6):** the image is now also published to GitHub Packages by
+  `cd.yml`'s `container` job, which runs the same UID check (and `--version` and a key
+  store round trip) before pushing, so a published image can't run as root.
+- **Progress (2026-10-04, round 6; owner approved the workflow change; not yet
+  committed):** `docker.yml` gains "Check the image's user", which runs
+  `docker run --rm --entrypoint id "$IMAGE_NAME" -u` and fails unless it prints 10001.
+  actionlint 1.7.12 reports nothing; Docker isn't available in the analysis environment,
+  so the step's first run is the Docker workflow on the next push. This item closes when
+  that run passes.
 - **Progress (2026-10-04, verified on GitHub):** the changes are committed (`eb330a3`,
   `.dockerignore` in `89a64e8`). Docker #22 and #23 passed: the build resolved both
   pinned digests, and `--help` plus `keys generate`/`keys list` on a new named volume
@@ -1244,9 +1286,17 @@ These apply to all changes.
 
 ### SEC-018 — Builds use the Go 1.26.0 toolchain, with reachable standard-library vulnerabilities
 
-- **Status:** In Progress. Steps 1–3 are committed (`6a5fcb1`, `b3278ea`) and running
-  in CI; the digest pin in step 4 comes with SEC-013, and step 5 is optional. Closes
-  once a release built by CD reports go1.26.8.
+- **Status:** Closed (2026-10-04)
+- **Progress (2026-10-04, round 6):** the remaining validation is done on the published
+  v1.3.1 release (tag on `6773ae3`, built by CD). All five assets match `checksums.txt`,
+  and `go version -m` on each binary reports `go1.26.8`, `CGO_ENABLED=1`,
+  `vcs.revision=6773ae3d5be6…`, `vcs.modified=false` and `golang.org/x/crypto` v0.57.0
+  and `golang.org/x/text` v0.42.0 with the hashes in `go.sum`. The Linux binaries are
+  static (musl, Q-013); `cryptare_linux_amd64` was run: `--version` prints v1.3.1,
+  `keys generate`/`keys list` work, and files encrypted by it and by a build from
+  source open in the other. Step 5: `-trimpath` is in the `Dockerfile` but not in the
+  CD builds (their binaries embed the build paths; not sensitive), and release
+  attestations moved to SEC-020.
 - **Progress (2026-10-04, v1.2.0):** CD #4 built and published v1.2.0 from `89a64e8`
   with the `go.mod` toolchain (1.26.8, through `setup-go`, as in CI), and Docker #23
   built with `golang:1.26.8-alpine` pinned by digest, so step 4 is done with SEC-013.
@@ -1357,7 +1407,10 @@ These apply to all changes.
 - **Validation:** `go version -m` on new release binaries shows the latest 1.26.x
   release; the govulncheck job runs and passes; CI, CD and Docker report the same Go
   version.
-- **Resolution:** —
+- **Resolution:** Steps 1–4 implemented (`6a5fcb1`, `b3278ea`, `eb330a3`): `toolchain
+  go1.26.8`, the govulncheck job, Dependabot, and the digest-pinned `golang:1.26.8-alpine`
+  builder. Validated by govulncheck in Security on every push and by `go version -m` on
+  the v1.3.1 release binaries (go1.26.8, 2026-10-04). Closed 2026-10-04.
 
 ### SEC-019 — Owner-only permission guarantees don't hold on Windows
 
@@ -1397,3 +1450,43 @@ These apply to all changes.
 - **Resolution:** Step 1 done (README and `maint.md` §4, `eb330a3`); step 2 declined by
   the owner (Q-012), so Windows outputs keep the folder's permissions by design, as
   documented. Closed 2026-10-04. Reopen if owner-only ACLs are wanted later.
+
+### SEC-020 — Release files have no verifiable proof of origin
+
+- **Status:** In Progress
+- **Progress (2026-10-04, round 6; owner approved the workflow change; not yet
+  committed):** step 1 is in `cd.yml`: on a tag, the release job runs `actions/attest`
+  v4.2.2 (pinned to `1e69f48a…`) on every archive and `checksums.txt`, with
+  `id-token: write` and `attestations: write` added to that job only. The README's
+  install section shows `gh attestation verify <file> --repo jabbott-iii/Cryptare` and
+  says only releases after v1.3.1 have attestations. actionlint 1.7.12 reports nothing.
+  Not run: the step itself, which needs a tag push.
+- **Progress (2026-10-04, round 6, owner request; not yet committed):** the new
+  `container` job in `cd.yml` publishes the Docker image to GitHub Packages on tags
+  and attests its digest the same way (`subject-name` and `subject-digest`, with the
+  attestation pushed to the registry). The README shows
+  `gh attestation verify oci://ghcr.io/jabbott-iii/cryptare:<tag> --repo jabbott-iii/Cryptare`.
+  The job holds `packages: write` and uses only plain `docker` commands and the
+  already-pinned `actions/attest`, passing the token to `docker login` on stdin.
+  Validation adds: the first tagged run pushes the image, and `gh attestation verify`
+  passes for its tag.
+- **Affected component:** `.github/workflows/cd.yml` (release and container jobs); the README's
+  install instructions; every published release up to v1.3.1.
+- **Risk:** Releases publish `checksums.txt` next to the archives, from the same
+  place. It catches a damaged download, but anyone who can replace an asset (a
+  compromised account or token, or a tampered mirror) can replace the checksum file
+  too, and users have no independent way to tell a genuine binary from a substituted
+  one. For an encryption tool that handles users' passwords and plaintext, a
+  substituted binary is a direct compromise. Found in the 2026-10-04 review (also
+  noted under SEC-018 step 5 and in `notes.md` §3).
+- **Required remediation:**
+  1. Attach signed build provenance to every published file (GitHub artifact
+     attestations, Sigstore-backed, tied to the repository and the workflow), and
+     document how to verify it.
+  2. Optional, by audience: Developer ID signing and notarisation of the macOS
+     binaries and Authenticode signing of the Windows binary, which operating-system
+     warnings rely on (both need paid certificates).
+- **Validation:** the CD run for the next tag shows the attestation step succeeding;
+  `gh attestation verify` passes for each of that release's archives and
+  `checksums.txt`, and fails for a modified copy.
+- **Resolution:** —

@@ -1056,8 +1056,8 @@ func TestNewPasswordCmdsRejectWeakPassword(t *testing.T) {
 		{"encrypt prompt", "hunter2\n", []string{"encrypt", src}},
 		{"keys generate flag", "", []string{"keys", "generate", "--password", "hunter2"}},
 		{"keys generate prompt", "hunter2\n", []string{"keys", "generate"}},
-		{"keys export flag", "", []string{"keys", "export", keyID, "--output", exportPath, "--password", "hunter2"}},
-		{"keys export prompt", "hunter2\n", []string{"keys", "export", keyID, "--output", exportPath}},
+		// keys export reuses the key's master password (BUG-011); a weak one is
+		// refused in TestLegacyShortPasswordCmds.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1079,7 +1079,8 @@ func TestNewPasswordCmdsRejectWeakPassword(t *testing.T) {
 
 // TestLegacyShortPasswordCmds checks that the CLI still decrypts files and imports key
 // exports protected with a password shorter than the policy minimum, and that a key
-// stored under a short master password can be exported with a password that meets it.
+// stored under a short master password isn't exported: the export would be protected
+// by that same password (BUG-011), which can't protect a new file (SEC-001).
 func TestLegacyShortPasswordCmds(t *testing.T) {
 	tmpDir := t.TempDir()
 	const legacyPassword = "hunter2"
@@ -1130,11 +1131,14 @@ func TestLegacyShortPasswordCmds(t *testing.T) {
 	}
 
 	newExport := filepath.Join(tmpDir, "renewed.ckey")
-	if err := run("", "keys", "export", "0123456789abcdef", "--output", newExport, "--password", testPassword); err != nil {
-		t.Fatalf("export legacy key with a strong export password: %v", err)
+	if err := run("", "keys", "export", "0123456789abcdef", "--output", newExport, "--password", testPassword); !errors.Is(err, ErrWrongMasterPassword) {
+		t.Fatalf("export with a password other than the key's: err = %v, want ErrWrongMasterPassword", err)
 	}
-	if _, err := os.Stat(newExport); err != nil {
-		t.Fatalf("export file not created: %v", err)
+	if err := run("", "keys", "export", "0123456789abcdef", "--output", newExport, "--password", legacyPassword); !errors.Is(err, ErrWeakPassword) {
+		t.Fatalf("export of a key with a short master password: err = %v, want ErrWeakPassword", err)
+	}
+	if _, err := os.Stat(newExport); !os.IsNotExist(err) {
+		t.Fatalf("export file created (stat err: %v)", err)
 	}
 }
 

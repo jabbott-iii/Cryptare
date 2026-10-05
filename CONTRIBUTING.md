@@ -44,9 +44,10 @@ go build -o cryptare .
 CRYPTARE_DB_PATH="$HOME/.cryptare-dev.db" ./cryptare --help
 ```
 
-The `keys` commands and the TUI open (and create, if missing) the SQLite key store at
-`CRYPTARE_DB_PATH`, or at `cryptare/cryptare.db` in your user data folder when the
-variable is unset (`./cryptare keys path` prints which). Other commands don't touch it.
+The `keys` commands, the TUI, `encrypt --key` and `decrypt` of a file encrypted with a
+stored key open (and create, if missing) the SQLite key store at `CRYPTARE_DB_PATH`, or
+at `cryptare/cryptare.db` in your user data folder when the variable is unset
+(`./cryptare keys path` prints which). Other commands don't touch it.
 Set `CRYPTARE_DB_PATH` while developing so you don't use your real key store. `*.db`
 and `*.ckey` are git-ignored, and CI fails if a key database or key export is tracked.
 **Never commit a database file.**
@@ -81,22 +82,27 @@ go test ./...                                        # add -race when a C toolch
 CI runs on Ubuntu, Windows and macOS. After the checks above, it builds the binary with
 CGO and smoke-tests it: `--version`, `keys generate`/`keys list`, and an encrypt/decrypt
 round-trip. On every push and pull request, CodeQL, gosec and govulncheck also run
-(`security.yml`), and Dependabot proposes Go module and action updates weekly. Pull requests to `main` get a Docker build smoke test
-(`docker.yml`).
+(`security.yml`), and Dependabot proposes Go module, action and Docker base image updates weekly. Pull requests to `main` get a Docker build smoke test
+(`docker.yml`), which also checks that the image runs as UID 10001. Tagged releases attach a
+signed build provenance attestation to every published file and, after the release, publish
+the Docker image to GitHub Packages (`ghcr.io/<owner>/cryptare`) with its own attestation
+(`cd.yml`).
 
 ## Coding expectations
 
 The full rules are in [`intel/maint.md`](intel/maint.md). In short:
 
-- **Layering.** `internal/crypto.go` and `internal/compress.go` stay UI-agnostic: no
-  printing, prompting, Cobra or Bubble Tea.
-- **CLI and TUI stay in step.** A behaviour change must land in both `logic-cli.go`
-  and `logic-tui.go`, with tests for each.
+- **Layering.** `internal/crypto.go`, `internal/format_v2.go`, `internal/compress.go` and
+  `internal/keys.go` stay UI-agnostic: no printing, prompting, Cobra or Bubble Tea.
+- **CLI and TUI stay in step.** Key-store flows go in `internal/keys.go`, which both use.
+  A behaviour change must land in both `logic-cli.go` and `logic-tui.go`, with tests for
+  each.
 - **Validation that protects data goes in the core layer**, so both interfaces
   inherit it.
 - **Compatibility.** Existing encrypted files, directory artifacts, stored keys and
   `.ckey` exports must stay readable. Format changes need a versioned header and a
-  legacy read path.
+  legacy read path. The golden fixtures in `internal/testdata/golden/` must keep
+  opening; never regenerate or edit them to make a test pass.
 - **Error handling.** Wrap errors with context (`fmt.Errorf("…: %w", err)`) and check
   errors from output writes. Use `closeWithError` for deferred closes on writers.
 - **Filesystem.** Write outputs with mode `0o600`. Keep rejecting symlinks, special
@@ -120,8 +126,8 @@ The full rules are in [`intel/maint.md`](intel/maint.md). In short:
 - Don't weaken or bypass a remediation recorded in
   [`intel/cybersec.md`](intel/cybersec.md), and don't disable tests, linters or
   security scans to get a build to pass.
-- Don't report suspected vulnerabilities in public issues. Contact the maintainer
-  (@jabbott-iii) privately.
+- Don't report suspected vulnerabilities in public issues. Report them privately as
+  [`SECURITY.md`](SECURITY.md) describes.
 
 ## Pull request expectations
 

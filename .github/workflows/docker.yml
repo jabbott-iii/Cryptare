@@ -30,6 +30,13 @@ jobs:
       - name: Smoke test CLI help
         run: docker run --rm "$IMAGE_NAME" --help
 
+      # The image must run as its unprivileged user, never root (SEC-013).
+      - name: Check the image's user
+        run: |
+          uid="$(docker run --rm --entrypoint id "$IMAGE_NAME" -u)"
+          echo "The image runs as UID $uid"
+          test "$uid" = 10001
+
       # Exercises the SQLite key store on the image's data volume
       # (the Dockerfile sets CRYPTARE_DB_PATH=/app/data/cryptare.db).
       - name: Smoke test database access

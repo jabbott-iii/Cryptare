@@ -21,8 +21,11 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -39,14 +42,16 @@ import (
 //	0      9    magic "CRYPTARE\x00" (a legacy folder artifact has '-' at offset 8)
 //	9      1    format version, 2
 //	10     1    content type: 1 file, 2 folder (tar.gz), 3 stored key, 4 key export
-//	11     1    key source: 1 password (2 is reserved for stored keys, plan 3.4)
-//	12     1    KDF: 1 Argon2id over the password, 2 Argon2id over its NFKC form (Q-009)
-//	13     4    Argon2id memory in KiB (big-endian)
-//	17     4    Argon2id passes (big-endian)
-//	21     1    Argon2id lanes
+//	11     1    key source: 1 password, 2 stored key (plan 3.4)
+//	12     1    KDF: 1 Argon2id over the password, 2 Argon2id over its NFKC form (Q-009),
+//	            3 HKDF-SHA256 from a stored key
+//	13     4    Argon2id memory in KiB (big-endian; 0 with a stored key)
+//	17     4    Argon2id passes (big-endian; 0 with a stored key)
+//	21     1    Argon2id lanes (0 with a stored key)
 //	22     16   salt
 //	38     1    chunk size as a power of two (16 = 64 KiB)
 //	39     7    random nonce prefix
+//	46     8    stored key's ID (key source 2 only, which makes the header 54 bytes)
 //
 // The plaintext follows in chunks sealed with AES-256-GCM under the derived key: every
 // chunk holds chunk-size bytes except the last, which may be shorter or empty. A chunk's
@@ -62,23 +67,38 @@ const (
 	noncePrefixLen = 7
 	gcmTagLen      = 16
 
+	// storedKeyIDLen is the size of a stored key's ID in a header: the 16 hexadecimal
+	// characters of a key ID, decoded.
+	storedKeyIDLen = 8
+	// v2StoredKeyHeaderLen is the length of the header of data encrypted with a stored
+	// key: the common 46 bytes followed by the key's ID.
+	v2StoredKeyHeaderLen = v2HeaderLen + storedKeyIDLen
+
 	contentFile      byte = 1
 	contentFolder    byte = 2
 	contentStoredKey byte = 3
 	contentKeyExport byte = 4
 
-	keySourcePassword byte = 1
+	keySourcePassword  byte = 1
+	keySourceStoredKey byte = 2
 
-	// Key derivation identifiers. Both are Argon2id; they differ in the bytes of the
-	// password it is applied to (Q-009). This version writes kdfArgon2id when the
+	// Key derivation identifiers. The first two are Argon2id; they differ in the bytes
+	// of the password it is applied to (Q-009). This version writes kdfArgon2id when the
 	// normalised password (normalizePassword) is the password as given, so the header
 	// is the one earlier versions write and they can read the data with the same
 	// password. Otherwise it writes kdfArgon2idNFKC, which earlier versions refuse as
 	// an unknown key derivation instead of reporting a wrong password. Data recorded as
 	// kdfArgon2id is read with each form passwordCandidates returns, kdfArgon2idNFKC
-	// data with the normalised form only.
-	kdfArgon2id     byte = 1
-	kdfArgon2idNFKC byte = 2
+	// data with the normalised form only. kdfHKDFStoredKey, the only one key source 2
+	// allows, derives the data's key from a stored key with HKDF-SHA256 over the
+	// header's salt (plan 3.4).
+	kdfArgon2id      byte = 1
+	kdfArgon2idNFKC  byte = 2
+	kdfHKDFStoredKey byte = 3
+
+	// storedKeyInfo is the HKDF info string for the key of data encrypted with a
+	// stored key. The header, key ID included, is each chunk's additional data.
+	storedKeyInfo = "cryptare v2 stored-key data key"
 
 	defaultChunkShift = 16 // 64 KiB
 	minChunkShift     = 10
@@ -112,14 +132,64 @@ var errUnsupportedFormat = errors.New("unsupported encrypted data")
 // errDecrypt is returned when authentication fails: a wrong password or damaged data.
 var errDecrypt = errors.New("decryption failed: wrong password or corrupted file")
 
+var (
+	// ErrStoredKeyRequired is returned when data encrypted with a stored key is opened
+	// with a password (plan 3.4). The interfaces read the header first
+	// (EncryptedWithStoredKey) and unlock the key instead.
+	ErrStoredKeyRequired = errors.New("this data is encrypted with a stored key")
+
+	// ErrPasswordRequired is returned when data protected with a password, including
+	// every legacy file, is opened with a stored key.
+	ErrPasswordRequired = errors.New("this data is protected with a password, not a stored key")
+
+	// ErrWrongStoredKey is returned when data is opened with a stored key other than the
+	// one its header names.
+	ErrWrongStoredKey = errors.New("this data is encrypted with a different stored key")
+)
+
+// Credential is what protects or opens encrypted data: a password, or a stored key that
+// has been unlocked (plan 3.4). Make one with PasswordCredential, or, for a stored key,
+// with StoredKeyCredential (keys.go).
+type Credential struct {
+	password string
+	keyID    string // a stored key's ID, as 16 lower-case hexadecimal characters
+	key      []byte // the stored key itself; nil for a password
+	// canEncrypt is set for a stored key whose master password passed the password
+	// policy when it was unlocked (StoredKeyCredential for new data), which
+	// EncryptFileWithCredentialContext requires (SEC-001).
+	canEncrypt bool
+}
+
+// PasswordCredential returns the credential for password.
+func PasswordCredential(password string) Credential {
+	return Credential{password: password}
+}
+
+// newStoredKeyCredential returns the credential for the unlocked stored key key, whose
+// ID is keyID. canEncrypt says whether it may encrypt new files.
+func newStoredKeyCredential(keyID string, key []byte, canEncrypt bool) (Credential, error) {
+	if !isKeyID(keyID) {
+		return Credential{}, fmt.Errorf("stored key ID %q is not %d lower-case hexadecimal characters", keyID, keyIDLen)
+	}
+	if len(key) != keyLen {
+		return Credential{}, fmt.Errorf("stored key %s is %d bytes, not %d", keyID, len(key), keyLen)
+	}
+	return Credential{keyID: keyID, key: key, canEncrypt: canEncrypt}, nil
+}
+
+// isStoredKey reports whether c is a stored key rather than a password.
+func (c Credential) isStoredKey() bool { return c.key != nil }
+
 // v2Header is a parsed version 2 header.
 type v2Header struct {
 	content     byte
+	keySource   byte
 	kdfID       byte
 	kdf         argon2Params
 	salt        [saltLen]byte
 	chunkShift  uint8
 	noncePrefix [noncePrefixLen]byte
+	keyID       [storedKeyIDLen]byte // key source 2 only
 }
 
 // isV2 reports whether data starts like a version 2 artifact.
@@ -130,7 +200,7 @@ func isV2(data []byte) bool {
 // newV2Header returns a header for new content, with a fresh salt and nonce prefix and
 // the current password KDF setting, recorded as kdfArgon2id.
 func newV2Header(content byte) (v2Header, error) {
-	h := v2Header{content: content, kdfID: kdfArgon2id, kdf: passwordKDF, chunkShift: defaultChunkShift}
+	h := v2Header{content: content, keySource: keySourcePassword, kdfID: kdfArgon2id, kdf: passwordKDF, chunkShift: defaultChunkShift}
 	if _, err := rand.Read(h.salt[:]); err != nil {
 		return v2Header{}, fmt.Errorf("generate salt: %w", err)
 	}
@@ -140,21 +210,43 @@ func newV2Header(content byte) (v2Header, error) {
 	return h, nil
 }
 
+// useStoredKey makes h a header for data encrypted with the stored key keyID: key
+// source 2, HKDF, no Argon2id settings, and the key's ID after the common fields.
+func (h *v2Header) useStoredKey(keyID string) error {
+	id, err := hex.DecodeString(keyID)
+	if err != nil || len(id) != storedKeyIDLen {
+		return fmt.Errorf("stored key ID %q is not %d lower-case hexadecimal characters", keyID, keyIDLen)
+	}
+	h.keySource = keySourceStoredKey
+	h.kdfID = kdfHKDFStoredKey
+	h.kdf = argon2Params{}
+	copy(h.keyID[:], id)
+	return nil
+}
+
+// storedKeyID returns the ID of the stored key named by a key source 2 header.
+func (h v2Header) storedKeyID() string { return hex.EncodeToString(h.keyID[:]) }
+
 func (h v2Header) marshal() []byte {
-	b := make([]byte, 0, v2HeaderLen)
+	b := make([]byte, 0, v2StoredKeyHeaderLen)
 	b = append(b, v2Magic...)
-	b = append(b, formatV2, h.content, keySourcePassword, h.kdfID)
+	b = append(b, formatV2, h.content, h.keySource, h.kdfID)
 	b = binary.BigEndian.AppendUint32(b, h.kdf.memoryKiB)
 	b = binary.BigEndian.AppendUint32(b, h.kdf.iterations)
 	b = append(b, h.kdf.threads)
 	b = append(b, h.salt[:]...)
 	b = append(b, h.chunkShift)
 	b = append(b, h.noncePrefix[:]...)
+	if h.keySource == keySourceStoredKey {
+		b = append(b, h.keyID[:]...)
+	}
 	return b
 }
 
 // parseV2Header parses and checks a version 2 header. It refuses versions, content
-// types, key sources and KDFs this build doesn't know, and settings beyond its limits.
+// types, key sources and KDFs this build doesn't know, combinations of them it doesn't
+// write, and settings beyond its limits. A key source 2 header must be given whole (54
+// bytes).
 func parseV2Header(b []byte) (v2Header, error) {
 	if len(b) < v2HeaderLen || !isV2(b) {
 		return v2Header{}, fmt.Errorf("%w: header too short or not a Cryptare header", errUnsupportedFormat)
@@ -162,24 +254,41 @@ func parseV2Header(b []byte) (v2Header, error) {
 	if b[9] != formatV2 {
 		return v2Header{}, fmt.Errorf("%w: format version %d", errUnsupportedFormat, b[9])
 	}
-	h := v2Header{content: b[10]}
+	h := v2Header{content: b[10], keySource: b[11], kdfID: b[12]}
 	if h.content < contentFile || h.content > contentKeyExport {
 		return v2Header{}, fmt.Errorf("%w: content type %d", errUnsupportedFormat, h.content)
-	}
-	if b[11] != keySourcePassword {
-		return v2Header{}, fmt.Errorf("%w: key source %d", errUnsupportedFormat, b[11])
-	}
-	h.kdfID = b[12]
-	if h.kdfID != kdfArgon2id && h.kdfID != kdfArgon2idNFKC {
-		return v2Header{}, fmt.Errorf("%w: key derivation %d", errUnsupportedFormat, h.kdfID)
 	}
 	h.kdf = argon2Params{
 		memoryKiB:  binary.BigEndian.Uint32(b[13:17]),
 		iterations: binary.BigEndian.Uint32(b[17:21]),
 		threads:    b[21],
 	}
-	if err := h.kdf.check(); err != nil {
-		return v2Header{}, err
+	switch h.keySource {
+	case keySourcePassword:
+		if h.kdfID != kdfArgon2id && h.kdfID != kdfArgon2idNFKC {
+			return v2Header{}, fmt.Errorf("%w: key derivation %d", errUnsupportedFormat, h.kdfID)
+		}
+		if err := h.kdf.check(); err != nil {
+			return v2Header{}, err
+		}
+	case keySourceStoredKey:
+		// Only files and folders are encrypted with stored keys; stored keys and key
+		// exports are always protected with a password.
+		if h.content != contentFile && h.content != contentFolder {
+			return v2Header{}, fmt.Errorf("%w: %s with key source %d", errUnsupportedFormat, contentName(h.content), h.keySource)
+		}
+		if h.kdfID != kdfHKDFStoredKey {
+			return v2Header{}, fmt.Errorf("%w: key derivation %d", errUnsupportedFormat, h.kdfID)
+		}
+		if h.kdf != (argon2Params{}) {
+			return v2Header{}, fmt.Errorf("%w: Argon2id settings with a stored key", errUnsupportedFormat)
+		}
+		if len(b) < v2StoredKeyHeaderLen {
+			return v2Header{}, fmt.Errorf("%w: header too short for a stored key", errUnsupportedFormat)
+		}
+		copy(h.keyID[:], b[v2HeaderLen:v2StoredKeyHeaderLen])
+	default:
+		return v2Header{}, fmt.Errorf("%w: key source %d", errUnsupportedFormat, h.keySource)
 	}
 	copy(h.salt[:], b[22:38])
 	h.chunkShift = b[38]
@@ -188,6 +297,28 @@ func parseV2Header(b []byte) (v2Header, error) {
 	}
 	copy(h.noncePrefix[:], b[39:46])
 	return h, nil
+}
+
+// readV2Header reads a version 2 header from r: the common 46 bytes, and the stored
+// key's ID too when the key source says one follows. It returns the parsed header and
+// its bytes, which are each chunk's additional data.
+func readV2Header(r io.Reader) (v2Header, []byte, error) {
+	hb := make([]byte, v2StoredKeyHeaderLen)
+	if _, err := io.ReadFull(r, hb[:v2HeaderLen]); err != nil {
+		return v2Header{}, nil, fmt.Errorf("%w: header: %v", errUnsupportedFormat, err)
+	}
+	if isV2(hb) && hb[11] == keySourceStoredKey {
+		if _, err := io.ReadFull(r, hb[v2HeaderLen:]); err != nil {
+			return v2Header{}, nil, fmt.Errorf("%w: header: %v", errUnsupportedFormat, err)
+		}
+	} else {
+		hb = hb[:v2HeaderLen]
+	}
+	h, err := parseV2Header(hb)
+	if err != nil {
+		return v2Header{}, nil, err
+	}
+	return h, hb, nil
 }
 
 // check enforces the limits on Argon2id settings read from a file.
@@ -203,9 +334,27 @@ func (p argon2Params) check() error {
 	return nil
 }
 
-// aead derives the header's key from password with Argon2id and returns the cipher.
-func (h v2Header) aead(password string) (cipher.AEAD, error) {
-	key := argon2.IDKey([]byte(password), h.salt[:], h.kdf.iterations, h.kdf.memoryKiB, h.kdf.threads, keyLen)
+// passwordAEAD derives the header's key from password with Argon2id and returns the
+// cipher.
+func (h v2Header) passwordAEAD(password string) (cipher.AEAD, error) {
+	return newGCM(argon2.IDKey([]byte(password), h.salt[:], h.kdf.iterations, h.kdf.memoryKiB, h.kdf.threads, keyLen))
+}
+
+// storedKeyAEAD derives the header's key from a stored key with HKDF-SHA256 over the
+// header's salt, so every file gets a key of its own, and returns the cipher.
+func (h v2Header) storedKeyAEAD(storedKey []byte) (cipher.AEAD, error) {
+	if len(storedKey) != keyLen {
+		return nil, fmt.Errorf("stored key is %d bytes, not %d", len(storedKey), keyLen)
+	}
+	key, err := hkdf.Key(sha256.New, storedKey, h.salt[:], storedKeyInfo, keyLen)
+	if err != nil {
+		return nil, fmt.Errorf("derive key: %w", err)
+	}
+	return newGCM(key)
+}
+
+// newGCM returns AES-256-GCM with key.
+func newGCM(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)
@@ -246,18 +395,30 @@ type encryptingWriter struct {
 }
 
 // newEncryptingWriter writes a new version 2 header for content to w and returns a
-// writer that encrypts into w with a key derived from the normalised password (Q-009).
+// writer that encrypts into w with a key derived from cred: from the normalised
+// password (Q-009), or from a stored key (plan 3.4), which only files and folders use.
 // Close must be called to write the final chunk; it doesn't close w.
-func newEncryptingWriter(w io.Writer, password string, content byte) (*encryptingWriter, error) {
+func newEncryptingWriter(w io.Writer, cred Credential, content byte) (*encryptingWriter, error) {
 	h, err := newV2Header(content)
 	if err != nil {
 		return nil, err
 	}
-	normalized := normalizePassword(password)
-	if normalized != password {
-		h.kdfID = kdfArgon2idNFKC
+	var aead cipher.AEAD
+	if cred.isStoredKey() {
+		if content != contentFile && content != contentFolder {
+			return nil, fmt.Errorf("%s can't be encrypted with a stored key", contentName(content))
+		}
+		if err := h.useStoredKey(cred.keyID); err != nil {
+			return nil, err
+		}
+		aead, err = h.storedKeyAEAD(cred.key)
+	} else {
+		normalized := normalizePassword(cred.password)
+		if normalized != cred.password {
+			h.kdfID = kdfArgon2idNFKC
+		}
+		aead, err = h.passwordAEAD(normalized)
 	}
-	aead, err := h.aead(normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -334,21 +495,27 @@ type decryptingReader struct {
 }
 
 // newDecryptingReader reads a version 2 header from r, checks that its content type is
-// one of wanted, and authenticates the first chunk with a key derived from password,
-// trying each form of it that may have protected the data (passwordCandidates). It
-// returns the header with a reader of the plaintext. A wrong password is therefore
-// reported here, before the caller creates any output.
-func newDecryptingReader(r *bufio.Reader, password string, wanted ...byte) (v2Header, io.Reader, error) {
-	hb := make([]byte, v2HeaderLen)
-	if _, err := io.ReadFull(r, hb); err != nil {
-		return v2Header{}, nil, fmt.Errorf("%w: header: %v", errUnsupportedFormat, err)
-	}
-	h, err := parseV2Header(hb)
+// one of wanted, and authenticates the first chunk with a key derived from cred. Data
+// encrypted with a stored key needs that key (ErrStoredKeyRequired, ErrWrongStoredKey);
+// data protected with a password is tried with each form of the password that may have
+// protected it (passwordCandidates). It returns the header with a reader of the
+// plaintext. A wrong password or key is therefore reported here, before the caller
+// creates any output.
+func newDecryptingReader(r *bufio.Reader, cred Credential, wanted ...byte) (v2Header, io.Reader, error) {
+	h, hb, err := readV2Header(r)
 	if err != nil {
 		return v2Header{}, nil, err
 	}
 	if !bytes.Contains(wanted, []byte{h.content}) {
 		return v2Header{}, nil, fmt.Errorf("%w: it holds %s, not %s", errUnsupportedFormat, contentName(h.content), contentName(wanted[0]))
+	}
+	switch {
+	case h.keySource == keySourceStoredKey && !cred.isStoredKey():
+		return v2Header{}, nil, fmt.Errorf("%w (key %s)", ErrStoredKeyRequired, h.storedKeyID())
+	case h.keySource == keySourceStoredKey && cred.keyID != h.storedKeyID():
+		return v2Header{}, nil, fmt.Errorf("%w: key %s, not %s", ErrWrongStoredKey, h.storedKeyID(), cred.keyID)
+	case h.keySource == keySourcePassword && cred.isStoredKey():
+		return v2Header{}, nil, ErrPasswordRequired
 	}
 	size := h.chunkSize()
 	d := &decryptingReader{
@@ -359,8 +526,17 @@ func newDecryptingReader(r *bufio.Reader, password string, wanted ...byte) (v2He
 	if err != nil {
 		return v2Header{}, nil, err
 	}
-	for _, candidate := range passwordCandidates(password, h.kdfID == kdfArgon2idNFKC) {
-		if d.aead, err = h.aead(candidate); err != nil {
+	if h.keySource == keySourceStoredKey {
+		if d.aead, err = h.storedKeyAEAD(cred.key); err != nil {
+			return v2Header{}, nil, err
+		}
+		if err := d.open(n, last); err != nil {
+			return v2Header{}, nil, err
+		}
+		return h, d, nil
+	}
+	for _, candidate := range passwordCandidates(cred.password, h.kdfID == kdfArgon2idNFKC) {
+		if d.aead, err = h.passwordAEAD(candidate); err != nil {
 			return v2Header{}, nil, err
 		}
 		if err = d.open(n, last); err == nil {
@@ -436,10 +612,11 @@ func (d *decryptingReader) open(n int, last bool) error {
 
 //--------------------------------------------------small data------------------------------------------------------------------------------------//
 
-// sealV2 encrypts a small plaintext held in memory, such as a key, as version 2 data.
+// sealV2 encrypts a small plaintext held in memory, such as a key, as version 2 data
+// protected with password.
 func sealV2(plaintext []byte, password string, content byte) ([]byte, error) {
 	var buf bytes.Buffer
-	w, err := newEncryptingWriter(&buf, password, content)
+	w, err := newEncryptingWriter(&buf, PasswordCredential(password), content)
 	if err != nil {
 		return nil, err
 	}
@@ -452,9 +629,10 @@ func sealV2(plaintext []byte, password string, content byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// openV2 decrypts small version 2 data of the given content type held in memory.
+// openV2 decrypts small version 2 data of the given content type, protected with
+// password, held in memory.
 func openV2(data []byte, password string, content byte) ([]byte, error) {
-	_, r, err := newDecryptingReader(bufio.NewReader(bytes.NewReader(data)), password, content)
+	_, r, err := newDecryptingReader(bufio.NewReader(bytes.NewReader(data)), PasswordCredential(password), content)
 	if err != nil {
 		return nil, err
 	}

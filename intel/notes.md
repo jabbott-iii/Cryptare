@@ -5,47 +5,49 @@ tracked in [`cybersec.md`](cybersec.md), work sequencing in [`plan.md`](plan.md)
 the record of past work, including resolved defects and answered questions, in
 [`history.md`](history.md).
 
-Last updated: 2026-10-04 (round 5)
+Last updated: 2026-10-04 (round 6)
 
-## 1. Current snapshot (2026-10-04, round 5)
+## 1. Current snapshot (2026-10-04, round 6)
 
-- **Branch state.** `main` is at `a088f7f`, level with `origin/main`, and tagged
-  v1.3.0, which CD #5 released on 2026-10-04, the first release whose archives carry
-  `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`. CI #143, Docker #24 and Security
-  #149 passed on it. Dependabot rebased PR #26 onto it (`golang.org/x/crypto` 0.57.0,
-  which brings `golang.org/x/text` 0.42.0 and `golang.org/x/sys` 0.48.0; CI #144/#145
-  green). The working tree holds this round's uncommitted changes: Q-013 (musl Linux
-  builds, C library notices) and PR #26's dependency update, applied with identical
-  `go.mod` and `go.sum`, plus a normalisation known-answer test.
+- **Branch state.** `main` is at `6773ae3`, level with `origin/main` and tagged v1.3.1,
+  which CD released on 2026-10-04 with round 5 (Q-013's musl Linux builds and PR #26's
+  `golang.org/x/crypto` 0.57.0). The working tree holds this round's uncommitted
+  changes: usable stored keys (plans 3.3, 3.4, 5.17; BUG-011), golden format fixtures,
+  `SECURITY.md`, the README install fix, usage text only for command-line mistakes,
+  release attestations, Dependabot for Docker images, the image UID check, and the
+  Docker image published to GitHub Packages by CD (`ghcr.io/jabbott-iii/cryptare`).
 - **Toolchain.** `go.mod` declares `go 1.26.0` and `toolchain go1.26.8` (`6a5fcb1`), so
-  CI, CD and the Docker builder use Go 1.26.8, and an older local `go` downloads it
-  (SEC-018). Releases up to v1.1.0 were built with Go 1.26.0; v1.2.0 is the first built
-  with 1.26.8.
-- **Validation** of round 5 on the owner's machine (linux/amd64, non-root, Go 1.26.8,
-  `golang.org/x/crypto` 0.57.0, `x/text` 0.42.0, `x/sys` 0.48.0):
+  CI, CD and the Docker builder use Go 1.26.8. Every v1.3.1 release binary reports
+  go1.26.8 (`go version -m`, SEC-018, closed).
+- **Validation** of round 6 (a scratch copy, linux/amd64, Go 1.26.8 built from source,
+  `x/crypto` 0.57.0, `x/text` 0.42.0, `x/sys` 0.48.0; the module proxy was unreachable,
+  so those three and the two GORM modules came from their GitHub mirrors at the same
+  tags, and every other module was checked against `go.sum`):
 
   | Check | Result |
   |---|---|
   | `gofmt -s -l .` | no files listed |
-  | `go vet ./...` | clean, also for windows, darwin and freebsd (CGO off), with test builds |
-  | `go test -race -count=1 ./...` | pass |
-  | `go.mod`, `go.sum` | byte-identical to PR #26's, whose `go mod tidy` check passed in CI |
-  | gosec v2.29.0 | 0 issues, 9 `#nosec` |
-  | actionlint 1.7.12 | nothing reported for the four workflows |
-  | golangci-lint, govulncheck | not run here; CI and Security run them on every push |
-  | Real-binary checks | the v1.3.0 source against this round, recorded in `history.md` |
+  | `go vet ./...` | clean |
+  | `go test -race -count=1 ./...` | pass; coverage 89.2% (`main`), 80.9% (`internal`) |
+  | golangci-lint v2.13.2 | 0 issues |
+  | gosec v2.29.0 | 0 issues, 10 `#nosec` (one new G304, SEC-012) |
+  | actionlint 1.7.12 | nothing reported for the four workflows, with shellcheck 0.11.0 checking their scripts |
+  | govulncheck | not run here (database unreachable); Security runs it on every push |
+  | Golden fixtures | open; a mutated nonce layout fails all four golden tests while the round-trip tests still pass |
+  | Real binaries | v1.3.1's `cryptare_linux_amd64` and the new build read each other's password files; v1.3.1 refuses a stored-key file ("key source 2") |
 
-- **Not verified:** the musl Linux build itself (it runs in CD only; Docker isn't
-  available here), the Windows DLL check, the Docker image's UID (SEC-013), and the Go
-  version inside the release binaries (SEC-018).
-- **Lowest coverage (2026-10-03):** `View` and `actionTitle` (0%), `readTerminalPassword` (20%),
-  `readPassword` (46%), `Update` (54%), `replacePath` (56%), `writeZipFile` (59%).
+- **Not verified:** the new workflow steps (the attestation steps and the GitHub
+  Packages push need a tag; the Docker UID check and the Windows runs need CI; Docker
+  isn't available here, so the container job's build, smoke test and push haven't run;
+  its tag logic was run against simulated release lists), darwin/amd64 on real hardware (W7),
+  and the Windows DLL check's log (v1.3.1 was published by CD, which runs it before
+  packaging).
+- **Lowest coverage:** the TUI's `View` and `handleVimFormKey`, `readTerminalPassword`
+  and `readPassword` (terminal-only paths), `replacePath` and `writeZipFile`.
 
 ## 2. Open defects (non-security)
 
-| ID | Defect | Evidence | Location |
-|---|---|---|---|
-| BUG-011 | `keys export` doesn't check that the export password matches the key's master password, and `keys import` doesn't check that the inner blob decrypts. A `.ckey` can therefore need two different passwords to be usable. The CLI prompt for the export password reads "Enter master password:" and the flag help says "master password for export encryption", although the value only protects the export file, so users can't tell the two passwords apart. | Code review | `crypto.go` `ExportKeyToFile`, `ImportKeyFromFile`; `logic-cli.go` `newKeysExportCmd` |
+None open.
 
 ### Resolved defects
 
@@ -64,6 +66,7 @@ validation for each fix are in `history.md`.
 | BUG-008 | A second TUI action could start while one was running | `3d9384e` |
 | BUG-009 | No `--version`, and `-X main.version` had no effect | v1.0.1 (`5286920`) |
 | BUG-010 | Encryption and decryption held whole files in memory | `0c57aef` (legacy reads: BUG-024) |
+| BUG-011 | `keys export` didn't check the key's master password and `keys import` didn't check the key inside, so an export could need two passwords; the prompts didn't say which password was meant | round 6, not yet committed (one password per key, Q-015) |
 | BUG-012 | Ctrl+C at the hidden prompt left echo off | `ed46150` (other signals: BUG-018) |
 | BUG-013 | A folder could be compressed into an archive inside itself | `c47a94f` (gaps: BUG-016, BUG-019) |
 | BUG-014 | A read-only folder in an archive blocked extraction for non-root users | `d751967` |
@@ -80,15 +83,18 @@ validation for each fix are in `history.md`.
 
 ## 3. Design observations
 
-- **Stored keys aren't used for file encryption.** `encrypt` and `decrypt` derive keys
-  from passwords only, and no code path consumes `key_models`. The owner wants stored
-  keys usable (plan 3.4).
-- **CLI and TUI duplicate flows.** Key generate, export and import are implemented
-  twice (`logic-cli.go` and `logic-tui.go` `buildActionCmd`), so a change to one must be
-  mirrored in the other until plan 3.3 shares them. Checks that protect data, such as
-  the password policy, live in core for this reason; only the confirmation step is
-  implemented in each interface.
-- **Dead code.** The `Storage` interface is declared but unused.
+- **Stored keys encrypt files** (plan 3.4, round 6, not yet committed). `encrypt --key`
+  and the TUI's "Stored key ID" field write a key source 2 header naming the key
+  (Q-014); `decrypt` reads the header of a regular file (`EncryptedWithStoredKey`) and
+  asks for that key's master password. A stored-key file read through a pipe isn't
+  looked up, because peeking would consume the stream; it fails with
+  `ErrStoredKeyRequired` and a hint. Losing a key, or the key store, without an export
+  makes the files encrypted with it unrecoverable; the README says to keep exports.
+- **Shared key flows** (plan 3.3). `keys.go` holds `GenerateStoredKey`,
+  `StoredKeyCredential` and `ImportStoredKey`, used by both interfaces, and exporting
+  goes through `ExportKeyToFile`, which checks the master password. What remains in
+  each interface is prompting, the output-path check and the TUI's field handling.
+- **The `Storage` interface** is now the parameter type of the shared key flows.
 - **Stale comment.** `ImportKeyFromFile` says "Parse minimal JSON manually to avoid
   import cycle", but it uses `encoding/json`.
 - **Leftover from another project.** `database_path_test.go` used a `tasks.db` fixture
@@ -137,13 +143,30 @@ validation for each fix are in `history.md`.
   host's Docker socket, so anything run inside it (tests, tools, dependencies) can
   control the host's Docker daemon. A convenience trade-off worth knowing about before
   running untrusted code there.
-- **Release integrity.** Releases publish `checksums.txt` beside the archives, with no
-  signature or provenance attestation, so the checksums only catch accidental
-  corruption (SEC-018 step 5).
+- **Release integrity.** Releases up to v1.3.1 publish only `checksums.txt` beside the
+  archives, which catches accidental corruption but not a substituted file. From the
+  next release, CD attaches signed build provenance to every published file (SEC-020).
+- **Fuzzing `FuzzExtractTar`** isn't hung when it seems to stall: the fuzzer spends up
+  to `-fuzzminimizetime` (60 s by default) minimising each new input, and each run of
+  this target creates folders, so the exec count stops moving meanwhile. With
+  `-fuzzminimizetime 3s` it ran 60 s, about 24,800 inputs and 25 new ones, with no
+  failure (2026-10-04, round 6).
+- **Usage text.** The CLI printed its whole usage after every error, a wrong password
+  included. `silenceUsageOnRun` now keeps it for command-line mistakes, which Cobra
+  reports before a command runs.
 
 ## 4. Open questions (owner decisions)
 
 None open.
+
+Answered in round 6 (2026-10-04): Q-014 (a file encrypted with a stored key records
+the key's ID in its header: key source 2, KDF 3 for HKDF-SHA256 from the key, a 54-byte
+header; v1.3.1 and earlier refuse such files) and Q-015 (a key has one password: an
+export is protected by the key's own master password, which is checked, and import
+checks the key inside, asking for its master password when an older export has a
+password of its own). The owner also chose to build plans 3.3 and 3.4 now, approved the
+attestation, Dependabot Docker and Docker UID changes, and set the security policy:
+acknowledgement within 7 days, latest minor line (1.3.x) supported.
 
 Answered or closed: Q-001 (release builds use native CGO per OS), Q-002 (stored keys
 should be usable; plan 3.4), Q-004 (the default password policy, `maint.md` §4) and
@@ -173,6 +196,7 @@ golangci-lint run          # v2.13.2
 go test -race -count=1 ./...
 gosec ./...                # v2.29.0
 govulncheck ./...          # checks the toolchain that go.mod selects
+go test -run '^$' -fuzz '^FuzzExtractTar$' -fuzztime 5m -fuzzminimizetime 3s ./internal
 ```
 
 Run probes that can use a lot of memory, such as decompression or allocation bombs,
