@@ -4,7 +4,7 @@ Active implementation plans and follow-on work. IDs refer to
 [`cybersec.md`](cybersec.md) (SEC-…) and [`notes.md`](notes.md) (BUG-…, Q-…); the record
 of how each item was done is in [`history.md`](history.md).
 
-Last updated: 2026-10-05
+Last updated: 2026-10-10
 
 ## Status
 
@@ -42,6 +42,7 @@ Last updated: 2026-10-05
 | — | A longer run of `FuzzExtractTar` | `notes.md` §3 | `make fuzz FUZZ=FuzzExtractTar FUZZTIME=10m` |
 | SEC-013 | The UID check's first passing CI run | `cybersec.md` | Step 1 above |
 | SEC-020 | The first tagged release with attestations | `cybersec.md` | Step 3 above |
+| SEC-021 | Windows binaries up to v1.4.0 are built with go1.26.8 (GO-2026-6604) | `cybersec.md` | Release a patch version built with go1.26.9 |
 
 ## Principles
 

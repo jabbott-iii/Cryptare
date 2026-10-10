@@ -45,7 +45,7 @@ Cryptare is a terminal tool for encrypting, decrypting, compressing and extracti
 
 ## Prerequisites
 
-- To build from source: Go 1.26 or newer (`go.mod` selects Go 1.26.8, which an older `go` command downloads automatically unless `GOTOOLCHAIN=local` is set), plus a C compiler (gcc or clang) with CGO enabled. The SQLite driver used for the key store requires CGO. On Windows this means a CGO-capable toolchain such as MinGW-w64.
+- To build from source: Go 1.26 or newer (`go.mod` selects Go 1.26.9, which an older `go` command downloads automatically unless `GOTOOLCHAIN=local` is set), plus a C compiler (gcc or clang) with CGO enabled. The SQLite driver used for the key store requires CGO. On Windows this means a CGO-capable toolchain such as MinGW-w64.
 - Optional: Docker, to build and run the container image.
 
 ## Installation

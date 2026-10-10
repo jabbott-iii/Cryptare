@@ -77,7 +77,7 @@ These apply to all changes.
 - **Key store:** per user, created 0600 in a 0700 folder, refused on Unix when another
   user owns it or others can write it, deleted keys overwritten, stored values escaped
   when shown.
-- **Supply chain:** actions and base images pinned to SHAs and digests, Go 1.26.8 from
+- **Supply chain:** actions and base images pinned to SHAs and digests, Go 1.26.9 from
   `go.mod`, govulncheck, gosec and CodeQL in CI, Dependabot for modules, actions and
   images, tracked key material refused by CI, and signed build provenance on release
   files and the container image.
@@ -89,6 +89,7 @@ These apply to all changes.
 | 2026-09-23 | All sources, tests, workflows, Dockerfile, git history, v1.0.0 assets | manual review, probe tests, gosec, golangci-lint, `go vet`, `go test -race` | SEC-001 to SEC-014 recorded |
 | 2026-10-03 | Sources at `0c57aef` (version 2 format), workflows, Dockerfile, README claims | manual review, probes, golangci-lint, gosec, govulncheck | SEC-015 to SEC-019 recorded; no flaw found in the version 2 construction |
 | 2026-10-04 | v1.3.1 and its release assets; the stored-key change (round 6) | manual review, release-asset checks, gosec, golangci-lint, fuzzing, an independent review | SEC-020 recorded; no flaw found in the stored-key format or its cryptography |
+| 2026-10-10 | `main` at `7ed8ea9` (v1.4.0 plus README) | govulncheck v1.8.0 (Security workflow) | SEC-021 recorded: a reachable Go standard library vulnerability |
 
 ## 4. Summary
 
@@ -114,6 +115,7 @@ These apply to all changes.
 | SEC-018 | Builds used an outdated Go toolchain | Medium | Closed |
 | SEC-019 | Owner-only permission guarantees don't hold on Windows | Low | Closed |
 | SEC-020 | Release files had no verifiable proof of origin | Low | In Progress |
+| SEC-021 | Go standard library flaw in `os.Root` on Windows (GO-2026-6604) | Low | In Progress |
 
 ## 5. Issue register
 
@@ -315,3 +317,17 @@ remains.
 - **Validation:** the next tag's CD run attests its files and image, and
   `gh attestation verify` passes for them and fails for a modified copy.
 - **Open:** the first tagged release with attestations.
+
+### SEC-021 — Go standard library flaw in `os.Root` on Windows (GO-2026-6604)
+
+- **Severity:** Low · **Status:** In Progress
+- **Affected component:** the Go toolchain (`go.mod`, the `Dockerfile` builder, `cd.yml`'s
+  `LINUX_BUILDER`); archive extraction and folder reading, which use `os.Root`; the
+  Windows release binaries up to v1.4.0, built with go1.26.8.
+- **Remediation:** build with go1.26.9, which fixes GO-2026-6604 (CVE-2026-56857): on
+  Windows, `os.Root`'s `Mkdir` and `MkdirAll` could create a folder outside the root.
+- **Fixed in:** the toolchain change of 2026-10-10 (not yet committed); first release
+  with the fix: pending.
+- **Validation:** govulncheck v1.8.0 reports GO-2026-6604 as reachable with go1.26.8 and
+  nothing with go1.26.9; the next release's binaries report go1.26.9 (`go version -m`).
+- **Open:** a release built with go1.26.9.

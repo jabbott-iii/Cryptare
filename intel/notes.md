@@ -18,9 +18,10 @@ Last updated: 2026-10-05 (docs round: security register condensed, drift fixed)
   release and image attestations, Dependabot for Docker images, the image UID check, the
   Docker image published to GitHub Packages by CD (`ghcr.io/jabbott-iii/cryptare`), and
   the contributor Makefile. The CI results on those commits haven't been checked here.
-- **Toolchain.** `go.mod` declares `go 1.26.0` and `toolchain go1.26.8` (`6a5fcb1`), so
-  CI, CD and the Docker builder use Go 1.26.8. Every v1.3.1 release binary reports
-  go1.26.8 (`go version -m`, SEC-018, closed).
+- **Toolchain.** `go.mod` declares `go 1.26.0` and `toolchain go1.26.9`, so CI, CD and
+  the Docker builder use Go 1.26.9. It was go1.26.8 from `6a5fcb1` until 2026-10-10, when
+  govulncheck reported GO-2026-6604, fixed in go1.26.9 (SEC-021). Every v1.3.1 and
+  v1.4.0 release binary reports go1.26.8 (`go version -m`, SEC-018, closed).
 - **Validation** of round 6 (a scratch copy, linux/amd64, Go 1.26.8 built from source,
   `x/crypto` 0.57.0, `x/text` 0.42.0, `x/sys` 0.48.0; the module proxy was unreachable,
   so those three and the two GORM modules came from their GitHub mirrors at the same

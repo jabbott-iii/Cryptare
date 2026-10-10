@@ -24,7 +24,7 @@ which is authoritative; this guide must stay consistent with it. Also read
 
 ### Prerequisites
 
-- **Go 1.26 or newer** (`go.mod` declares `go 1.26.0` and selects `toolchain go1.26.8`,
+- **Go 1.26 or newer** (`go.mod` declares `go 1.26.0` and selects `toolchain go1.26.9`,
   which an older `go` command downloads automatically unless `GOTOOLCHAIN=local`).
 - **A C compiler (gcc or clang) with CGO enabled.** The SQLite driver
   (`github.com/mattn/go-sqlite3`, pulled in by `gorm.io/driver/sqlite`) requires CGO.

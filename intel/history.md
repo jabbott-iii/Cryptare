@@ -697,3 +697,26 @@ Reconstructed on 2026-09-23 from `git log`: 102 commits on local `main`, 101 on
 - **Changed:** `.github/workflows/cd.yml`, `Dockerfile`, `README.md`,
   `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`, this file.
   Not committed.
+
+## 2026-10-10 — Go 1.26.9 toolchain: govulncheck failure on `main` (SEC-021)
+
+- **Why:** the Security workflow's govulncheck job failed on `7ed8ea9` (run 162). Go
+  published GO-2026-6604 (CVE-2026-56857) on 2026-10-08: on Windows, `os.Root`'s `Mkdir`
+  and `MkdirAll` could create a folder outside the root. Cryptare reaches it through
+  `extractTarGz` (`os.Root.MkdirAll`, `os.Root.OpenFile`) and `walkSourceTree`
+  (`fs.WalkDir` on an `os.Root`). Go 1.26.9 fixes it. No code change was needed.
+- **Changed:** `go.mod` (`toolchain go1.26.9`), the `Dockerfile` builder and `cd.yml`'s
+  `LINUX_BUILDER` (`golang:1.26.9-alpine`, the same Alpine 3.24 base as before, pinned by
+  its multi-platform digest), `README.md`, `CONTRIBUTING.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/cybersec.md` (SEC-021), `intel/plan.md`, this
+  file. Not committed.
+- **Validation:** govulncheck v1.8.0 (built from its GitHub mirror, run against a database
+  built from `golang/vulndb` at `f5aaa67`) reports GO-2026-6604 as reachable with go1.26.8
+  and none with go1.26.9 (which also fixes the 12 unreached standard library advisories
+  of the same day). With go1.26.9 built from source: `gofmt -s -l .` lists nothing, `go
+  vet ./...` is clean, `go test -race -count=1 ./...` passes the same 554 tests and
+  subtests (552 pass, 2 skip), `make smoke` and `make golden` pass, the binary reports
+  go1.26.9, `go mod tidy` changes nothing, and actionlint reports nothing. Not run here:
+  the Docker builds with the new builder digest (CI's Docker workflow and CD run them).
+- **Open:** v1.4.0's binaries and image were built with go1.26.8; a patch release built
+  with go1.26.9 closes SEC-021.

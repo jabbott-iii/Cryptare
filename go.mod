@@ -2,7 +2,7 @@ module github.com/jabbott-iii/Cryptare
 
 go 1.26.0
 
-toolchain go1.26.8
+toolchain go1.26.9
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10

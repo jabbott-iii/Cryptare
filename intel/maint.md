@@ -18,7 +18,7 @@ Cryptare is a single-binary Go CLI/TUI for local file protection:
 It has no network surface: there is no HTTP server and nothing calls a remote service.
 
 - Module: `github.com/jabbott-iii/Cryptare`; `go.mod` declares `go 1.26.0` and
-  `toolchain go1.26.8` (SEC-018).
+  `toolchain go1.26.9` (SEC-018, SEC-021).
 - Entry point: `main.go` holds the build version and calls `pkg.Run`, which builds the
   Cobra root command with a lazy database opener and runs it.
 - All application logic lives in one flat Go package, `pkg` (`pkg/`).
@@ -367,7 +367,7 @@ These are observed in the codebase and required for new code:
   CGO (Q-001):
   - Linux binaries are statically linked against musl (tags
     `sqlite_omit_load_extension,osusergo,netgo`; `-linkmode external -extldflags -static`),
-    built inside the `Dockerfile`'s pinned `golang:1.26.8-alpine` image
+    built inside the `Dockerfile`'s pinned `golang:1.26.9-alpine` image
     (`LINUX_BUILDER` in `cd.yml`) on a runner of the target's architecture. Up to v1.3.0
     they were linked against the Ubuntu runner's glibc (Q-013).
   - The Windows smoke test fails if the binary imports a DLL from the MinGW-w64
@@ -425,7 +425,7 @@ These are observed in the codebase and required for new code:
   builder's tag and digest with it.
 - **Go toolchain (SEC-018):** CI and CD install the `toolchain` version from `go.mod`
   (`setup-go` with `go-version-file`), and the `Dockerfile` builder image names the
-  same release (`golang:1.26.8-alpine`), as does `cd.yml`'s `LINUX_BUILDER`, which
+  same release (`golang:1.26.9-alpine`), as does `cd.yml`'s `LINUX_BUILDER`, which
   pins the same image by digest. Change all three together; the Linux release build
   runs with `GOTOOLCHAIN=local`, so a mismatch fails it. Dependabot proposes
   module, action and Docker base image updates weekly (golang patch versions only; apply
