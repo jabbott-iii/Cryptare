@@ -1,3 +1,6 @@
+<img width="1200" height="700" alt="cryptare-cli" src="https://github.com/user-attachments/assets/95104d1a-5feb-4b75-b6bd-8389136f87ba" />
+<img width="1200" height="640" alt="cryptare-tui" src="https://github.com/user-attachments/assets/59d9167c-66e0-42ef-aa62-84a6bc37d465" />
+
 # Cryptare
 
 Cryptare is a terminal tool for encrypting, decrypting, compressing and extracting files and directories. It combines a scriptable command-line interface with an interactive terminal UI and a small local store for password-protected keys. It is meant for people who want password-based file protection and archiving from the command line.
