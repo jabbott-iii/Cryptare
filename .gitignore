@@ -40,6 +40,10 @@ go.work.sum
 # env file
 .env
 
+# Personal Claude Code settings and notes (CLAUDE.md and the rest of .claude/ are shared)
+.claude/settings.local.json
+CLAUDE.local.md
+
 # Editor/IDE
 # .idea/
 # .vscode/

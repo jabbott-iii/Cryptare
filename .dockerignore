@@ -5,6 +5,9 @@
 .github
 .idea
 .junie
+.claude
+CLAUDE.md
+CLAUDE.local.md
 .devcontainer
 intel
 dist
