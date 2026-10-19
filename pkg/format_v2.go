@@ -35,15 +35,16 @@ import (
 
 // Version 2 of Cryptare's encrypted format (plan 3.1 and 3.2, SEC-005, BUG-010).
 //
-// Every artifact written by this version (encrypted files and folders, stored keys and
-// key exports) starts with a 46-byte header:
+// Every artifact written by this version starts with a 46-byte header (encrypted files
+// and folders directly, stored keys and key exports once their base64 text is decoded):
 //
 //	offset size field
 //	0      9    magic "CRYPTARE\x00" (a legacy folder artifact has '-' at offset 8)
 //	9      1    format version, 2
 //	10     1    content type: 1 file, 2 folder (tar.gz), 3 stored key, 4 key export
 //	11     1    key source: 1 password, 2 stored key (plan 3.4)
-//	12     1    KDF: 1 Argon2id over the password, 2 Argon2id over its NFKC form (Q-009),
+//	12     1    KDF: 1 Argon2id over the password, 2 Argon2id over its normalised form
+//	            (normalizePassword: a leading byte order mark dropped, then NFKC; Q-009),
 //	            3 HKDF-SHA256 from a stored key
 //	13     4    Argon2id memory in KiB (big-endian; 0 with a stored key)
 //	17     4    Argon2id passes (big-endian; 0 with a stored key)

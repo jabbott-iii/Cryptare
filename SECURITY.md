@@ -9,8 +9,8 @@ release. When a new minor version is released, it takes the place of the one bel
 
 | Version | Supported |
 | ------- | --------- |
-| 1.3.x   | Yes       |
-| < 1.3   | No        |
+| 1.4.x   | Yes       |
+| < 1.4   | No        |
 
 v1.0.0 doesn't run at all (see the README); upgrade from any unsupported version to the
 latest release.

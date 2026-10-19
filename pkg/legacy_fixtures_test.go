@@ -27,7 +27,7 @@ import (
 )
 
 // Writers for the legacy (version 1) formats. Cryptare no longer writes them, but it
-// must keep reading them (maint.md §3), so tests build legacy data with these.
+// must keep reading them, so tests build legacy data with these.
 
 // encryptBytes seals plaintext in the legacy single-file layout: salt ‖ nonce ‖
 // AES-256-GCM ciphertext, with a PBKDF2 key.

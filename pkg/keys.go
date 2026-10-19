@@ -24,9 +24,9 @@ import (
 // The key-store flows shared by the CLI and the TUI (plan 3.3): generating a stored
 // key, unlocking one to encrypt or decrypt with it (plan 3.4), and importing an export.
 // They take the key store as a Storage and do the checks that protect data, so both
-// interfaces get them (maint.md §2); prompting and output-path checks stay in the
-// interfaces. Exporting is ExportKeyToFile (crypto.go), after the interface has looked
-// the key up and checked the output path.
+// interfaces get them; prompting and output-path checks stay in the interfaces.
+// Exporting is ExportKeyToFile (crypto.go), after the interface has looked the key up
+// and checked the output path.
 
 var (
 	// ErrWrongMasterPassword is returned when a stored key doesn't open with the password

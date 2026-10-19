@@ -57,10 +57,10 @@ the targets (all but the internal `check-version`).
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry | `main.go`, `pkg/run.go`, `pkg/database_path.go` | version, root command with a lazy key-store opener, exit status, `keys path` |
+| Entry | `main.go`, `pkg/run.go`, `pkg/database_path.go` | version, root command with a lazy key-store opener, exit status, the key store's path and `keys path` |
 | Interfaces | `pkg/logic-cli.go` (Cobra); `pkg/ui-dashboard.go`, `pkg/logic-tui.go` (Bubble Tea) | parse input, prompt, call core/storage, render |
 | Core | `pkg/crypto.go`, `pkg/format_v2.go`, `pkg/compress.go`, `pkg/keys.go` | formats, key derivation, key blobs and exports, archives, shared key-store flows |
-| Storage | `pkg/database.go` | GORM/SQLite `KeyModel` and key CRUD |
+| Storage | `pkg/database.go`, `pkg/fileowner_unix.go`, `pkg/fileowner_other.go` | GORM/SQLite `KeyModel`, key CRUD, and the key store's mode and owner checks |
 
 1. Core is UI-agnostic: no printing, prompting, Cobra or Bubble Tea. It takes paths,
    passwords or bytes and returns errors.
@@ -81,9 +81,10 @@ the targets (all but the internal `check-version`).
 
 - **Compatibility.** Everything any release wrote must stay readable: legacy (v1) and
   v2 files and folders, stored keys and `.ckey` exports. A format change needs a new
-  version, content type or KDF identifier, a read path for existing data, and tests for
-  both. The v2 layout is documented in the header comment of `pkg/format_v2.go`. Use
-  `/format-change` before touching anything that is read or written on disk.
+  version, content type, key source or KDF identifier, a read path for existing data,
+  and tests for both. The v2 layout is documented in the header comment of
+  `pkg/format_v2.go`. Use `/format-change` before touching anything that is read or
+  written on disk.
 - **Golden fixtures.** `pkg/testdata/golden/` holds files written by released binaries
   (and two stored-key fixtures from the build that introduced key source 2; see its
   `README.md`). Never edit, regenerate or delete one, and never change a golden test's
@@ -131,24 +132,18 @@ the targets (all but the internal `check-version`).
 - There is no in-repo changelog. Significant changes are described in the PR, the
   release notes and, when users are affected, the README upgrade notes.
 
-## Known documentation debt (2026-10-13)
+## Known documentation debt (2026-10-18)
 
 <!-- doc-audit:off -->
 Commit `8049027` deleted `AGENTS.md` and `intel/` (`maint.md`, `cybersec.md`, `map.md`,
-`notes.md`, `history.md`, `plan.md`, `golang.md`). These still refer to them:
-`README.md`, `CONTRIBUTING.md` (which calls `intel/maint.md` authoritative), comments in
-`Makefile` and `.github/dependabot.yml`, `pkg/testdata/golden/README.md`, comments
-in `pkg/keys.go`, `pkg/legacy_fixtures_test.go` and `pkg/password_norm_test.go`, and an
-`intel` entry in `.dockerignore` (harmless).
+`notes.md`, `history.md`, `plan.md`, `golang.md`). The documents and comments that
+referred to them now point to this file, `.claude/rules/` or the `pkg/format_v2.go`
+header comment, or no longer need the reference. Apart from `git show 40c3464:…`
+pointers into history (here and in `/format-change`), only an `intel` entry in
+`.dockerignore` remains (harmless).
 
-Release drift: v1.3.2 (`566f96c`) and v1.4.0 (`fe6b8c6`) are tagged, but `SECURITY.md`
-still lists 1.3.x as supported, README's upgrade notes still say "changes on `main`
-since v1.2.0 / v1.3.0 / v1.3.1" for changes that have shipped, and the golden
-`README.md` still calls the stored-key fixtures' build unreleased.
-
-- Until the owner decides how to resolve these, this file and `.claude/rules/` hold the
-  maintained rules. Don't recreate `AGENTS.md` or `intel/`, and don't fix these
-  references as a side effect of another task; `/doc-audit` reports them.
+- This file and `.claude/rules/` hold the maintained rules. Don't recreate `AGENTS.md`
+  or `intel/`.
 - IDs in comments and docs (`SEC-016`, `BUG-011`, `Q-009`, "plan 3.4") point into the
   removed registers. Keep them as they are and don't invent new ones. For background,
   read the last version: `git show 40c3464:intel/cybersec.md` (also `notes.md`,

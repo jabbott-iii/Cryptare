@@ -1,15 +1,15 @@
 # Golden format fixtures
 
-Artifacts written by released Cryptare binaries, which `golden_test.go` must keep
-opening. They pin the on-disk formats (`intel/maint.md` §3): a change that broke the
-writer and the reader in the same way would still pass the round-trip tests, but not
-these. Never regenerate or edit a fixture to make a test pass; a failure here means
-existing users' files would stop opening.
+Artifacts written by released Cryptare binaries (and two by the development build of
+v1.3.2; see the table), which `golden_test.go` must keep opening. They pin the on-disk
+formats: a change that broke the writer and the reader in the same way would still pass
+the round-trip tests, but not these. Never regenerate or edit a fixture to make a test
+pass; a failure here means existing users' files would stop opening.
 
 They are test vectors, not secrets: every password is written below, and the stored keys
 protect nothing else. Key exports and stored keys are kept as `.txt` (their base64 text)
-rather than `.ckey` and `.db`, the names the SEC-003 CI guard refuses for real key
-material (see `intel/cybersec.md` SEC-003).
+rather than `.ckey` and `.db`, the names that CI's SEC-003 guard and `make keys-check`
+refuse for real key material.
 
 ## Passwords
 
@@ -38,7 +38,7 @@ that the fixtures encrypt.
 | `v2-stored-key.txt` | v1.3.1 | `keys generate --password P`, the `encrypted_blob` of key `b49800c1a2913f46` |
 | `v2-key-export.txt` | v1.3.1 | `keys export b49800c1a2913f46 --password P` |
 | `v2-key-export-separate-password.txt` | v1.3.1 | `keys export b49800c1a2913f46 --password P2`: an export with a password of its own (BUG-011) |
-| `v2-storedkey-file.enc` | first build with stored keys (plan 3.4), unreleased | `keys import v2-key-export.txt`, then `encrypt hello.txt --key b49800c1a2913f46`: key source 2 |
+| `v2-storedkey-file.enc` | development build of v1.3.2, the first with stored keys (plan 3.4) | `keys import v2-key-export.txt`, then `encrypt hello.txt --key b49800c1a2913f46`: key source 2 |
 | `v2-storedkey-folder.enc` | same | `encrypt tree --key b49800c1a2913f46` |
 
 The released binaries were the `cryptare_linux_amd64` assets of the GitHub releases,
@@ -48,4 +48,5 @@ checked against each release's `checksums.txt`:
 - v1.3.1: `cryptare_linux_amd64.tar.gz`, SHA-256 `37f1945ed275cc46d87415e47f97029ab7461ac07a1842cdb7197b6ca8859614`
 
 Generated on 2026-10-04. The stored-key fixtures pin the key source 2 layout from the
-build that introduced it; once that build is released, they are what it writes.
+development build that introduced it. v1.3.2 released that code, and the writer is
+unchanged since, so they are what v1.3.2 and later write.

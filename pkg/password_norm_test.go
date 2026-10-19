@@ -65,8 +65,8 @@ func TestNormalizePassword(t *testing.T) {
 // and is read through this form only, so a golang.org/x/text update (or the Unicode
 // tables that a newer Go toolchain selects) that changes it would make that data
 // unreadable. If this test fails after such an update, don't just change the expected
-// values: see maint.md §3 first. The expected values agree with Python's
-// unicodedata.normalize("NFKC"), an independent implementation.
+// values: that is a format change for the owner to decide. The expected values agree
+// with Python's unicodedata.normalize("NFKC"), an independent implementation.
 func TestNormalizePasswordKnownAnswers(t *testing.T) {
 	tests := []struct {
 		name, in, want string
