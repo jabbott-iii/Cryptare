@@ -13,8 +13,8 @@ SHELL := /bin/bash
 
 GO ?= go
 
-# go-sqlite3 needs CGO: a CGO_ENABLED=0 build compiles, but can't open the key store
-# (intel/maint.md §6). The race detector needs it too.
+# go-sqlite3 needs CGO: a CGO_ENABLED=0 build compiles, but can't open the key store.
+# The race detector needs it too.
 CGO ?= 1
 
 # The version stamped into local builds; `cryptare --version` prints it. VERSION is kept
@@ -24,7 +24,7 @@ BIN_DIR ?= bin
 BINARY := $(BIN_DIR)/cryptare$(shell $(GO) env GOEXE 2>/dev/null)
 
 # Tool versions, kept in step with the workflows: golangci-lint (ci.yml), gosec and
-# govulncheck (security.yml), actionlint (intel/notes.md §5). `go run pkg@version` uses
+# govulncheck (security.yml), actionlint (CI doesn't run it). `go run pkg@version` uses
 # exactly these, verified by the Go checksum database, with nothing to install. To use
 # a binary you installed instead: make lint GOLANGCI_LINT=golangci-lint
 GOLANGCI_LINT_VERSION := v2.13.2
@@ -39,7 +39,7 @@ ACTIONLINT ?= $(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_
 # Fuzzing: one target per run (Go's limit). The targets are in pkg/fuzz_test.go:
 # FuzzParseV2Header, FuzzDecryptingReader, FuzzKeyExportValidation, FuzzParseSize,
 # FuzzExtractTar and FuzzExtractZip. A short minimisation time keeps the extraction
-# fuzzers from appearing to hang (intel/notes.md §3).
+# fuzzers from appearing to hang.
 FUZZ ?= FuzzParseV2Header
 FUZZTIME ?= 1m
 
